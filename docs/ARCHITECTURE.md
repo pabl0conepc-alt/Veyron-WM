@@ -165,6 +165,11 @@ forwarded to the compositor loop through a `calloop` channel and replies return
 over a oneshot channel with a 2 s timeout. Window-management state is therefore
 only ever touched on the compositor thread.
 
+Both run modes share the same `calloop` loop. Nested mode is woken by winit and
+by a bounded timeout; headless mode waits on the display's poll fd (readable
+while any client has pending requests) plus the control channel, so an idle
+compositor sleeps instead of polling.
+
 ## 7. Testing strategy
 
 - `veyron-core` unit tests cover geometry, the action grammar, configuration
