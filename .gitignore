@@ -1,0 +1,9 @@
+# Build output
+/target
+**/target
+
+# Local tooling and research scratch space
+/.tooling
+
+# Runtime artifacts
+*.log

@@ -1,0 +1,18 @@
+[package]
+name = "veyron-core"
+description = "Compositor-independent window management core for VEYRON WM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
