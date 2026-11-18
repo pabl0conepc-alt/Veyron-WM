@@ -482,8 +482,7 @@ impl Veyron {
     fn scale_factor(&self) -> f64 {
         self.backend
             .as_ref()
-            .map(|backend| backend.scale_factor())
-            .unwrap_or(1.0)
+            .map_or(1.0, |backend| backend.scale_factor())
     }
 
     fn update_output(&mut self) {

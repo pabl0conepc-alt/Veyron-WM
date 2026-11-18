@@ -1,14 +1,20 @@
 //! VEYRON WM — nested Wayland compositor entry point.
 
-use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use calloop::{
-    channel::{channel, Event},
-    EventLoop,
+    channel::{channel, Event, Sender},
+    generic::Generic,
+    EventLoop, Interest, Mode, PostAction,
 };
 use smithay::{
     backend::{renderer::gles::GlesRenderer, winit},
-    reexports::wayland_server::{Display, ListeningSocket},
+    reexports::wayland_server::Display,
     wayland::socket::ListeningSocketSource,
 };
 use veyron_core::{Config, Size as VSize};
@@ -44,6 +50,10 @@ WAYLAND_DISPLAY.
 Control:  veyronctl state | veyronctl focus left | veyronctl quit
 ";
 
+/// Upper bound for one event-loop wait. The loop normally blocks until a source
+/// is ready; the timeout only re-flushes clients whose buffers were full.
+const NESTED_WAIT: Duration = Duration::from_millis(16);
+const HEADLESS_WAIT: Duration = Duration::from_millis(50);
 /// How long shutdown waits for an in-flight control reply before giving up.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
@@ -87,45 +97,58 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// Run the compositor without a rendering backend: real Display, real socket,
+/// Run the compositor without a rendering backend: real `Display`, real socket,
 /// real protocol handlers and the real window model.
+///
+/// This is the same `calloop` loop as the nested path; `render` is simply a
+/// no-op and the display's poll fd is what wakes the loop.
 fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
     let mut display: Display<Veyron> = Display::new()?;
     let socket_name = args.wayland_display.as_deref().unwrap_or("wayland-veyron");
-    let listener = ListeningSocket::bind(socket_name).map_err(|error| {
+    let socket_source = ListeningSocketSource::with_name(socket_name).map_err(|error| {
         format!(
             "could not bind the wayland socket '{socket_name}' ({error}); \
              headless mode needs XDG_RUNTIME_DIR set to a private directory"
         )
     })?;
-    let wayland_display = listener
-        .socket_name()
-        .map(|name| name.to_os_string())
-        .ok_or("the listening socket has no name")?;
+    let wayland_display = socket_source.socket_name().to_os_string();
     std::env::set_var("WAYLAND_DISPLAY", &wayland_display);
 
+    let mut event_loop: EventLoop<Veyron> = EventLoop::try_new()?;
     let mut state = Veyron::new_headless(
         args.config.clone(),
         config,
         args.output_size,
         &display.handle(),
     )?;
-    let mut client_handle = display.handle();
 
-    let (ipc_tx, ipc_rx) = channel::<ipc::Job>();
-    let ipc_socket = args.socket.clone();
-    let ipc_activity = veyron_ipc::Activity::new();
-    let server_activity = ipc_activity.clone();
-    std::thread::Builder::new()
-        .name("veyron-ipc".to_string())
-        .spawn(move || {
-            let result = veyron_ipc::serve(&ipc_socket, &server_activity, move |request| {
-                ipc::handle(&ipc_tx, request)
-            });
-            if let Err(error) = result {
-                tracing::error!(%error, "control socket stopped");
+    let mut client_display = display.handle();
+    event_loop
+        .handle()
+        .insert_source(socket_source, move |stream, _, _| {
+            match client_display.insert_client(stream, Arc::new(ClientState::default())) {
+                Ok(_) => tracing::debug!("accepted a wayland client"),
+                Err(error) => tracing::warn!(%error, "could not accept a wayland client"),
             }
         })?;
+
+    // Nothing else wakes this loop (there is no winit source), so wait on the
+    // display's poll fd: it is readable while any client has pending requests.
+    let wakeup = display.backend().poll_fd().try_clone_to_owned()?;
+    event_loop.handle().insert_source(
+        Generic::new(wakeup, Interest::READ, Mode::Level),
+        |_, _, _| Ok::<_, std::io::Error>(PostAction::Continue),
+    )?;
+
+    let (ipc_tx, ipc_rx) = channel::<ipc::Job>();
+    event_loop
+        .handle()
+        .insert_source(ipc_rx, |event, _, state| {
+            if let Event::Msg(job) = event {
+                state.handle_ipc(job);
+            }
+        })?;
+    let ipc_activity = spawn_ipc_server(&args.socket, ipc_tx)?;
 
     tracing::info!(
         wayland = %wayland_display.to_string_lossy(),
@@ -135,30 +158,57 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
         "VEYRON WM is running headless"
     );
 
-    while !state.exit {
-        // Control requests are answered on the compositor thread.
-        while let Ok(job) = ipc_rx.try_recv() {
-            state.handle_ipc(job);
-        }
-
-        while let Some(stream) = listener.accept()? {
-            client_handle
-                .insert_client(stream, Arc::new(ClientState::default()))
-                .map_err(|error| format!("could not accept a wayland client: {error:?}"))?;
-        }
-
-        display.dispatch_clients(&mut state)?;
-        state.tick()?;
-        display.flush_clients()?;
-
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    serve(&mut event_loop, &mut display, &mut state, HEADLESS_WAIT)?;
 
     // Let the last control reply reach its client before the process exits.
     ipc_activity.wait_idle(SHUTDOWN_GRACE);
     let _ = std::fs::remove_file(&args.socket);
     tracing::info!("VEYRON WM stopped");
     Ok(())
+}
+
+/// Run the compositor loop until `state.exit` is set.
+///
+/// Each iteration blocks until a source is ready (bounded by `wait`), then
+/// dispatches protocol events, advances the window model and flushes. Flushing
+/// last means configures produced by `tick` leave in the same iteration.
+fn serve(
+    event_loop: &mut EventLoop<'static, Veyron>,
+    display: &mut Display<Veyron>,
+    state: &mut Veyron,
+    wait: Duration,
+) -> Result<(), Box<dyn Error>> {
+    while !state.exit {
+        event_loop.dispatch(Some(wait), state)?;
+        display.dispatch_clients(state)?;
+        state.tick()?;
+        display.flush_clients()?;
+    }
+    Ok(())
+}
+
+/// Serve the control socket on its own thread, forwarding jobs to the loop.
+///
+/// The returned [`veyron_ipc::Activity`] lets the compositor wait for the last
+/// reply (for example the `Quit` acknowledgement) before it exits.
+fn spawn_ipc_server(
+    socket: &Path,
+    sender: Sender<ipc::Job>,
+) -> std::io::Result<veyron_ipc::Activity> {
+    let socket = socket.to_path_buf();
+    let activity = veyron_ipc::Activity::new();
+    let server_activity = activity.clone();
+    std::thread::Builder::new()
+        .name("veyron-ipc".to_string())
+        .spawn(move || {
+            let result = veyron_ipc::serve(&socket, &server_activity, move |request| {
+                ipc::handle(&sender, request)
+            });
+            if let Err(error) = result {
+                tracing::error!(%error, "control socket stopped");
+            }
+        })?;
+    Ok(activity)
 }
 
 /// Run the compositor nested inside an existing Wayland or X11 session.
@@ -203,20 +253,7 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
             }
         })?;
 
-    let ipc_socket = args.socket.clone();
-    let server_tx = ipc_tx.clone();
-    let ipc_activity = veyron_ipc::Activity::new();
-    let server_activity = ipc_activity.clone();
-    std::thread::Builder::new()
-        .name("veyron-ipc".to_string())
-        .spawn(move || {
-            let result = veyron_ipc::serve(&ipc_socket, &server_activity, move |request| {
-                ipc::handle(&server_tx, request)
-            });
-            if let Err(error) = result {
-                tracing::error!(%error, "control socket stopped");
-            }
-        })?;
+    let ipc_activity = spawn_ipc_server(&args.socket, ipc_tx)?;
 
     tracing::info!(
         wayland = ?wayland_display,
@@ -224,19 +261,12 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
         "VEYRON WM is running"
     );
 
-    while !state.exit {
-        // Bounded wait: client commits arrive on the display socket, which is
-        // dispatched explicitly below, so the loop must not block indefinitely.
-        event_loop.dispatch(Some(Duration::from_millis(16)), &mut state)?;
-        display.dispatch_clients(&mut state)?;
-        display.flush_clients()?;
-        state.tick()?;
-    }
+    serve(&mut event_loop, &mut display, &mut state, NESTED_WAIT)?;
 
     // Let the last control reply reach its client, then remove our socket so a
     // restart starts from a clean state.
     ipc_activity.wait_idle(SHUTDOWN_GRACE);
-    let _ = std::fs::remove_file(veyron_ipc::default_socket_path());
+    let _ = std::fs::remove_file(&args.socket);
     tracing::info!("VEYRON WM stopped");
     Ok(())
 }
