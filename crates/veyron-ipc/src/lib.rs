@@ -20,8 +20,11 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -195,23 +198,75 @@ pub fn bind_listener(path: &Path) -> Result<UnixListener, IpcError> {
     }
 }
 
+/// Counts control requests that are in flight, so a compositor can let the last
+/// reply reach its client before the process exits.
+///
+/// A request is in flight from the moment it is read until its response has been
+/// written, which is exactly the window in which exiting would lose it.
+#[derive(Clone, Debug, Default)]
+pub struct Activity {
+    busy: Arc<AtomicUsize>,
+}
+
+impl Activity {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Wait until every in-flight request has been answered.
+    ///
+    /// Returns `false` if they did not finish within `timeout`.
+    pub fn wait_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let busy = self.busy.load(Ordering::Acquire);
+            if busy == 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                tracing::warn!(busy, "control requests still in flight");
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn enter(&self) -> ActivityGuard {
+        self.busy.fetch_add(1, Ordering::AcqRel);
+        ActivityGuard(Arc::clone(&self.busy))
+    }
+}
+
+/// Holds one in-flight slot; dropping it releases the slot.
+struct ActivityGuard(Arc<AtomicUsize>);
+
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Serve requests until the process exits.
 ///
 /// Runs blocking, one thread per connection, so callers normally put it on its
 /// own thread. A handler must be quick: it is called on the connection thread.
-pub fn serve<F>(path: &Path, handler: F) -> Result<(), IpcError>
+/// Requests are tracked by `activity`, so a caller can wait for the last reply
+/// to be written before it exits.
+pub fn serve<F>(path: &Path, activity: &Activity, handler: F) -> Result<(), IpcError>
 where
     F: Fn(Request) -> Response + Send + Sync + 'static,
 {
     let listener = bind_listener(path)?;
     let handler = Arc::new(handler);
+    let activity = activity.clone();
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let handler = Arc::clone(&handler);
+                let activity = activity.clone();
                 std::thread::spawn(move || {
-                    if let Err(error) = handle_connection(stream, handler.as_ref()) {
+                    if let Err(error) = handle_connection(stream, handler.as_ref(), &activity) {
                         tracing::warn!(%error, "ipc client disconnected with an error");
                     }
                 });
@@ -228,6 +283,7 @@ where
 fn handle_connection(
     mut stream: UnixStream,
     handler: &(dyn Fn(Request) -> Response + Send + Sync),
+    activity: &Activity,
 ) -> Result<(), IpcError> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -236,6 +292,8 @@ fn handle_connection(
     loop {
         match read_message::<_, Request>(&mut reader) {
             Ok(Some(request)) => {
+                // In flight until the response is on the wire.
+                let _in_flight = activity.enter();
                 let response = handler(request);
                 write_message(&mut stream, &response)?;
             }
@@ -369,7 +427,7 @@ mod tests {
 
         let server_path = path.clone();
         std::thread::spawn(move || {
-            let _ = serve(&server_path, |request| match request {
+            let _ = serve(&server_path, &Activity::new(), |request| match request {
                 Request::Ping => Response::Pong,
                 Request::Action { action } if action == "fail" => Response::Error {
                     message: "not now".into(),

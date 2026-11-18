@@ -44,6 +44,9 @@ WAYLAND_DISPLAY.
 Control:  veyronctl state | veyronctl focus left | veyronctl quit
 ";
 
+/// How long shutdown waits for an in-flight control reply before giving up.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+
 struct Args {
     config: PathBuf,
     socket: PathBuf,
@@ -111,12 +114,15 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
 
     let (ipc_tx, ipc_rx) = channel::<ipc::Job>();
     let ipc_socket = args.socket.clone();
+    let ipc_activity = veyron_ipc::Activity::new();
+    let server_activity = ipc_activity.clone();
     std::thread::Builder::new()
         .name("veyron-ipc".to_string())
         .spawn(move || {
-            if let Err(error) =
-                veyron_ipc::serve(&ipc_socket, move |request| ipc::handle(&ipc_tx, request))
-            {
+            let result = veyron_ipc::serve(&ipc_socket, &server_activity, move |request| {
+                ipc::handle(&ipc_tx, request)
+            });
+            if let Err(error) = result {
                 tracing::error!(%error, "control socket stopped");
             }
         })?;
@@ -148,6 +154,8 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
         std::thread::sleep(Duration::from_millis(1));
     }
 
+    // Let the last control reply reach its client before the process exits.
+    ipc_activity.wait_idle(SHUTDOWN_GRACE);
     let _ = std::fs::remove_file(&args.socket);
     tracing::info!("VEYRON WM stopped");
     Ok(())
@@ -197,12 +205,15 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
 
     let ipc_socket = args.socket.clone();
     let server_tx = ipc_tx.clone();
+    let ipc_activity = veyron_ipc::Activity::new();
+    let server_activity = ipc_activity.clone();
     std::thread::Builder::new()
         .name("veyron-ipc".to_string())
         .spawn(move || {
-            if let Err(error) =
-                veyron_ipc::serve(&ipc_socket, move |request| ipc::handle(&server_tx, request))
-            {
+            let result = veyron_ipc::serve(&ipc_socket, &server_activity, move |request| {
+                ipc::handle(&server_tx, request)
+            });
+            if let Err(error) = result {
                 tracing::error!(%error, "control socket stopped");
             }
         })?;
@@ -222,7 +233,9 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
         state.tick()?;
     }
 
-    // Remove our control socket so a restart starts from a clean state.
+    // Let the last control reply reach its client, then remove our socket so a
+    // restart starts from a clean state.
+    ipc_activity.wait_idle(SHUTDOWN_GRACE);
     let _ = std::fs::remove_file(veyron_ipc::default_socket_path());
     tracing::info!("VEYRON WM stopped");
     Ok(())
