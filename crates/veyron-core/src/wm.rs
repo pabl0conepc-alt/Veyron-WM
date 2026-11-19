@@ -711,7 +711,11 @@ mod tests {
     fn floating_toggle_round_trips_to_the_previous_geometry() {
         let mut wm = wm();
         let ids = open(&mut wm, 2);
-        let tiled = wm.snapshot().placement_of(ids[1]).map(|p| p.rect).unwrap();
+        let tiled = wm
+            .snapshot()
+            .placement_of(ids[1])
+            .map(|p| p.rect)
+            .expect("the second window has a placement");
 
         wm.dispatch(Action::ToggleFloating);
         let snapshot = wm.snapshot();
@@ -793,7 +797,10 @@ mod tests {
         assert_eq!(snapshot.output, Rect::new(0, 0, 800, 600));
         assert_eq!(snapshot.viewport.w, 776);
         for id in ids {
-            let rect = snapshot.placement_of(id).map(|p| p.rect).unwrap();
+            let rect = snapshot
+                .placement_of(id)
+                .map(|p| p.rect)
+                .expect("every open window has a placement");
             assert!(rect.w <= snapshot.viewport.w);
             assert!(rect.h <= snapshot.viewport.h);
         }
