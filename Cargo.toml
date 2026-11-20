@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/veyron-core", "crates/veyron-ipc", "crates/veyron"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT"
+
+[workspace.dependencies]
+veyron-core = { path = "crates/veyron-core" }
+veyron-ipc = { path = "crates/veyron-ipc" }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "desktop",
+    "wayland_frontend",
+] }
+calloop = "0.14"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "warn"
+unwrap_used = "warn"

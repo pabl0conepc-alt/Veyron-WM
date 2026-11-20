@@ -1,0 +1,32 @@
+[package]
+name = "veyron"
+description = "VEYRON WM — a scrollable tiling Wayland compositor written in Rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "veyron"
+path = "src/main.rs"
+
+[[bin]]
+name = "veyronctl"
+path = "src/bin/veyronctl.rs"
+
+[dependencies]
+veyron-core.workspace = true
+veyron-ipc.workspace = true
+smithay.workspace = true
+calloop.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
