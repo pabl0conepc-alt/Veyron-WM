@@ -19,6 +19,8 @@ Last reviewed: 2026-11-19.
 - Floating-window keyboard/IPC resize with minimum-size and viewport bounds
   also passes full CI on `e632b52` (run `44650727970`). Pointer drag, popups and
   nested runtime interaction still need validation.
+- Floating-window movement by keyboard/IPC, size-preserving and viewport
+  bounded, passes all checks on `5ce2aa4` (run `44651966135`).
 - The IPC control socket now enforces owner-only `0600` permissions; CI run
   [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
   passed all checks for `17d8562`.
@@ -42,8 +44,10 @@ Last reviewed: 2026-11-19.
 - The headless suite uses genuine Wayland clients and checks configure sizes,
   activation, mapping, workspace scrolling and clean shutdown.
 - Latest feature CI run [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
-  passed format, Clippy, build and tests for IPC socket hardening at `17d8562`.
-  Do not mark a phase verified without its stated runtime evidence.
+  passed format, Clippy, build and tests for IPC socket hardening at `17d8562`;
+  the latest interaction run [44651966135](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651966135)
+  also passed these checks for floating-window movement at `5ce2aa4`. Do not
+  mark a phase verified without its stated runtime evidence.
 
 See [ROADMAP.md](ROADMAP.md), [architecture](docs/ARCHITECTURE.md), and
 [known issues](KNOWN_ISSUES.md).

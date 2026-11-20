@@ -79,4 +79,5 @@
 - Added `move-floating <direction> <pixels>` to keyboard/IPC actions with
   viewport clamping and preserved floating size.
 - Added core boundary coverage and extended the real-client IPC scenario to
-  move and resize the same floating window. Validation is pending CI.
+  move and resize the same floating window. GitHub Actions run `44651966135`
+  passed format, Clippy, build and all workspace tests for `5ce2aa4`.

@@ -43,6 +43,8 @@ Recent commits on the active branch:
 - `e632b52 test: cover floating resize maximum height`
 - `c97fb8d docs: record XWayland integration boundary`
 - `17d8562 security: restrict control socket permissions`
+- `cf2157f feat: add bounded floating window move actions`
+- `5ce2aa4 style: format floating move actions`
 
 The branch is pushed to `origin`. CI run
 [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
@@ -53,6 +55,9 @@ also passed format, Clippy, build and tests for floating resize at `e632b52`.
 CI run
 [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
 passed the same checks for owner-only socket permissions at `17d8562`.
+CI run
+[44651966135](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651966135)
+passed format, Clippy, build and tests for floating-window movement at `5ce2aa4`.
 
 ## Project design and machine constraints
 
@@ -78,8 +83,8 @@ passed the same checks for owner-only socket permissions at `17d8562`.
 - **Phase 2 — Window management: TESTING.** Layout, focus, floating/fullscreen,
   sizing, floating keyboard/IPC move+resize and protocol-level
   configure/activation are implemented. Both preserve floating size/constraints
-  and stay within the viewport. CI passed for resize at `e632b52`; the latest
-  floating-move work is pending CI. Still exercise move/resize, popup
+  and stay within the viewport. CI passed for resize at `e632b52` and for the
+  combined move/resize path at `5ce2aa4`. Still exercise move/resize, popup
   interactions and floating geometry with real clients in the nested session;
   pointer-driven move/resize is not implemented.
 - **Phase 3 — Infinite Desktop: TESTING.** Commit `1fcd322` adds sparse signed
