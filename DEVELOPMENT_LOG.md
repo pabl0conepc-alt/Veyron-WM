@@ -73,3 +73,10 @@
 - Added a filesystem-mode regression test and documented the trust boundary.
   GitHub Actions run `44651444722` passed format, Clippy, build and all
   workspace tests for commit `17d8562`.
+
+## 2026-11-19 — Phase 2 floating-window movement
+
+- Added `move-floating <direction> <pixels>` to keyboard/IPC actions with
+  viewport clamping and preserved floating size.
+- Added core boundary coverage and extended the real-client IPC scenario to
+  move and resize the same floating window. Validation is pending CI.

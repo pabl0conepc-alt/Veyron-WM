@@ -724,6 +724,13 @@ fn spatial_workspace_navigation_and_window_transfer_reach_real_clients() {
     assert_eq!(resized.windows[0].rect[2], geometry[2] + 32);
     geometry = resized.windows[0].rect;
 
+    harness.action("move-floating right 32");
+    let moved = harness.state();
+    assert_eq!(moved.windows[0].rect[0], geometry[0] + 32);
+    assert_eq!(moved.windows[0].rect[2], geometry[2]);
+    assert_eq!(moved.windows[0].rect[3], geometry[3]);
+    geometry = moved.windows[0].rect;
+
     harness.action("move-workspace up");
     let moved = harness.state();
     assert_eq!(moved.workspace_position, [0, -1]);

@@ -410,6 +410,9 @@ impl Wm {
                 workspace.focused_floating = None;
                 effects.layout_changed = workspace.layout.move_window(direction);
             }
+            Action::MoveFloating { direction, delta } => {
+                effects.layout_changed = self.move_focused_floating(direction, delta);
+            }
             Action::ColumnWidth { delta } => {
                 effects.layout_changed = self.active_workspace_mut().layout.resize_focused(delta);
             }
@@ -785,6 +788,41 @@ impl Wm {
         }
     }
 
+    fn move_focused_floating(&mut self, direction: crate::action::Direction, delta: i32) -> bool {
+        if delta <= 0 {
+            return false;
+        }
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let Some(window) = self.windows.get(&id) else {
+            return false;
+        };
+        if !window.is_floating() {
+            return false;
+        }
+
+        let mut rect = window.floating_rect();
+        let viewport = self.viewport();
+        let (dx, dy) = match direction {
+            crate::action::Direction::Left => (-delta, 0),
+            crate::action::Direction::Right => (delta, 0),
+            crate::action::Direction::Up => (0, -delta),
+            crate::action::Direction::Down => (0, delta),
+        };
+        let max_x = (viewport.right() - rect.w).max(viewport.x);
+        let max_y = (viewport.bottom() - rect.h).max(viewport.y);
+        rect.x = rect.x.saturating_add(dx).clamp(viewport.x, max_x);
+        rect.y = rect.y.saturating_add(dy).clamp(viewport.y, max_y);
+        if let Some(window) = self.windows.get_mut(&id) {
+            let changed = window.floating_rect() != rect;
+            window.set_floating_rect(rect);
+            changed
+        } else {
+            false
+        }
+    }
+
     /// Keep floating windows on screen after an output resize or margin change.
     fn clamp_floating_windows(&mut self) {
         let viewport = self.viewport();
@@ -1119,6 +1157,37 @@ mod tests {
                 .map(|placement| placement.rect),
             Some(original)
         );
+    }
+
+    #[test]
+    fn floating_move_keeps_geometry_inside_the_viewport() {
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow::default());
+        wm.dispatch(Action::ToggleFloating);
+        let initial = wm.snapshot().placement_of(id).expect("floating placement").rect;
+
+        assert!(wm
+            .dispatch(Action::MoveFloating {
+                direction: Direction::Right,
+                delta: 32,
+            })
+            .layout_changed);
+        let moved = wm.snapshot().placement_of(id).expect("floating placement").rect;
+        assert_eq!(moved.x, initial.x + 32);
+        assert_eq!(moved.size(), initial.size());
+
+        assert!(wm
+            .dispatch(Action::MoveFloating {
+                direction: Direction::Left,
+                delta: i32::MAX,
+            })
+            .layout_changed);
+        let clamped = wm.snapshot().placement_of(id).expect("floating placement").rect;
+        let viewport = wm.snapshot().viewport;
+        assert_eq!(clamped.x, viewport.x);
+        assert!(clamped.y >= viewport.y);
+        assert!(clamped.right() <= viewport.right());
+        assert!(clamped.bottom() <= viewport.bottom());
     }
 
     #[test]

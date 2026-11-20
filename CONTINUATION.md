@@ -76,11 +76,12 @@ passed the same checks for owner-only socket permissions at `17d8562`.
   real-client tests exist. Still run the nested GLES compositor in the target
   Plasma session and verify a visible real app surface.
 - **Phase 2 — Window management: TESTING.** Layout, focus, floating/fullscreen,
-  sizing, floating keyboard/IPC resizing and protocol-level configure/activation
-  are implemented. The current commit adds min-size/viewport clamping and a
-  headless resize integration assertion. CI passed at `e632b52`. Still exercise
-  move/resize, popup interactions and floating geometry with real clients in
-  the nested session; pointer-driven move/resize is not implemented.
+  sizing, floating keyboard/IPC move+resize and protocol-level
+  configure/activation are implemented. Both preserve floating size/constraints
+  and stay within the viewport. CI passed for resize at `e632b52`; the latest
+  floating-move work is pending CI. Still exercise move/resize, popup
+  interactions and floating geometry with real clients in the nested session;
+  pointer-driven move/resize is not implemented.
 - **Phase 3 — Infinite Desktop: TESTING.** Commit `1fcd322` adds sparse signed
   2D workspace coordinates, four-way navigation, lazy cell creation, window
   transfer, bindings, IPC coordinates (protocol version 2), CLI output and a

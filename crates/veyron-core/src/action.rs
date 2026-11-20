@@ -92,6 +92,8 @@ pub enum Action {
     /// Move the focused window into the neighbouring column or swap it with the
     /// neighbouring row.
     Move { direction: Direction },
+    /// Move the focused floating window by logical pixels.
+    MoveFloating { direction: Direction, delta: i32 },
     /// Resize the focused column by a percentage of the viewport.
     ColumnWidth { delta: i32 },
     /// Resize the focused floating window by logical pixels.
@@ -141,6 +143,23 @@ impl Action {
             "move" => Ok(Action::Move {
                 direction: parse_direction(rest)?,
             }),
+            "move-floating" => {
+                let (direction, amount) = rest.split_once(char::is_whitespace).ok_or_else(|| {
+                    ActionParseError::new("move-floating needs a direction and pixel distance")
+                })?;
+                let direction = parse_direction(direction)?;
+                let delta = amount.trim().parse::<i32>().map_err(|_| {
+                    ActionParseError::new(format!(
+                        "move-floating needs a positive integer pixel distance, got '{amount}'"
+                    ))
+                })?;
+                if delta <= 0 {
+                    return Err(ActionParseError::new(
+                        "move-floating pixel distance must be positive",
+                    ));
+                }
+                Ok(Action::MoveFloating { direction, delta })
+            }
             "column-width" | "width" => {
                 let delta = rest.parse::<i32>().map_err(|_| {
                     ActionParseError::new(format!(
@@ -244,6 +263,9 @@ impl fmt::Display for Action {
             Action::Close => f.write_str("close"),
             Action::Focus { direction } => write!(f, "focus {direction}"),
             Action::Move { direction } => write!(f, "move {direction}"),
+            Action::MoveFloating { direction, delta } => {
+                write!(f, "move-floating {direction} {delta}")
+            }
             Action::ColumnWidth { delta } => write!(f, "column-width {delta}"),
             Action::Resize { axis, delta } => write!(f, "resize {axis} {delta}"),
             Action::Workspace { index } => write!(f, "workspace {index}"),
@@ -282,6 +304,10 @@ mod tests {
             },
             Action::Move {
                 direction: Direction::Down,
+            },
+            Action::MoveFloating {
+                direction: Direction::Right,
+                delta: 32,
             },
             Action::ColumnWidth { delta: -10 },
             Action::ColumnWidth { delta: 25 },
@@ -358,6 +384,19 @@ mod tests {
         assert_eq!(action.to_string(), "resize width -32");
         assert!(Action::parse("resize width 0").is_err());
         assert!(Action::parse("resize depth 20").is_err());
+    }
+
+    #[test]
+    fn floating_move_actions_reject_nonpositive_distances() {
+        assert_eq!(
+            Action::parse("move-floating left 24"),
+            Ok(Action::MoveFloating {
+                direction: Direction::Left,
+                delta: 24,
+            })
+        );
+        assert!(Action::parse("move-floating right 0").is_err());
+        assert!(Action::parse("move-floating down -12").is_err());
     }
 
     #[test]

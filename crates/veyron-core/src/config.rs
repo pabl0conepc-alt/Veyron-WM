@@ -176,6 +176,10 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+alt+right", "resize width 32"),
     ("super+alt+up", "resize height -32"),
     ("super+alt+down", "resize height 32"),
+    ("super+alt+shift+left", "move-floating left 32"),
+    ("super+alt+shift+right", "move-floating right 32"),
+    ("super+alt+shift+up", "move-floating up 32"),
+    ("super+alt+shift+down", "move-floating down 32"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];
