@@ -38,11 +38,16 @@ Recent commits on the active branch:
 - `6bcc15a perf: make nested rendering event and damage driven`
 - `1fcd322 feat: add sparse 2D workspace navigation`
 - `92caf72 docs: record 2D workspace CI result`
+- `97491c2 feat: add bounded floating window resize actions`
+- `92e5b27 style: apply Rust formatting to resize actions`
+- `e632b52 test: cover floating resize maximum height`
 
 The branch is pushed to `origin`. CI run
 [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
 for `1fcd322` passed format, Clippy, build and tests. CI for `6bcc15a` also
-passed these checks.
+passed these checks. CI run
+[44650727970](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44650727970)
+also passed format, Clippy, build and tests for floating resize at `e632b52`.
 
 ## Project design and machine constraints
 
@@ -68,7 +73,7 @@ passed these checks.
 - **Phase 2 — Window management: TESTING.** Layout, focus, floating/fullscreen,
   sizing, floating keyboard/IPC resizing and protocol-level configure/activation
   are implemented. The current commit adds min-size/viewport clamping and a
-  headless resize integration assertion. CI is pending. Still exercise
+  headless resize integration assertion. CI passed at `e632b52`. Still exercise
   move/resize, popup interactions and floating geometry with real clients in
   the nested session; pointer-driven move/resize is not implemented.
 - **Phase 3 — Infinite Desktop: TESTING.** Commit `1fcd322` adds sparse signed
@@ -85,9 +90,10 @@ passed these checks.
   consider only optional disableable animations if justified.
 - **Phase 5 — Configuration/ecosystem: TESTING.** Strict TOML config/hot reload,
   versioned bounded Unix IPC, actions/state/reload/ping/shutdown exist. Still
-  research/integrate XWayland with tests, document portal boundary and external
-  shell API/compatibility, and keep dynamic in-process plugins deferred until
-  safe isolation/permissions are designed.
+  integrate XWayland following [ADR 0002](docs/decisions/0002-xwayland-integration-boundary.md),
+  document portal boundary and external shell API/compatibility, and keep
+  dynamic in-process plugins deferred until safe isolation/permissions are
+  designed.
 - **Phase 6 — Stabilization: IMPLEMENTING.** CI format/clippy/build/tests and
   headless integration exist. Still add a nested smoke where practical, target
   hardware measurements, security/dependency/license review, compatibility and
@@ -99,7 +105,9 @@ Headless protocol tests do not count as visible nested-runtime validation.
 
 ## Immediate next actions
 
-1. Create and attach a draft PR against `main` for the pushed branch.
+1. Continue Phase 5 by implementing the XWayland/XWM adapter only after checking
+   that the required Smithay 0.7 APIs can be built and tested without changing
+   the low-memory default runtime path.
 2. Refresh `PROJECT_STATUS.md`, `ROADMAP.md`, `DEVELOPMENT_LOG.md` and this file
    after each meaningful phase milestone.
 3. Continue with the smallest prompt-required phase deliverable that can be

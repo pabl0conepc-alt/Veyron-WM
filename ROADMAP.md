@@ -85,7 +85,9 @@ scheduling, and measured behavior. Blur and transparency remain optional.
 - [x] Expose actions, state, reload, ping and graceful shutdown over IPC.
 - [x] Expose spatial workspace coordinates and window-transfer actions through
   the core action parser, default bindings and state IPC.
-- [ ] Research and integrate XWayland with compatibility tests.
+- [x] Research Smithay's XWayland/XWM boundary and record an ADR.
+- [ ] Integrate the XWayland process and X11 window manager with compatibility
+  tests and a real nested X11-client smoke test.
 - [ ] Define a portal integration boundary and document which desktop portal
   services are external to the compositor.
 - [ ] Document an isolated external-shell API and compatibility guarantees.

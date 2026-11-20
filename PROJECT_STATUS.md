@@ -16,6 +16,9 @@ Last reviewed: 2026-11-19.
   navigation, window transfer, state IPC coordinates and a nested title
   indicator. CI run [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
   passed for `1fcd322`; nested runtime behavior still needs validation.
+- Floating-window keyboard/IPC resize with minimum-size and viewport bounds
+  also passes full CI on `e632b52` (run `44650727970`). Pointer drag, popups and
+  nested runtime interaction still need validation.
 
 ## Target environment and constraints
 
@@ -35,9 +38,9 @@ Last reviewed: 2026-11-19.
   `cargo test --workspace --locked`, Clippy and rustfmt.
 - The headless suite uses genuine Wayland clients and checks configure sizes,
   activation, mapping, workspace scrolling and clean shutdown.
-- Latest feature CI run [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
-  passed format, Clippy, build and tests for the sparse 2D workspace change at
-  `1fcd322`. Do not mark a phase verified without its stated runtime evidence.
+- Latest feature CI run [44650727970](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44650727970)
+  passed format, Clippy, build and tests for floating-window resize at `e632b52`.
+  Do not mark a phase verified without its stated runtime evidence.
 
 See [ROADMAP.md](ROADMAP.md), [architecture](docs/ARCHITECTURE.md), and
 [known issues](KNOWN_ISSUES.md).

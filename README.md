@@ -198,7 +198,8 @@ signed `(x, y)` coordinate.
 crates/veyron-core/   layout, workspaces, focus, config, actions (no Wayland)
 crates/veyron-ipc/    control protocol, framing, client and server helpers
 crates/veyron/        Smithay compositor binary + veyronctl
-docs/ARCHITECTURE.md  design decisions, invariants, roadmap
+docs/ARCHITECTURE.md  architecture, invariants, current protocol boundaries
+docs/decisions/       architecture decision records
 ```
 
 ## Design rules

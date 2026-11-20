@@ -52,5 +52,16 @@
   the active viewport and honors client minimum dimensions. Tiled windows keep
   using the separate column-width controls.
 - Added core boundary tests and extended the real-client headless scenario to
-  exercise resize over IPC. CI validation is pending for this commit; nested
-  pointer-driven interaction and popup runtime checks remain open.
+  exercise resize over IPC. After correcting the test's assumption about
+  initial floating height, GitHub Actions run `44650727970` passed format,
+  Clippy, build and all workspace tests on `e632b52`. Nested pointer-driven
+  interaction and popup runtime checks remain open.
+
+## 2026-11-19 — Phase 5 XWayland integration research
+
+- Reviewed Smithay 0.7's official `XWayland`, `X11Wm` and `XwmHandler` APIs.
+  Smithay starts the XWayland process, but the compositor must still implement
+  the X11 WM lifecycle and surface adapter.
+- Recorded the optional-feature boundary and real-client acceptance criteria in
+  [ADR 0002](docs/decisions/0002-xwayland-integration-boundary.md). The feature
+  remains unsupported until that adapter and an X11-client smoke test exist.

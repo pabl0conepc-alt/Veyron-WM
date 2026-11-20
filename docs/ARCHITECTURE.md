@@ -179,6 +179,14 @@ Both run modes share the same `calloop` loop. Nested mode waits on winit, the
 Wayland display poll fd and IPC readiness; headless mode waits on the display
 fd and control channel with a bounded timeout to retry blocked client flushes.
 
+### XWayland boundary
+
+XWayland remains unsupported. Smithay 0.7 provides process and XWM helpers, but
+the compositor still needs an X11 window-manager implementation and an adapter
+for X11 window map/configure/focus/destroy events. See
+[ADR 0002](decisions/0002-xwayland-integration-boundary.md); enabling a Cargo
+feature alone must not be presented as application compatibility.
+
 ## 7. Testing strategy
 
 - `veyron-core` unit tests cover geometry, the action grammar, configuration
