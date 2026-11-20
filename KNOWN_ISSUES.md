@@ -14,19 +14,16 @@
 - Layouts (master-stack, dwindle, auto), smart gaps, window rules, scratchpad
   and per-app floating geometry memory exist in the core and are unit-tested,
   but they have not been visually validated in a nested session.
-- The animation core (spring/easing/rect animator, `Transitions`, duration,
-  reduced motion) is implemented and tested, but the nested renderer does not
-  feed it placements or schedule frames for transitions yet, so nothing animates
-  today.
+- The animation core (spring/easing/rect animator, duration, reduced motion) is
+  implemented and tested, but the nested renderer neither uses it nor schedules
+  frames for transitions yet, so nothing animates today.
 - Per-window opacity and blur reach the snapshot; the renderer still draws every
   window opaque and unblurred. Rounded corners and shadows are absent.
 - Snap zones, picture-in-picture, window groups and smart focus are implemented
   and tested in the core, and reach the compositor through the snapshot, but
   they have not been exercised in a nested session.
-- Touchpad gestures are a policy module only: the nested input layer does not
-  forward swipe/hold events and no gesture is bound to an action at runtime.
-- The workspace overview exists as grid policy only: no thumbnails, no
-  open/close action or binding and no nested rendering yet.
+- Touchpad gestures and an exposé-style workspace overview are not implemented:
+  the input layer forwards no swipe/hold events and there is no overview grid.
 - Veyron Profiles are parsed, validated and applied by the core and accepted by
   the action/IPC grammar, but the renderer still ignores the motion settings a
   profile can change and no default chord is bound to `profile <name>`.

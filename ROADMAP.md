@@ -134,9 +134,6 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Per-app floating geometry memory (`behavior.remember_geometry`).
 - [x] Animation core: critically tunable spring, easing curves, rectangle
   animator, duration and reduced-motion policy, all frame-driver agnostic.
-- [x] Per-window transition set (`Transitions`): follows a frame of placements,
-  redirects running transitions from their in-flight geometry, drops windows
-  that stop being drawn and reports when another frame is needed.
 - [x] Layout, gap and app-routing state exposed on the control protocol
   (version 3) and in `veyronctl state`.
 - [x] Veyron Snap: floating-window zones (halves, quadrants, thirds, center,
@@ -149,7 +146,7 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Smart focus: a bounded most-recently-used history behind `focus previous`.
 - [x] Veyron Recall: session capture/restore of workspaces, windows and floating
   geometry as validated TOML (`Session`), with a bounded window count.
-- [ ] Drive `Transitions` from the nested render loop (replace placement
+- [ ] Drive the animation core from the nested render loop (replace placement
   rectangles with in-flight ones and request a frame while it reports work);
   needs nested runtime validation on the target GPU.
 - [ ] Apply per-window opacity/blur in the renderer (policy is already in the
@@ -167,24 +164,14 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Veyron Profiles: named layout/motion preset patches with
   `default_profile`, a `profile <name>` action and strict validation, so a preset
   can never leave the layout configuration invalid.
-- [x] Gesture policy: a thresholded swipe tracker with dominant-axis detection
-  and repeated steps per swipe, driven by deltas the input layer supplies.
-- [ ] Forward libinput hold/swipe gestures from the nested input layer and bind
-  them to the workspace actions.
-- [x] Workspace overview policy: a paged grid of an output's workspaces ordered
-  by sparse coordinate, with window counts, hit-testing and page navigation for
-  an exposé-style view.
-- [ ] Draw the overview in the nested renderer (thumbnails of live surfaces) and
-  add the binding/action that opens and closes it.
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (117 core tests, 5
-window-feature integration tests, 9 multi-output integration tests, 8 profile
-integration tests, 6 overview integration tests, 8 IPC tests) covers every
-implemented item
-above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings`
-and `cargo fmt --all --check` pass. The compositor crate was not compiled in
+**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (109 core tests, 5
+window-feature integration tests, 9 multi-output integration tests, 9 profile
+integration tests, 8 IPC tests) covers every implemented item above;
+`cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings` and
+`cargo fmt --all --check` pass. The compositor crate was not compiled in
 this environment (Wayland/XKB development libraries are missing), and no nested
 runtime visual check was performed.
 

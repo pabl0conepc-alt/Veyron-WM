@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     action::{Action, ActionParseError},
-    gestures::GestureConfig,
     layout::LayoutConfig,
     motion::MotionConfig,
     profiles::{Profile, Profiles},
@@ -165,8 +164,6 @@ pub struct Config {
     pub profiles: Profiles,
     /// Profile applied when the compositor starts.
     pub default_profile: Option<String>,
-    /// Touchpad gesture policy.
-    pub gestures: GestureConfig,
 }
 
 /// Default chords. Kept in one place so the documentation, the default config
@@ -242,7 +239,6 @@ impl Default for Config {
             startup: Vec::new(),
             profiles: Profiles::default(),
             default_profile: None,
-            gestures: GestureConfig::default(),
         };
         for (chord, action) in DEFAULT_BINDINGS {
             let binding = Binding::parse(
@@ -275,9 +271,6 @@ impl Config {
 
         let motion = raw.motion.unwrap_or_default();
         motion.validate().map_err(ConfigError::Invalid)?;
-
-        let gestures = raw.gestures.unwrap_or_default();
-        gestures.validate().map_err(ConfigError::Invalid)?;
 
         let rules = RuleSet::new(raw.rules.unwrap_or_default()).map_err(ConfigError::Invalid)?;
 
@@ -325,7 +318,6 @@ impl Config {
             startup: raw.startup.unwrap_or_default(),
             profiles,
             default_profile,
-            gestures,
         })
     }
 
@@ -379,7 +371,6 @@ impl Config {
             appearance: &'a Appearance,
             motion: &'a MotionConfig,
             behavior: &'a Behavior,
-            gestures: &'a GestureConfig,
             default_profile: &'a Option<String>,
             rules: &'a [WindowRule],
             bindings: BTreeMap<String, String>,
@@ -392,7 +383,6 @@ impl Config {
             appearance: &self.appearance,
             motion: &self.motion,
             behavior: &self.behavior,
-            gestures: &self.gestures,
             default_profile: &self.default_profile,
             rules: self.rules.rules(),
             bindings,
@@ -428,7 +418,6 @@ struct RawConfig {
     rules: Option<Vec<WindowRule>>,
     bindings: Option<BTreeMap<String, String>>,
     startup: Option<Vec<String>>,
-    gestures: Option<GestureConfig>,
     profiles: Option<Vec<Profile>>,
     default_profile: Option<String>,
 }
@@ -696,16 +685,6 @@ mod tests {
             Config::from_toml_str("[layout]\nmaster_ratio = 0.95\n"),
             Err(ConfigError::Invalid(_))
         ));
-    }
-
-    #[test]
-    fn gesture_configuration_is_parsed_and_validated() {
-        let config = Config::from_toml_str("[gestures]\nenabled = true\nswipe_threshold = 80.0\n")
-            .expect("valid gestures");
-        assert!(config.gestures.enabled);
-        assert_eq!(config.gestures.swipe_threshold, 80.0);
-        assert!(Config::from_toml_str("[gestures]\nswipe_threshold = 0\n").is_err());
-        assert!(Config::from_toml_str("[gestures]\naxis_ratio = 0.4\n").is_err());
     }
 
     #[test]

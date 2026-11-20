@@ -61,10 +61,6 @@ impl LayoutPatch {
             layout.master_ratio = ratio;
         }
     }
-
-    pub fn is_empty(&self) -> bool {
-        *self == LayoutPatch::default()
-    }
 }
 
 /// Motion fields a profile may override. `None` keeps the current value.
@@ -103,20 +99,11 @@ impl MotionPatch {
 #[serde(default, deny_unknown_fields)]
 pub struct Profile {
     pub name: String,
-    /// Free-form note, ignored by the window manager.
-    pub description: Option<String>,
     pub layout: LayoutPatch,
     pub motion: MotionPatch,
 }
 
 impl Profile {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            ..Profile::default()
-        }
-    }
-
     /// Validate the name and the patch as it would be applied to the default
     /// configuration. Names cannot contain whitespace because the action that
     /// selects a profile is parsed as `profile <name>`.
@@ -134,12 +121,6 @@ impl Profile {
         if name.chars().any(char::is_whitespace) {
             return Err(format!(
                 "profile name '{}' cannot contain whitespace",
-                self.name
-            ));
-        }
-        if self.name != name {
-            return Err(format!(
-                "profile name '{}' cannot start or end with whitespace",
                 self.name
             ));
         }

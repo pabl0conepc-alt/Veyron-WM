@@ -155,42 +155,14 @@ all of them when the patch asks for it, re-clamps floating windows for the new
 outer margin and records `active_profile`. `Wm::new` applies `default_profile`,
 and a reload clears it when the new configuration no longer defines that name.
 
-### Gestures
-
-`gestures::SwipeTracker` turns libinput swipe deltas into `Direction`s. It
-requires the dominant axis to win by `axis_ratio` (so diagonal noise never
-fires), emits one direction per `swipe_threshold` pixels and keeps the
-remainder, which lets a single long swipe step through several workspaces.
-`cancel` runs at gesture end or interruption. The policy is configured by the
-`[gestures]` table; the nested input layer does not forward gestures yet.
-
-### Overview
-
-`overview::Overview::build` produces the geometry of an exposé-style grid for
-one output: workspaces are sorted by sparse coordinate (`y`, then `x`), split
-into pages of `columns²` cells, and each cell is sized so the grid fills the
-viewport exactly (the last column and row absorb the rounding remainder).
-`hit` maps a click point back to a workspace, `build_page` renders a specific
-page while the page index is clamped after workspaces disappear, and `active`
-(the workspace its output shows) is kept separate from `focused` (the output
-that has focus). The compositor owns the drawing; the core owns the layout.
-
 ### Motion
 
-`motion::Transitions` is the bridge between the target geometry in a
-`Snapshot` and what the renderer draws. `sync` is called once per frame with
-the placements: each window animates from its in-flight rectangle (or from the
-last rectangle it was drawn at) towards the new target, a retarget keeps the
-current position so a fast retile never jumps backwards, and windows that leave
-the frame are dropped. `tick(dt)` advances every track with the caller's clock
-and returns whether any animation is still running, which is exactly the signal
-the event loop needs to request another frame. With motion disabled or reduced
-the set stays empty and the real target geometry is drawn immediately.
-
 `motion.rs` provides a spring, easing curves and a rectangle animator that take
-`dt` from the caller. The compositor does not yet own a frame clock for
-animations, so the module is wired into configuration and validated but not into
-rendering; see [ROADMAP](../ROADMAP.md) Phase 7.
+`dt` from the caller: motion is a pure function of the elapsed time the event
+loop reports, so a slow or missed frame changes the speed, not the animation.
+The compositor does not yet own a frame clock for animations, so the module is
+wired into configuration and validated but not into rendering; see
+[ROADMAP](../ROADMAP.md) Phase 7.
 
 ### Snapping, groups and sessions
 

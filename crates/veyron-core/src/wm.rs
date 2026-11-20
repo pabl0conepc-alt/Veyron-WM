@@ -17,7 +17,6 @@ use crate::{
     geometry::{Rect, Size},
     groups::{GroupId, GroupSet},
     layout::{default_floating_size, viewport_for, Placement, ScrollLayout},
-    profiles::Profiles,
     session::Session,
     snap::{PipCorner, SnapZone},
     tiling::{arrange, smart_gap, LayoutKind},
@@ -342,11 +341,6 @@ impl Wm {
         }
         self.clamp_floating_windows();
         self.refresh_tiled_rects();
-    }
-
-    /// Profiles declared by the current configuration.
-    pub fn profiles(&self) -> &Profiles {
-        &self.config.profiles
     }
 
     /// Name of the profile applied most recently, if any.

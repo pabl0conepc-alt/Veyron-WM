@@ -201,3 +201,21 @@
 - Verified locally: 109 core tests, 5 window-feature, 9 multi-output, 8 profile
   and 8 IPC tests pass; Clippy with warnings denied and `cargo fmt --check` are
   clean. The renderer still ignores motion settings changed by a profile.
+- Verified locally: 109 core tests, 5 window-feature, 9 multi-output, 9 profile
+  and 8 IPC tests pass; Clippy with warnings denied and `cargo fmt --check` are
+  clean.
+
+## 2026-11-20 — Phase 7 cleanup: drop unconsumed policy modules
+
+- Removed `overview.rs`, `gestures.rs` and `motion::Transitions`: none of them
+  had a consumer. No action, binding, IPC command or renderer ever opened an
+  overview, forwarded a swipe or called `Transitions::sync`/`tick`, so they were
+  speculative geometry and bookkeeping kept alive only by their own tests.
+  Gestures and an exposé overview stay listed as unimplemented work in
+  `ROADMAP.md` and `KNOWN_ISSUES.md`.
+- Dropped the `[gestures]` configuration table with it, and the unused parts of
+  the profile API: `Profile::description` (a note nothing read), `Profile::new`,
+  `LayoutPatch::is_empty` and the `Wm::profiles()` accessor that duplicated
+  `Wm::config().profiles`.
+- `Profile::validate` now rejects whitespace with a single check; the separate
+  leading/trailing-whitespace branch could never fire after it.

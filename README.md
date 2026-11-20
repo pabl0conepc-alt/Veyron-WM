@@ -47,23 +47,16 @@ What works:
   `move-output <direction>` sends the focused window there and
   `workspace-output <direction>` takes the whole active workspace along.
   `Wm::snapshots()` returns one frame description per output.
-- Gesture policy: `SwipeTracker` accumulates libinput swipe deltas, resolves the
-  dominant axis and emits workspace directions once per threshold. The nested
-  input layer does not forward gestures yet.
-- Workspace overview policy: `Overview` lays every workspace of an output out
-  in a paged grid ordered by sparse coordinate, reports window counts and maps
-  a click back to a workspace. The compositor still has to draw it.
 - Veyron Profiles: named presets that patch only the layout and motion fields
   they set, applied at startup with `default_profile` and at runtime with
   `profile <name>`; a profile that would leave the configuration invalid is
   refused instead of partially applied.
 - Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
   (workspaces, windows, floating geometry) to TOML and rebuild it.
-- Animation foundation: `spring`/eased `RectAnimator`, reduced-motion policy
-  and `Transitions`, which follows a frame of placements, redirects running
-  transitions and reports whether another frame is needed. The renderer does
-  not drive it yet.
-- Deterministic, unit-tested state machine (117 core tests plus integration
+- Animation foundation: a `spring` and eased `RectAnimator` that integrate a
+  `dt` supplied by the caller, plus duration and reduced-motion policy. The
+  renderer does not animate frames yet.
+- Deterministic, unit-tested state machine (109 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -216,11 +209,6 @@ reduce_motion = false
 [behavior]
 remember_geometry = true     # restore floating geometry per app id
 
-[gestures]                   # policy only; the nested input layer does not
-enabled = false              # forward touchpad swipes yet
-swipe_threshold = 220.0      # logical pixels of travel per workspace step
-axis_ratio = 1.2             # how much the dominant axis must win
-
 # Per-application rules, evaluated in order; later fields win.
 [[rules]]
 app_id = "org.mozilla.firefox"
@@ -242,7 +230,6 @@ layout = "dwindle"
 # keeps its current value. `profile <name>` applies one at runtime.
 [[profiles]]
 name = "coding"
-description = "dense master-stack while editing"
 [profiles.layout]
 gap = 4
 mode = "master-stack"
@@ -269,8 +256,8 @@ Rules accept `app_id` and/or `title` globs (`*`, `?`) and may set `floating`,
 `opacity` (`0.0..=1.0`), `blur`, `scratchpad`, `workspace` and `layout`. A rule
 without a match key is rejected rather than applied to every window.
 
-Profiles accept `name` (required, no whitespace), an optional `description`, and
-`[profiles.layout]` / `[profiles.motion]` patches. Applying a profile reflows
+Profiles accept `name` (required, no whitespace) and `[profiles.layout]` /
+`[profiles.motion]` patches. Applying a profile reflows
 every workspace on every output, so a margin change is visible immediately;
 `mode` also selects that layout for all workspaces. Duplicate names, an unknown
 `default_profile` and patches that violate the layout ratios are configuration

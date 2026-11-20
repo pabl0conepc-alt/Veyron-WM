@@ -27,11 +27,11 @@ Last reviewed: 2026-11-19.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
   core, multi-output policy and named layout/motion profiles are implemented and
-  unit-tested (117 core tests plus window-feature, multi-output, profile and
-  overview integration tests) with control-protocol
-  version 3. Renderer wiring for animation/opacity/blur, backend multi-output
-  hotplug and a nested runtime visual check remain open. See
-  [ROADMAP.md](ROADMAP.md).
+  unit-tested (109 core tests plus window-feature, multi-output and profile
+  integration tests) with control-protocol version 3. Renderer wiring for
+  animation/opacity/blur, backend multi-output hotplug and a nested runtime
+  visual check remain open. Gesture and overview policy modules were removed
+  before any consumer existed. See [ROADMAP.md](ROADMAP.md).
 - Phase 6 Nix packaging is currently uncommitted: `flake.nix`, `flake.lock`, a
   README usage section and a GitHub Actions package job are in the worktree.
   Local flake evaluation returned `veyron-wm-0.1.0`; no complete local build

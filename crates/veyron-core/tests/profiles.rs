@@ -11,7 +11,6 @@ mode = "scroll"
 
 [[profiles]]
 name = "coding"
-description = "dense master-stack for editing"
 [profiles.layout]
 gap = 4
 mode = "master-stack"
@@ -66,7 +65,7 @@ fn invalid_profile_sets_are_rejected() {
     let missing_default = Config::from_toml_str("default_profile = \"nope\"\n");
     assert!(missing_default.is_err(), "the default profile must exist");
 
-    let empty_name = Config::from_toml_str("[[profiles]]\ndescription = \"x\"\n");
+    let empty_name = Config::from_toml_str("[[profiles]]\n[profiles.layout]\ngap = 4\n");
     assert!(empty_name.is_err());
 
     let spaced = Config::from_toml_str("[[profiles]]\nname = \"two words\"\n");
