@@ -1164,25 +1164,39 @@ mod tests {
         let mut wm = wm();
         let id = wm.create_window(NewWindow::default());
         wm.dispatch(Action::ToggleFloating);
-        let initial = wm.snapshot().placement_of(id).expect("floating placement").rect;
+        let initial = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("floating placement")
+            .rect;
 
-        assert!(wm
-            .dispatch(Action::MoveFloating {
+        assert!(
+            wm.dispatch(Action::MoveFloating {
                 direction: Direction::Right,
                 delta: 32,
             })
-            .layout_changed);
-        let moved = wm.snapshot().placement_of(id).expect("floating placement").rect;
+            .layout_changed
+        );
+        let moved = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("floating placement")
+            .rect;
         assert_eq!(moved.x, initial.x + 32);
         assert_eq!(moved.size(), initial.size());
 
-        assert!(wm
-            .dispatch(Action::MoveFloating {
+        assert!(
+            wm.dispatch(Action::MoveFloating {
                 direction: Direction::Left,
                 delta: i32::MAX,
             })
-            .layout_changed);
-        let clamped = wm.snapshot().placement_of(id).expect("floating placement").rect;
+            .layout_changed
+        );
+        let clamped = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("floating placement")
+            .rect;
         let viewport = wm.snapshot().viewport;
         assert_eq!(clamped.x, viewport.x);
         assert!(clamped.y >= viewport.y);

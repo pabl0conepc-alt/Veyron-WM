@@ -144,9 +144,10 @@ impl Action {
                 direction: parse_direction(rest)?,
             }),
             "move-floating" => {
-                let (direction, amount) = rest.split_once(char::is_whitespace).ok_or_else(|| {
-                    ActionParseError::new("move-floating needs a direction and pixel distance")
-                })?;
+                let (direction, amount) =
+                    rest.split_once(char::is_whitespace).ok_or_else(|| {
+                        ActionParseError::new("move-floating needs a direction and pixel distance")
+                    })?;
                 let direction = parse_direction(direction)?;
                 let delta = amount.trim().parse::<i32>().map_err(|_| {
                     ActionParseError::new(format!(
