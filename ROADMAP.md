@@ -155,11 +155,17 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Veyron Studio (graphical configuration), native panel/launcher/OSD/
   notifications, plugin isolation, gesture input, HDR/VRR/fractional scaling,
   screencopy/screen sharing, XWayland and multi-GPU work.
-- [ ] Multi-output layout: only one output is created today, so per-output
-  workspaces and monitor-aware placement need backend work first.
+- [x] Multi-output policy: outputs are added and removed at runtime with their
+  own workspaces and viewports; `output <direction>` follows monitor adjacency,
+  `move-output <direction>` moves the focused window and
+  `workspace-output <direction>` moves the whole workspace, with floating
+  geometry re-clamped to the destination and windows migrated on unplug.
+- [ ] Backend wiring for multiple outputs: the nested backend still creates one
+  output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (107 core tests, 5
-window-feature integration tests, 8 IPC tests) covers every implemented item
+**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (108 core tests, 5
+window-feature integration tests, 9 multi-output integration tests, 8 IPC
+tests) covers every implemented item
 above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings`
 and `cargo fmt --all --check` pass. The compositor crate was not compiled in
 this environment (Wayland/XKB development libraries are missing), and no nested

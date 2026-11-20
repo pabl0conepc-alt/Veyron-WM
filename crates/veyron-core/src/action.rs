@@ -113,6 +113,13 @@ pub enum Action {
     WorkspaceNext,
     /// Switch to the previous workspace.
     WorkspacePrev,
+    /// Move focus to the output (monitor) in that direction.
+    OutputFocus { direction: Direction },
+    /// Move the focused window to the output in that direction.
+    MoveToOutput { direction: Direction },
+    /// Move the active workspace, windows included, to the output in that
+    /// direction and follow it there.
+    WorkspaceToOutput { direction: Direction },
     /// Select the tiling layout of the active workspace.
     Layout { kind: LayoutKind },
     /// Cycle the active workspace to the next tiling layout.
@@ -249,6 +256,15 @@ impl Action {
             "move-workspace" | "send-to-workspace" => Ok(Action::MoveToWorkspace {
                 direction: parse_direction(rest)?,
             }),
+            "output" | "focus-output" => Ok(Action::OutputFocus {
+                direction: parse_direction(rest)?,
+            }),
+            "move-output" | "move-to-output" => Ok(Action::MoveToOutput {
+                direction: parse_direction(rest)?,
+            }),
+            "workspace-output" | "move-workspace-to-output" => Ok(Action::WorkspaceToOutput {
+                direction: parse_direction(rest)?,
+            }),
             "layout" | "set-layout" => {
                 if rest.eq_ignore_ascii_case("next") {
                     return Ok(Action::LayoutNext);
@@ -336,6 +352,11 @@ impl fmt::Display for Action {
             Action::MoveToWorkspace { direction } => write!(f, "move-workspace {direction}"),
             Action::WorkspaceNext => f.write_str("workspace next"),
             Action::WorkspacePrev => f.write_str("workspace prev"),
+            Action::OutputFocus { direction } => write!(f, "output {direction}"),
+            Action::MoveToOutput { direction } => write!(f, "move-output {direction}"),
+            Action::WorkspaceToOutput { direction } => {
+                write!(f, "workspace-output {direction}")
+            }
             Action::Layout { kind } => write!(f, "layout {kind}"),
             Action::LayoutNext => f.write_str("layout next"),
             Action::ToggleScratchpad => f.write_str("scratchpad"),
@@ -396,6 +417,15 @@ mod tests {
             },
             Action::WorkspaceNext,
             Action::WorkspacePrev,
+            Action::OutputFocus {
+                direction: Direction::Right,
+            },
+            Action::MoveToOutput {
+                direction: Direction::Left,
+            },
+            Action::WorkspaceToOutput {
+                direction: Direction::Up,
+            },
             Action::Layout {
                 kind: LayoutKind::Dwindle,
             },
@@ -468,6 +498,30 @@ mod tests {
             })
         );
         assert!(Action::parse("workspace north").is_err());
+    }
+
+    #[test]
+    fn output_actions_require_a_direction() {
+        assert_eq!(
+            Action::parse("output right"),
+            Ok(Action::OutputFocus {
+                direction: Direction::Right,
+            })
+        );
+        assert_eq!(
+            Action::parse("move-output left"),
+            Ok(Action::MoveToOutput {
+                direction: Direction::Left,
+            })
+        );
+        assert_eq!(
+            Action::parse("workspace-output up"),
+            Ok(Action::WorkspaceToOutput {
+                direction: Direction::Up,
+            })
+        );
+        assert!(Action::parse("output").is_err());
+        assert!(Action::parse("output sideways").is_err());
     }
 
     #[test]

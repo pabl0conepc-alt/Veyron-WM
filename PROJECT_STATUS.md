@@ -25,11 +25,12 @@ Last reviewed: 2026-11-19.
   [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
   passed all checks for `17d8562`.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
-  layouts, smart gaps, window rules, scratchpad, geometry memory and a motion
-  core are implemented and unit-tested (107 core tests plus window-feature
-  integration tests) with control-protocol
-  version 3. Renderer wiring for animation/opacity/blur and a nested runtime
-  visual check remain open. See [ROADMAP.md](ROADMAP.md).
+  layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
+  core and multi-output policy are implemented and unit-tested (108 core tests
+  plus window-feature and multi-output integration tests) with control-protocol
+  version 3. Renderer wiring for animation/opacity/blur, backend multi-output
+  hotplug and a nested runtime visual check remain open. See
+  [ROADMAP.md](ROADMAP.md).
 - Phase 6 Nix packaging is currently uncommitted: `flake.nix`, `flake.lock`, a
   README usage section and a GitHub Actions package job are in the worktree.
   Local flake evaluation returned `veyron-wm-0.1.0`; no complete local build

@@ -80,6 +80,29 @@ Policies:
 7. Each workspace coordinate maps to exactly one workspace on its output;
    navigating to an unvisited coordinate creates it once.
 
+### Outputs
+
+`Wm` owns a list of `OutputState`s. Each one holds its rectangle, its own
+workspaces keyed by sparse coordinate and name, and its active workspace, so an
+output can never borrow another's window list. The active output is the one that
+receives focus and new windows; `focus_output` and `adjacent_output` change it.
+
+Adjacency is edge based: an output only counts as being to the right of another
+when its left edge is at or beyond the active output's right edge, so two
+monitors side by side are not also reachable with `up`/`down`. Distance between
+centres ranks candidates, with the perpendicular gap as a tie-break.
+
+`add_output` registers a monitor with workspace `1` without stealing focus;
+`remove_output` migrates the windows of the unplugged output to the active
+workspace of the surviving output, re-clamps floating geometry and re-docks
+picture-in-picture windows, and refuses to remove the last output. Viewports are
+computed per output, so `set_output_rect`, clamping and `set_config` only touch
+the output that changed. `snapshots()` returns one [`Snapshot`] per output,
+while `snapshot()` keeps describing the active one for the renderer.
+
+The backend still creates a single output; everything above is policy that a
+multi-output backend can drive without further core changes.
+
 ### Layout modes
 
 `LayoutKind` selects the tiling algorithm of a workspace:

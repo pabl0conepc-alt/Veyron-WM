@@ -209,6 +209,10 @@ pub struct PlacementInfo {
 pub struct Snapshot {
     /// Full output rectangle, used to clear the frame.
     pub output: Rect,
+    /// Name of the output this frame belongs to.
+    pub output_name: String,
+    /// Index of the output in [`Wm::outputs`].
+    pub output_index: usize,
     /// Usable area inside the configured outer margin.
     pub viewport: Rect,
     pub workspace: String,
@@ -314,9 +318,9 @@ impl Wm {
     /// Apply a new configuration, keeping window and workspace state.
     pub fn set_config(&mut self, config: Config) {
         self.config = config;
-        let viewport = self.viewport();
-        for output in &mut self.outputs {
-            for workspace in &mut output.workspaces {
+        for index in 0..self.outputs.len() {
+            let viewport = self.viewport_of(index);
+            for workspace in &mut self.outputs[index].workspaces {
                 workspace.layout.set_config(self.config.layout.clone());
                 workspace.layout.set_viewport(viewport);
             }
@@ -333,12 +337,351 @@ impl Wm {
         &self.outputs[self.active_output]
     }
 
+    pub fn active_output_index(&self) -> usize {
+        self.active_output
+    }
+
+    /// Index of an output by name, in compositor order.
+    pub fn output_index(&self, name: &str) -> Option<usize> {
+        self.outputs.iter().position(|output| output.name == name)
+    }
+
+    /// One output by name.
+    pub fn output(&self, name: &str) -> Option<&OutputState> {
+        let index = self.output_index(name)?;
+        self.outputs.get(index)
+    }
+
     pub fn output_rect(&self) -> Rect {
         self.active_output().rect
     }
 
+    /// Usable area of one output, inside the configured outer margin.
+    pub fn viewport_of(&self, output_index: usize) -> Rect {
+        match self.outputs.get(output_index) {
+            Some(output) => viewport_for(output.rect, &self.config.layout),
+            None => Rect::ZERO,
+        }
+    }
+
+    /// Usable area of the active output.
     pub fn viewport(&self) -> Rect {
-        viewport_for(self.active_output().rect, &self.config.layout)
+        self.viewport_of(self.active_output)
+    }
+
+    /// Register a new output and give it a first workspace.
+    ///
+    /// A hot-plugged monitor never steals focus: it is added with workspace
+    /// `1` and the active output keeps its workspaces. Returns the index of the
+    /// new output, or `None` for a duplicate name or an empty rectangle.
+    pub fn add_output(&mut self, name: impl Into<String>, rect: Rect) -> Option<usize> {
+        let name = name.into();
+        if name.trim().is_empty() || rect.is_empty() || self.output_index(&name).is_some() {
+            return None;
+        }
+        let viewport = viewport_for(rect, &self.config.layout);
+        let index = self.outputs.len();
+        self.outputs.push(OutputState {
+            name,
+            rect,
+            workspaces: vec![Workspace::new(
+                "1".to_string(),
+                WorkspacePosition::default(),
+                &self.config.layout,
+                viewport,
+            )],
+            workspace_indices: HashMap::from([(WorkspacePosition::default(), 0)]),
+            names: HashMap::from([("1".to_string(), 0)]),
+            active: 0,
+        });
+        Some(index)
+    }
+
+    /// Unplug an output.
+    ///
+    /// Its windows are migrated to the active workspace of the output that
+    /// stays active, floating windows are clamped into that output's viewport
+    /// and picture-in-picture windows are re-docked to the same corner. The
+    /// last remaining output is never removed. Returns whether the output went
+    /// away.
+    pub fn remove_output(&mut self, name: &str) -> bool {
+        let Some(index) = self.output_index(name) else {
+            return false;
+        };
+        if self.outputs.len() <= 1 {
+            return false;
+        }
+
+        let mut tiled = Vec::new();
+        let mut floating = Vec::new();
+        for workspace in &self.outputs[index].workspaces {
+            tiled.extend(workspace.layout.order());
+            floating.extend(workspace.floating.iter().copied());
+        }
+
+        let removed_active = self.active_output == index;
+        self.outputs.remove(index);
+        if removed_active {
+            self.active_output = index.min(self.outputs.len() - 1);
+        } else if self.active_output > index {
+            self.active_output -= 1;
+        }
+
+        let output_index = self.active_output;
+        let workspace_index = self.outputs[output_index].active;
+        let viewport = self.viewport();
+        for id in tiled {
+            self.outputs[output_index].workspaces[workspace_index]
+                .layout
+                .insert_window(id);
+        }
+        for id in floating {
+            if let Some(window) = self.windows.get(&id) {
+                if let Some((corner, _)) = self.pip.get(&id).copied() {
+                    let rect = corner.rect(viewport, crate::snap::DEFAULT_PIP_RATIO, 0);
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        window.set_floating_rect(rect);
+                    }
+                } else {
+                    let rect = clamp_into(window.floating_rect(), viewport);
+                    if let Some(window) = self.windows.get_mut(&id) {
+                        window.set_floating_rect(rect);
+                    }
+                }
+            }
+            let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
+            workspace.floating.retain(|window| *window != id);
+            workspace.floating.push(id);
+            workspace.focused_floating = Some(id);
+        }
+
+        self.refresh_tiled_rects();
+        self.note_focus();
+        true
+    }
+
+    /// Make an output the one that receives focus and new windows.
+    pub fn focus_output(&mut self, index: usize) -> bool {
+        if index >= self.outputs.len() || index == self.active_output {
+            return false;
+        }
+        self.active_output = index;
+        self.note_focus();
+        true
+    }
+
+    /// The output that lies in `direction` from the active one.
+    ///
+    /// A candidate only counts when it sits beyond the active output's edge in
+    /// that direction, so two monitors side by side are not also "above" each
+    /// other. The closest one wins, with the cross-axis distance as a
+    /// tie-break.
+    pub fn adjacent_output(&self, direction: Direction) -> Option<usize> {
+        let origin = self.outputs[self.active_output].rect;
+        let mut best: Option<((i64, i64), usize)> = None;
+        for (index, output) in self.outputs.iter().enumerate() {
+            if index == self.active_output {
+                continue;
+            }
+            let rect = output.rect;
+            let (along, across) = match direction {
+                Direction::Left if rect.right() <= origin.x => (
+                    i64::from(origin.x) - i64::from(rect.right()),
+                    axis_distance(rect, origin, true),
+                ),
+                Direction::Right if rect.x >= origin.right() => (
+                    i64::from(rect.x) - i64::from(origin.right()),
+                    axis_distance(rect, origin, true),
+                ),
+                Direction::Up if rect.bottom() <= origin.y => (
+                    i64::from(origin.y) - i64::from(rect.bottom()),
+                    axis_distance(rect, origin, false),
+                ),
+                Direction::Down if rect.y >= origin.bottom() => (
+                    i64::from(rect.y) - i64::from(origin.bottom()),
+                    axis_distance(rect, origin, false),
+                ),
+                _ => continue,
+            };
+            let score = (along, across);
+            if best.is_none_or(|(current, _)| score < current) {
+                best = Some((score, index));
+            }
+        }
+        best.map(|(_, index)| index)
+    }
+
+    /// Move focus to the output in `direction`, if there is one.
+    pub fn focus_output_direction(&mut self, direction: Direction) -> bool {
+        match self.adjacent_output(direction) {
+            Some(index) => self.focus_output(index),
+            None => false,
+        }
+    }
+
+    /// Move the focused window to another output's active workspace, keeping its
+    /// floating/fullscreen state and keeping a floating window inside the new
+    /// viewport. Focus follows the window.
+    pub fn move_focused_to_output(&mut self, index: usize) -> bool {
+        if index >= self.outputs.len() {
+            return false;
+        }
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let Some((source_output, source_workspace, floating)) = self.locate(id) else {
+            return false;
+        };
+        if source_output == index {
+            return false;
+        }
+
+        let fullscreen =
+            self.outputs[source_output].workspaces[source_workspace].fullscreen == Some(id);
+        let destination_workspace = self.outputs[index].active;
+        if fullscreen
+            && self.outputs[index].workspaces[destination_workspace]
+                .fullscreen
+                .is_some()
+        {
+            return false;
+        }
+
+        let source = &mut self.outputs[source_output].workspaces[source_workspace];
+        source.layout.remove_window(id);
+        source.floating.retain(|window| *window != id);
+        if source.focused_floating == Some(id) {
+            source.focused_floating = None;
+        }
+        if source.fullscreen == Some(id) {
+            source.fullscreen = None;
+        }
+
+        let viewport = self.viewport_of(index);
+        if floating {
+            let rect = match self.pip.get(&id).copied() {
+                Some((corner, _)) => corner.rect(viewport, crate::snap::DEFAULT_PIP_RATIO, 0),
+                None => self
+                    .windows
+                    .get(&id)
+                    .map(|window| clamp_into(window.floating_rect(), viewport))
+                    .unwrap_or_else(|| viewport.centered(default_floating_size(viewport))),
+            };
+            if let Some(window) = self.windows.get_mut(&id) {
+                window.set_floating_rect(rect);
+            }
+        }
+
+        let destination = &mut self.outputs[index].workspaces[destination_workspace];
+        if floating {
+            destination.floating.push(id);
+            destination.focused_floating = Some(id);
+        } else {
+            destination.focused_floating = None;
+            destination.layout.insert_window(id);
+        }
+        if fullscreen {
+            destination.fullscreen = Some(id);
+        }
+
+        self.active_output = index;
+        self.refresh_tiled_rects();
+        self.note_focus();
+        true
+    }
+
+    /// Move the whole active workspace, including its windows, to another
+    /// output and follow it there.
+    ///
+    /// Refuses when the target already has a workspace with that name or when
+    /// the source output would be left without any workspace.
+    pub fn move_active_workspace_to_output(&mut self, index: usize) -> bool {
+        if index >= self.outputs.len() {
+            return false;
+        }
+        let source_output = self.active_output;
+        if source_output == index || self.outputs[source_output].workspaces.len() <= 1 {
+            return false;
+        }
+        let source_workspace = self.outputs[source_output].active;
+        let name = self.outputs[source_output].workspaces[source_workspace]
+            .name
+            .clone();
+        if self.outputs[index].names.contains_key(&name) {
+            return false;
+        }
+
+        let position = self.next_linear_position(index);
+        let mut workspace = self.outputs[source_output]
+            .workspaces
+            .remove(source_workspace);
+        workspace.position = position;
+        let viewport = self.viewport_of(index);
+        workspace.layout.set_viewport(viewport);
+
+        let remaining = self.outputs[source_output].workspaces.len();
+        if remaining > 0 {
+            let active = source_workspace.min(remaining - 1);
+            self.outputs[source_output].active = active;
+        }
+        self.rebuild_workspace_indices(source_output);
+
+        let floating = workspace.floating.clone();
+        self.outputs[index].workspaces.push(workspace);
+        self.rebuild_workspace_indices(index);
+        let destination = self.outputs[index].workspaces.len() - 1;
+        self.outputs[index].active = destination;
+        self.active_output = index;
+
+        for id in floating {
+            if self.windows.contains_key(&id) {
+                self.clamp_window_into_viewport(id, index);
+            }
+        }
+
+        self.refresh_tiled_rects();
+        self.note_focus();
+        true
+    }
+
+    /// Move the active workspace to the output in `direction`, if there is one.
+    pub fn move_active_workspace_in_direction(&mut self, direction: Direction) -> bool {
+        match self.adjacent_output(direction) {
+            Some(index) => self.move_active_workspace_to_output(index),
+            None => false,
+        }
+    }
+
+    /// Move the focused window to the output in `direction`, if there is one.
+    pub fn move_focused_in_direction(&mut self, direction: Direction) -> bool {
+        match self.adjacent_output(direction) {
+            Some(index) => self.move_focused_to_output(index),
+            None => false,
+        }
+    }
+
+    fn clamp_window_into_viewport(&mut self, id: WindowId, output_index: usize) {
+        let viewport = self.viewport_of(output_index);
+        let rect = match self.pip.get(&id).copied() {
+            Some((corner, _)) => corner.rect(viewport, crate::snap::DEFAULT_PIP_RATIO, 0),
+            None => match self.windows.get(&id) {
+                Some(window) => clamp_into(window.floating_rect(), viewport),
+                None => return,
+            },
+        };
+        if let Some(window) = self.windows.get_mut(&id) {
+            window.set_floating_rect(rect);
+        }
+    }
+
+    fn rebuild_workspace_indices(&mut self, output_index: usize) {
+        let output = &mut self.outputs[output_index];
+        output.workspace_indices.clear();
+        output.names.clear();
+        for (index, workspace) in output.workspaces.iter().enumerate() {
+            output.workspace_indices.insert(workspace.position, index);
+            output.names.insert(workspace.name.clone(), index);
+        }
     }
 
     pub fn window(&self, id: WindowId) -> Option<&Window> {
@@ -610,6 +953,21 @@ impl Wm {
                 effects.layout_changed = effects.workspace_changed;
                 effects.focus_changed = effects.workspace_changed;
             }
+            Action::OutputFocus { direction } => {
+                effects.focus_changed = self.focus_output_direction(direction);
+                effects.workspace_changed = effects.focus_changed;
+                effects.layout_changed = effects.focus_changed;
+            }
+            Action::MoveToOutput { direction } => {
+                effects.workspace_changed = self.move_focused_in_direction(direction);
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
+            }
+            Action::WorkspaceToOutput { direction } => {
+                effects.workspace_changed = self.move_active_workspace_in_direction(direction);
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
+            }
         }
 
         if effects.layout_changed {
@@ -619,23 +977,50 @@ impl Wm {
         effects
     }
 
-    /// Update the output size (window resize in the nested backend, or a mode
-    /// change on real hardware).
+    /// Update the active output's size (window resize in the nested backend, or
+    /// a mode change on real hardware).
     pub fn set_output_size(&mut self, size: Size) {
-        let rect = Rect::from_size(size);
+        self.set_output_rect(self.active_output, Rect::from_size(size));
+    }
+
+    /// Update one output's rectangle, reflowing only that output. Returns
+    /// whether the rectangle actually changed.
+    pub fn set_output_rect(&mut self, output_index: usize, rect: Rect) -> bool {
+        if output_index >= self.outputs.len() || self.outputs[output_index].rect == rect {
+            return false;
+        }
         let viewport = viewport_for(rect, &self.config.layout);
-        let output = &mut self.outputs[self.active_output];
-        output.rect = rect;
-        for workspace in &mut output.workspaces {
+        self.outputs[output_index].rect = rect;
+        for workspace in &mut self.outputs[output_index].workspaces {
             workspace.layout.set_viewport(viewport);
         }
         self.clamp_floating_windows();
         self.refresh_tiled_rects();
+        true
     }
 
-    /// Build the frame description the compositor renders.
+    /// Build the frame description of the active output.
     pub fn snapshot(&self) -> Snapshot {
-        let output = self.active_output();
+        self.build_snapshot(self.active_output)
+    }
+
+    /// Frame description of one output, `None` when the index is out of range.
+    pub fn output_snapshot(&self, output_index: usize) -> Option<Snapshot> {
+        if output_index >= self.outputs.len() {
+            return None;
+        }
+        Some(self.build_snapshot(output_index))
+    }
+
+    /// One frame description per output, in compositor order.
+    pub fn snapshots(&self) -> Vec<Snapshot> {
+        (0..self.outputs.len())
+            .map(|index| self.build_snapshot(index))
+            .collect()
+    }
+
+    fn build_snapshot(&self, output_index: usize) -> Snapshot {
+        let output = &self.outputs[output_index];
         let workspace = output.active_workspace();
         let viewport = viewport_for(output.rect, &self.config.layout);
         let layout = workspace.effective_layout();
@@ -708,6 +1093,8 @@ impl Wm {
 
         Snapshot {
             output: output.rect,
+            output_name: output.name.clone(),
+            output_index,
             viewport,
             workspace: workspace.name.clone(),
             workspace_index: output.active,
@@ -809,15 +1196,8 @@ impl Wm {
             workspace.layout.remove_window(id);
         }
 
-        let viewport = self.viewport();
-        let size = rect.size().clamp_to(viewport.size());
-        let x = rect
-            .x
-            .clamp(viewport.x, (viewport.right() - size.w).max(viewport.x));
-        let y = rect
-            .y
-            .clamp(viewport.y, (viewport.bottom() - size.h).max(viewport.y));
-        let target = Rect::new(x, y, size.w, size.h);
+        let viewport = self.viewport_of(output_index);
+        let target = clamp_into(rect, viewport);
 
         let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
         workspace.floating.retain(|window| *window != id);
@@ -1429,21 +1809,15 @@ impl Wm {
     }
 
     /// Keep floating windows on screen after an output resize or margin change.
+    /// Each window is clamped to the viewport of the output it belongs to.
     fn clamp_floating_windows(&mut self) {
-        let viewport = self.viewport();
-        for output in &self.outputs {
-            for workspace in &output.workspaces {
+        for index in 0..self.outputs.len() {
+            let viewport = self.viewport_of(index);
+            for workspace in &self.outputs[index].workspaces {
                 for id in &workspace.floating {
                     if let Some(window) = self.windows.get_mut(id) {
                         let rect = window.floating_rect();
-                        let size = rect.size().clamp_to(viewport.size());
-                        let x = rect
-                            .x
-                            .clamp(viewport.x, (viewport.right() - size.w).max(viewport.x));
-                        let y = rect
-                            .y
-                            .clamp(viewport.y, (viewport.bottom() - size.h).max(viewport.y));
-                        window.set_floating_rect(Rect::new(x, y, size.w, size.h));
+                        window.set_floating_rect(clamp_into(rect, viewport));
                     }
                 }
             }
@@ -1468,6 +1842,31 @@ impl Wm {
             }
         }
     }
+}
+
+/// Distance between two rectangles along one axis, measured between their
+/// nearest edges: the vertical gap for side-by-side monitors, the horizontal gap
+/// for stacked ones.
+fn axis_distance(rect: Rect, origin: Rect, horizontal: bool) -> i64 {
+    let (start, end, other_start, other_end) = if horizontal {
+        (rect.y, rect.bottom(), origin.y, origin.bottom())
+    } else {
+        (rect.x, rect.right(), origin.x, origin.right())
+    };
+    let gap = (other_start - end).max(start - other_end).max(0);
+    i64::from(gap)
+}
+
+/// Fit a rectangle inside a viewport, shrinking it first when it is too big.
+fn clamp_into(rect: Rect, viewport: Rect) -> Rect {
+    let size = rect.size().clamp_to(viewport.size());
+    let x = rect
+        .x
+        .clamp(viewport.x, (viewport.right() - size.w).max(viewport.x));
+    let y = rect
+        .y
+        .clamp(viewport.y, (viewport.bottom() - size.h).max(viewport.y));
+    Rect::new(x, y, size.w, size.h)
 }
 
 /// Neighbour offset in flat strip order for layouts without 2D neighbours.

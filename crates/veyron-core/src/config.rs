@@ -212,6 +212,12 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+ctrl+alt+right", "snap right"),
     ("super+ctrl+alt+up", "snap top"),
     ("super+ctrl+alt+down", "snap bottom"),
+    ("super+comma", "output left"),
+    ("super+period", "output right"),
+    ("super+shift+comma", "move-output left"),
+    ("super+shift+period", "move-output right"),
+    ("super+ctrl+comma", "workspace-output left"),
+    ("super+ctrl+period", "workspace-output right"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];

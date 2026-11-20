@@ -25,10 +25,13 @@
 - Veyron Recall (`Session`) captures and restores state in the core only: no
   CLI/IPC command writes or reads a session file yet, and restoring relaunches
   nothing by itself.
-- Multi-output is not implemented: the window manager owns a single output, so
-  per-monitor workspaces and monitor-aware placement are future work.
+- Multi-output policy exists in the core (runtime add/remove, per-output
+  workspaces and viewports, monitor-directed focus and window/workspace moves)
+  but the nested backend still creates a single output, so real hotplug and
+  per-monitor rendering are untested.
 - XWayland, portal services, a stable external shell API, plugin isolation,
-  direct DRM/KMS, session management and multi-output hotplug are not supported.
+  direct DRM/KMS, session management and backend multi-output hotplug are not
+  supported.
 - No target-machine runtime baseline for RAM, CPU, frame pacing, startup or
   input latency has been measured. Do not make performance claims.
 - IPC is local to the user's runtime directory and has message bounds and

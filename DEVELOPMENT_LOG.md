@@ -126,3 +126,23 @@
   tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
   Smithay crate still cannot build here (missing Wayland/XKB development
   libraries), so no nested runtime or visual check was performed.
+
+## 2026-11-20 — Phase 7 multi-output policy
+
+- `Wm` now manages outputs at runtime: `add_output`, `remove_output` (windows
+  migrate to the surviving output, floating geometry and picture-in-picture are
+  re-clamped, the last output is never removed), `focus_output`,
+  `adjacent_output` (edge-based monitor adjacency) and `set_output_rect`.
+- Every output owns its workspaces and its own viewport: configuration reloads,
+  clamping and re-tiling are per output instead of following the active one.
+- New actions `output <direction>`, `move-output <direction>` and
+  `workspace-output <direction>`, with default bindings on `super+comma`,
+  `super+period` (plus `shift` and `ctrl` variants); the action grammar and IPC
+  accept them without a protocol bump because the payload shape is unchanged.
+- `Snapshot` gained `output_name`/`output_index`, and `Wm::snapshots()` returns
+  one frame description per output.
+- Veyron Recall now captures the active output only, so restoring on a single
+  output cannot collide on duplicated workspace names.
+- Verified locally: 108 core tests, 5 window-feature, 9 multi-output and 8 IPC
+  tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
+  backend still binds one output, so hotplug remains unverified at runtime.

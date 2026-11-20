@@ -75,15 +75,17 @@ impl Session {
     /// Capture the state of a running window manager.
     pub fn capture(wm: &Wm) -> Session {
         let mut session = Session::default();
-        for output in wm.outputs() {
-            for workspace in output.workspaces() {
-                session.workspaces.push(workspace.name().to_string());
-                for id in workspace.layout().order() {
-                    push_record(&mut session, wm, id, workspace.name(), false);
-                }
-                for id in workspace.floating_windows() {
-                    push_record(&mut session, wm, *id, workspace.name(), false);
-                }
+        // Only the active output is captured: Recall restores onto a single
+        // output, and taking every output would collide on shared workspace
+        // names such as "1".
+        let output = wm.active_output();
+        for workspace in output.workspaces() {
+            session.workspaces.push(workspace.name().to_string());
+            for id in workspace.layout().order() {
+                push_record(&mut session, wm, id, workspace.name(), false);
+            }
+            for id in workspace.floating_windows() {
+                push_record(&mut session, wm, *id, workspace.name(), false);
             }
         }
 

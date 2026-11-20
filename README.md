@@ -41,11 +41,17 @@ What works:
 - Window groups: `group` adds the focused window to the previous window's group
   and keeps members adjacent, `group next`/`group prev` cycle inside it.
 - Smart focus: `focus previous` returns to the last focused window.
+- Multi-output policy: outputs are registered and unplugged at runtime
+  (`Wm::add_output` / `remove_output`), each with its own workspaces and
+  viewport; `output <direction>` moves focus to the monitor in that direction,
+  `move-output <direction>` sends the focused window there and
+  `workspace-output <direction>` takes the whole active workspace along.
+  `Wm::snapshots()` returns one frame description per output.
 - Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
   (workspaces, windows, floating geometry) to TOML and rebuild it.
 - Animation foundation (`spring`/eased `RectAnimator`, reduced motion) used by
   the core; the renderer does not schedule frames for it yet.
-- Deterministic, unit-tested state machine (107 core tests plus integration
+- Deterministic, unit-tested state machine (108 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -61,8 +67,9 @@ What works:
 
 Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 
-- No DRM/KMS backend, session management or multi-output hotplug; Veyron
-  currently runs nested inside an existing session.
+- No DRM/KMS backend or session management; Veyron currently runs nested
+  inside an existing session and still binds a single output. The core already
+  models several outputs, so the backend only has to report them.
 - No client-side decorations drawn by the compositor, no cursor image, no
   animated transitions.
 - Popup grabs, layer-shell (bars/panels), screencopy, idle and input-method
@@ -154,6 +161,9 @@ Default keybindings (all configurable):
 | `super+bracketright` / `super+bracketleft` | next / previous workspace |
 | `super+ctrl+arrow` | navigate the sparse 2D workspace grid |
 | `super+ctrl+shift+arrow` | move the focused window to a neighboring workspace |
+| `super+comma` / `super+period` | focus the monitor to the left / right |
+| `super+shift+comma` / `super+shift+period` | move the focused window to the left / right monitor |
+| `super+ctrl+comma` / `super+ctrl+period` | move the active workspace to the left / right monitor |
 | `super+r` | reload the configuration |
 | `super+shift+e` | quit |
 
@@ -223,7 +233,9 @@ without a match key is rejected rather than applied to every window.
 Binding values use the same action grammar as the control protocol, so anything
 `veyronctl` can do can be bound to a key. Besides focus/move/workspace actions
 there are `snap <zone>` (halves, quadrants, thirds, `center`, `maximize`),
-`pip [corner]`, `group`, `group next|prev` and `focus previous`. If a `[bindings]` table is present it
+`pip [corner]`, `group`, `group next|prev`, `focus previous` and the monitor
+`output <direction>`, `move-output <direction>` and
+`workspace-output <direction>` actions. If a `[bindings]` table is present it
 replaces the default keymap entirely; omit it to keep the defaults.
 
 ## Control protocol
@@ -238,6 +250,9 @@ veyronctl focus left
 veyronctl workspace 2
 veyronctl workspace up
 veyronctl move-workspace right
+veyronctl output right
+veyronctl move-output left
+veyronctl workspace-output right
 veyronctl resize width 32
 veyronctl move-floating right 32
 veyronctl layout master-stack
