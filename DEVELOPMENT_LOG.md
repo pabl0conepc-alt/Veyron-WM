@@ -1,5 +1,22 @@
 # Development log
 
+## 2026-11-20 — Layouts, rules, scratchpad and motion core
+
+- Added `tiling`, `motion` and `rules` modules to `veyron-core` and wired them
+  into configuration, actions and the control protocol (version 3).
+- Layouts: `master-stack`, `dwindle` and dynamic `auto`, selectable per
+  workspace; the strip remains the single source of window order and focus.
+- Smart gaps, per-application rules (floating, opacity, blur, scratchpad, named
+  workspace, layout), scratchpad recall and per-app floating geometry memory.
+- Motion: validate-able spring/easing/rect animator with reduced-motion policy,
+  intentionally not scheduled by the renderer yet.
+- Verified in this environment: `cargo test -p veyron-core` (88 passed),
+  `cargo test -p veyron-ipc` (8 passed), `cargo clippy -p veyron-core -p
+  veyron-ipc --all-targets --locked -- -D warnings` and `cargo fmt --all
+  --check`. The compositor crate could not be compiled here (no Wayland/XKB
+  development libraries, no root to install them), and no nested runtime visual
+  check was possible. GitHub Actions covers the full workspace build.
+
 ## 2026-11-19 — Project state audit
 
 - Confirmed that GitHub branch `feat/headless-calloop-loop` contains the Rust

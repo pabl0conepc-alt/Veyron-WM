@@ -30,7 +30,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Bumped whenever a message shape changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Hard limit for a single message, newline included.
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
@@ -80,6 +80,11 @@ pub struct StateReport {
     pub workspace_count: usize,
     /// Signed coordinates of the active sparse 2D workspace.
     pub workspace_position: [i64; 2],
+    /// Resolved tiling layout of the active workspace (`scroll`,
+    /// `master-stack`, `dwindle`).
+    pub layout: String,
+    /// Effective inner gap in logical pixels after smart gaps.
+    pub gap: i32,
     /// Windows on the active workspace, in draw order.
     pub windows: Vec<WindowReport>,
     /// Focused window id, if any.
@@ -367,6 +372,8 @@ mod tests {
             workspace_index: 1,
             workspace_count: 3,
             workspace_position: [-1, 2],
+            layout: "master-stack".into(),
+            gap: 8,
             windows: vec![WindowReport {
                 id: 7,
                 rect: [10, 20, 30, 40],

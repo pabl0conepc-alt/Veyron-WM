@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     action::{Action, ActionParseError},
     layout::LayoutConfig,
+    motion::MotionConfig,
+    rules::{RuleSet, WindowRule},
 };
 
 /// Modifiers that can be part of a keybinding chord.
@@ -129,11 +131,31 @@ impl Appearance {
     }
 }
 
+/// Behaviour that is not visual and not tiling geometry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Behavior {
+    /// Remember the last floating geometry per app id and restore it for the
+    /// next window of that application.
+    pub remember_geometry: bool,
+}
+
+impl Default for Behavior {
+    fn default() -> Self {
+        Self {
+            remember_geometry: true,
+        }
+    }
+}
+
 /// Fully validated compositor configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub layout: LayoutConfig,
     pub appearance: Appearance,
+    pub motion: MotionConfig,
+    pub behavior: Behavior,
+    pub rules: RuleSet,
     pub bindings: Vec<Binding>,
     /// Commands started once when the compositor comes up.
     pub startup: Vec<String>,
@@ -157,6 +179,8 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+c", "center-column"),
     ("super+f", "toggle-fullscreen"),
     ("super+space", "toggle-floating"),
+    ("super+shift+l", "layout next"),
+    ("super+shift+s", "scratchpad"),
     ("super+1", "workspace 1"),
     ("super+2", "workspace 2"),
     ("super+3", "workspace 3"),
@@ -189,6 +213,9 @@ impl Default for Config {
         let mut config = Self {
             layout: LayoutConfig::default(),
             appearance: Appearance::default(),
+            motion: MotionConfig::default(),
+            behavior: Behavior::default(),
+            rules: RuleSet::default(),
             bindings: Vec::new(),
             startup: Vec::new(),
         };
@@ -221,6 +248,11 @@ impl Config {
             return Err(ConfigError::InvalidColor(appearance.background));
         }
 
+        let motion = raw.motion.unwrap_or_default();
+        motion.validate().map_err(ConfigError::Invalid)?;
+
+        let rules = RuleSet::new(raw.rules.unwrap_or_default()).map_err(ConfigError::Invalid)?;
+
         let mut bindings = Vec::new();
         let mut seen: BTreeMap<(bool, bool, bool, bool, String), ()> = BTreeMap::new();
         match raw.bindings {
@@ -247,6 +279,9 @@ impl Config {
         Ok(Config {
             layout,
             appearance,
+            motion,
+            behavior: raw.behavior.unwrap_or_default(),
+            rules,
             bindings,
             startup: raw.startup.unwrap_or_default(),
         })
@@ -300,6 +335,9 @@ impl Config {
         struct Serializable<'a> {
             layout: &'a LayoutConfig,
             appearance: &'a Appearance,
+            motion: &'a MotionConfig,
+            behavior: &'a Behavior,
+            rules: &'a [WindowRule],
             bindings: BTreeMap<String, String>,
             startup: &'a Vec<String>,
         }
@@ -307,6 +345,9 @@ impl Config {
         let serializable = Serializable {
             layout: &self.layout,
             appearance: &self.appearance,
+            motion: &self.motion,
+            behavior: &self.behavior,
+            rules: self.rules.rules(),
             bindings,
             startup: &self.startup,
         };
@@ -334,6 +375,9 @@ impl Config {
 struct RawConfig {
     layout: Option<LayoutConfig>,
     appearance: Option<Appearance>,
+    motion: Option<MotionConfig>,
+    behavior: Option<Behavior>,
+    rules: Option<Vec<WindowRule>>,
     bindings: Option<BTreeMap<String, String>>,
     startup: Option<Vec<String>>,
 }
@@ -538,6 +582,69 @@ mod tests {
         );
         assert_eq!(parse_hex_color("#12345"), None);
         assert_eq!(parse_hex_color("#gggggg"), None);
+    }
+
+    #[test]
+    fn parses_layout_mode_motion_and_rules() {
+        let config = Config::from_toml_str(
+            r##"
+            [layout]
+            mode = "auto"
+            smart_gaps = true
+            master_ratio = 0.65
+
+            [motion]
+            enabled = true
+            duration_ms = 120
+            reduce_motion = true
+
+            [[rules]]
+            app_id = "org.mozilla.firefox"
+            title = "Picture-in-Picture"
+            floating = true
+            opacity = 0.85
+
+            [[rules]]
+            app_id = "signal"
+            workspace = "chat"
+            layout = "dwindle"
+            "##,
+        )
+        .expect("valid config");
+
+        assert_eq!(config.layout.mode, crate::tiling::LayoutKind::Auto);
+        assert!(config.layout.smart_gaps);
+        assert_eq!(config.layout.master_ratio, 0.65);
+        assert!(config.motion.enabled);
+        assert_eq!(config.motion.duration_ms, 120);
+        assert!(config.motion.reduce_motion);
+        assert_eq!(config.rules.rules().len(), 2);
+
+        let policy = config
+            .rules
+            .resolve("org.mozilla.firefox", "Picture-in-Picture");
+        assert!(policy.floating);
+        assert_eq!(policy.opacity, 0.85);
+    }
+
+    #[test]
+    fn invalid_motion_and_rules_are_rejected() {
+        assert!(matches!(
+            Config::from_toml_str("[motion]\nduration_ms = 60_000\n"),
+            Err(ConfigError::Invalid(_))
+        ));
+        assert!(matches!(
+            Config::from_toml_str("[[rules]]\nfloating = true\n"),
+            Err(ConfigError::Invalid(_))
+        ));
+        assert!(matches!(
+            Config::from_toml_str("[[rules]]\napp_id = \"foot\"\nopacity = 2.0\n"),
+            Err(ConfigError::Invalid(_))
+        ));
+        assert!(matches!(
+            Config::from_toml_str("[layout]\nmaster_ratio = 0.95\n"),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]

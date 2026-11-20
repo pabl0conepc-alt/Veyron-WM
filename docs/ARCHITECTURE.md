@@ -14,7 +14,7 @@ with the code: an undocumented invariant is a future bug.
                 │ WindowId, NewWindow, Action, Snapshot
 ┌───────────────▼──────────────────────────────────────────────┐
 │ crates/veyron-core (no I/O, no protocols, no GPU)            │
-│   geometry · scroll layout · workspaces · focus · config      │
+│   geometry · layouts · motion · rules · workspaces · config   │
 └──────────────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────────────┐
 │ crates/veyron-ipc (serde, Unix sockets)                      │
@@ -79,6 +79,49 @@ Policies:
    vertical extent.
 7. Each workspace coordinate maps to exactly one workspace on its output;
    navigating to an unvisited coordinate creates it once.
+
+### Layout modes
+
+`LayoutKind` selects the tiling algorithm of a workspace:
+
+- `scroll` (default) keeps the strip and its scroll offset.
+- `master-stack` gives the first window `master_ratio` of the width and stacks
+  the rest in the remaining column.
+- `dwindle` splits the usable area recursively, alternating axes.
+- `auto` resolves to `master-stack` for up to three windows and to `dwindle`
+  from four windows on (dynamic tiling).
+
+The strip still owns window order, focus and column ratios for every layout, so
+there is one source of truth. In flat layouts `left/up` and `right/down` step
+through that order, and moving a window swaps it with its neighbour in it.
+Scroll-specific actions (column width, centering) are ignored outside `scroll`.
+
+Smart gaps apply per workspace from the number of tiled windows: zero for a
+lone window, the configured gap for two or three, and two thirds of it when the
+layout is dense. The effective gap is part of the snapshot, so the geometry the
+compositor draws and the geometry the user configured cannot disagree.
+
+### Rules, scratchpad and memory
+
+`config.rules` is an ordered `RuleSet`. A rule matches `app_id` and/or `title`
+with a small glob language (`*`, `?`, no regex dependency) and contributes
+floating, opacity, blur, scratchpad, named workspace and layout policy. Later
+rules override earlier ones per field. The policy is applied when the window is
+created, before it is inserted into a workspace, so a rule can never briefly
+show a window in the wrong place.
+
+Windows that live in the scratchpad are kept in `Wm::scratchpad` and detached
+from every workspace. Toggling the scratchpad shows them as cascading floating
+windows on the active workspace, or detaches them again. `behavior.remember_geometry`
+stores the last floating rectangle per app id and restores it on the next window
+of that application.
+
+### Motion
+
+`motion.rs` provides a spring, easing curves and a rectangle animator that take
+`dt` from the caller. The compositor does not yet own a frame clock for
+animations, so the module is wired into configuration and validated but not into
+rendering; see [ROADMAP](../ROADMAP.md) Phase 7.
 
 ### Geometry math
 

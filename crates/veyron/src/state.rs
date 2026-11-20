@@ -453,6 +453,8 @@ impl Veyron {
             workspace_index: snapshot.workspace_index,
             workspace_count: snapshot.workspace_count,
             workspace_position: [snapshot.workspace_position.x, snapshot.workspace_position.y],
+            layout: snapshot.layout.to_string(),
+            gap: snapshot.gap,
             windows: snapshot
                 .placements
                 .iter()

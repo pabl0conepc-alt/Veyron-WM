@@ -118,3 +118,40 @@ compatibility claims are backed by per-feature tests and documented limits.
 
 **Acceptance:** all relevant suites pass, runtime and performance evidence is
 reproducible, and security/compatibility limits are explicit.
+
+## Phase 7 — Window management depth — IMPLEMENTING
+
+Competitive window management features implemented as protocol-free policy in
+`veyron-core`, so they are verifiable without a GPU session.
+
+- [x] Master-stack and dwindle layouts plus `auto` dynamic tiling, selectable
+  per workspace with `layout <name>` / `layout next` (bindings and IPC).
+- [x] Smart gaps: no gap for a lone tiled window, tighter gaps on dense layouts.
+- [x] Per-application window rules (`app_id`/`title` globs) for floating,
+  opacity, blur, scratchpad, named workspace routing and layout.
+- [x] Scratchpad layer: park the focused window, recall it as floating, hide it
+  again; rules can start an application parked.
+- [x] Per-app floating geometry memory (`behavior.remember_geometry`).
+- [x] Animation core: critically tunable spring, easing curves, rectangle
+  animator, duration and reduced-motion policy, all frame-driver agnostic.
+- [x] Layout, gap and app-routing state exposed on the control protocol
+  (version 3) and in `veyronctl state`.
+- [ ] Drive `RectAnimator` from the nested render loop and schedule frames while
+  a transition is running; needs nested runtime validation on the target GPU.
+- [ ] Apply per-window opacity/blur in the renderer (policy is already in the
+  snapshot; no shader or scene-graph mutation is implemented).
+- [ ] Rounded corners, shadows, real GPU blur, workspace-transition effects and
+  per-window animation overrides.
+- [ ] Veyron Studio (graphical configuration), native panel/launcher/OSD/
+  notifications, plugin isolation, gesture input, HDR/VRR/fractional scaling,
+  screencopy/screen sharing, XWayland and multi-GPU work.
+
+**Evidence:** `cargo test -p veyron-core` (88 tests) covers every implemented
+item above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D
+warnings` and `cargo fmt --all --check` pass. The compositor crate was not
+compiled in this environment (Wayland/XKB development libraries are missing),
+and no nested runtime visual check was performed.
+
+**Acceptance:** layouts, rules, scratchpad and gap policy are visible and
+interactive in a nested session, animations are frame-scheduled and can be
+disabled, and every visual effect has a measured cost on the target hardware.

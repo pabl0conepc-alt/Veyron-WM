@@ -11,7 +11,14 @@
 - Rendering now uses Smithay's output damage tracker and buffer age when
   available. The nested implementation has not yet been runtime-checked on the
   target EGL driver, and must fall back to full redraw if age is unavailable.
-- Animations, transparency, blur and per-effect configuration are absent.
+- Layouts (master-stack, dwindle, auto), smart gaps, window rules, scratchpad
+  and per-app floating geometry memory exist in the core and are unit-tested,
+  but they have not been visually validated in a nested session.
+- The animation core (spring/easing/rect animator, duration, reduced motion) is
+  implemented and tested, but the nested renderer does not schedule frames for
+  transitions yet, so nothing animates today.
+- Per-window opacity and blur reach the snapshot; the renderer still draws every
+  window opaque and unblurred. Rounded corners and shadows are absent.
 - XWayland, portal services, a stable external shell API, plugin isolation,
   direct DRM/KMS, session management and multi-output hotplug are not supported.
 - No target-machine runtime baseline for RAM, CPU, frame pacing, startup or

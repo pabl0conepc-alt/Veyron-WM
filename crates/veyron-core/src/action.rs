@@ -9,6 +9,8 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tiling::LayoutKind;
+
 /// A spatial direction used by focus and move actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -108,6 +110,12 @@ pub enum Action {
     WorkspaceNext,
     /// Switch to the previous workspace.
     WorkspacePrev,
+    /// Select the tiling layout of the active workspace.
+    Layout { kind: LayoutKind },
+    /// Cycle the active workspace to the next tiling layout.
+    LayoutNext,
+    /// Show the scratchpad windows, or hide them again.
+    ToggleScratchpad,
     /// Toggle fullscreen for the focused window.
     ToggleFullscreen,
     /// Toggle floating for the focused window.
@@ -222,6 +230,16 @@ impl Action {
             "move-workspace" | "send-to-workspace" => Ok(Action::MoveToWorkspace {
                 direction: parse_direction(rest)?,
             }),
+            "layout" | "set-layout" => {
+                if rest.eq_ignore_ascii_case("next") {
+                    return Ok(Action::LayoutNext);
+                }
+                Ok(Action::Layout {
+                    kind: rest.parse::<LayoutKind>()?,
+                })
+            }
+            "layout-next" | "next-layout" => without_argument(rest, Action::LayoutNext),
+            "scratchpad" | "toggle-scratchpad" => without_argument(rest, Action::ToggleScratchpad),
             "toggle-fullscreen" | "fullscreen" => without_argument(rest, Action::ToggleFullscreen),
             "toggle-floating" | "floating" => without_argument(rest, Action::ToggleFloating),
             "center" | "center-column" => without_argument(rest, Action::CenterColumn),
@@ -274,6 +292,9 @@ impl fmt::Display for Action {
             Action::MoveToWorkspace { direction } => write!(f, "move-workspace {direction}"),
             Action::WorkspaceNext => f.write_str("workspace next"),
             Action::WorkspacePrev => f.write_str("workspace prev"),
+            Action::Layout { kind } => write!(f, "layout {kind}"),
+            Action::LayoutNext => f.write_str("layout next"),
+            Action::ToggleScratchpad => f.write_str("scratchpad"),
             Action::ToggleFullscreen => f.write_str("toggle-fullscreen"),
             Action::ToggleFloating => f.write_str("toggle-floating"),
             Action::CenterColumn => f.write_str("center-column"),
@@ -325,6 +346,14 @@ mod tests {
             },
             Action::WorkspaceNext,
             Action::WorkspacePrev,
+            Action::Layout {
+                kind: LayoutKind::Dwindle,
+            },
+            Action::Layout {
+                kind: LayoutKind::Auto,
+            },
+            Action::LayoutNext,
+            Action::ToggleScratchpad,
             Action::ToggleFullscreen,
             Action::ToggleFloating,
             Action::CenterColumn,
@@ -398,6 +427,25 @@ mod tests {
         );
         assert!(Action::parse("move-floating right 0").is_err());
         assert!(Action::parse("move-floating down -12").is_err());
+    }
+
+    #[test]
+    fn layout_actions_accept_names_next_and_aliases() {
+        assert_eq!(
+            Action::parse("layout master-stack"),
+            Ok(Action::Layout {
+                kind: LayoutKind::MasterStack
+            })
+        );
+        assert_eq!(
+            Action::parse("layout scrolling"),
+            Ok(Action::Layout {
+                kind: LayoutKind::Scroll
+            })
+        );
+        assert_eq!(Action::parse("layout next"), Ok(Action::LayoutNext));
+        assert!(Action::parse("layout spiral-ish").is_err());
+        assert!(Action::parse("scratchpad now").is_err());
     }
 
     #[test]

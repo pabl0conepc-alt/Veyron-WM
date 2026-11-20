@@ -42,6 +42,12 @@ pub struct Window {
     title: String,
     min_size: Option<Size>,
     floating: bool,
+    /// Per-window opacity requested by a rule (`0.0..=1.0`).
+    opacity: f32,
+    /// Whether a rule asked for a blurred backdrop behind this window.
+    blur: bool,
+    /// Whether the window lives in the scratchpad layer.
+    scratchpad: bool,
     /// Geometry used while the window floats. Tiled geometry is derived from
     /// the layout, never stored here, so the two can never disagree.
     floating_rect: Rect,
@@ -56,6 +62,9 @@ impl Window {
             title: request.title,
             min_size: request.min_size,
             floating: false,
+            opacity: 1.0,
+            blur: false,
+            scratchpad: false,
             floating_rect: Rect::ZERO,
             last_tiled_rect: Rect::ZERO,
         }
@@ -81,6 +90,18 @@ impl Window {
         self.floating
     }
 
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    pub fn blur(&self) -> bool {
+        self.blur
+    }
+
+    pub fn is_scratchpad(&self) -> bool {
+        self.scratchpad
+    }
+
     pub fn floating_rect(&self) -> Rect {
         self.floating_rect
     }
@@ -99,6 +120,18 @@ impl Window {
 
     pub(crate) fn set_floating(&mut self, floating: bool) {
         self.floating = floating;
+    }
+
+    pub(crate) fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
+    }
+
+    pub(crate) fn set_blur(&mut self, blur: bool) {
+        self.blur = blur;
+    }
+
+    pub(crate) fn set_scratchpad(&mut self, scratchpad: bool) {
+        self.scratchpad = scratchpad;
     }
 
     pub(crate) fn set_floating_rect(&mut self, rect: Rect) {

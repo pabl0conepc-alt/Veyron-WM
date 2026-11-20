@@ -31,7 +31,14 @@ What works:
 - Rust workspace with three crates and no `unsafe` code.
 - Scrollable tiling engine: columns, stacking, focus, viewport scrolling,
   column resizing, floating layer, fullscreen, on-demand workspaces.
-- Deterministic, unit-tested state machine (43 core tests) with no GPU or
+- Additional tiling layouts: `master-stack`, `dwindle` and `auto` (dynamic
+  tiling that resolves from the window count), selectable per workspace.
+- Smart gaps, per-application window rules (float, opacity, blur, scratchpad,
+  named workspace, layout), scratchpad layer and per-app floating geometry
+  memory.
+- Animation foundation (`spring`/eased `RectAnimator`, reduced motion) used by
+  the core; the renderer does not schedule frames for it yet.
+- Deterministic, unit-tested state machine (88 core tests) with no GPU or
   display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -134,6 +141,8 @@ Default keybindings (all configurable):
 | `super+c` | center the focused column |
 | `super+f` | toggle fullscreen |
 | `super+space` | toggle floating |
+| `super+shift+l` | cycle tiling layout (scroll → master-stack → dwindle → auto) |
+| `super+shift+s` | send the focused window to / recall it from the scratchpad |
 | `super+1` … `super+5` | switch workspace |
 | `super+bracketright` / `super+bracketleft` | next / previous workspace |
 | `super+ctrl+arrow` | navigate the sparse 2D workspace grid |
@@ -152,18 +161,46 @@ target/release/veyron --print-config > ~/.config/veyron/veyron.toml
 ```
 
 ```toml
+# Commands started once at launch (root key, before any table):
+startup = ["waybar"]
+
 [layout]
 gap = 8                      # pixels between columns and stacked windows
 outer_margin = 12            # margin around the tiled area
 default_column_ratio = 0.5   # new column width, fraction of the viewport
 min_column_ratio = 0.2
 max_column_ratio = 1.0
+mode = "scroll"              # scroll | master-stack | dwindle | auto
+smart_gaps = false           # 0 gap for one window, tighter when dense
+master_ratio = 0.6           # master width in master-stack
 
 [appearance]
 background = "#101014"
 
-# Commands started once at launch:
-startup = ["waybar"]
+[motion]                     # parsed and validated; the renderer does not
+enabled = false              # animate frames yet (see KNOWN_ISSUES)
+duration_ms = 180
+reduce_motion = false
+
+[behavior]
+remember_geometry = true     # restore floating geometry per app id
+
+# Per-application rules, evaluated in order; later fields win.
+[[rules]]
+app_id = "org.mozilla.firefox"
+title = "Picture-in-Picture"
+floating = true
+
+[[rules]]
+app_id = "mpv"
+floating = true
+opacity = 0.95
+blur = true
+
+[[rules]]
+app_id = "signal"
+workspace = "chat"
+layout = "dwindle"
 
 [bindings]
 "super+return" = "spawn foot"
@@ -171,6 +208,10 @@ startup = ["waybar"]
 "super+shift+left" = "move left"
 "super+f" = "toggle-fullscreen"
 ```
+
+Rules accept `app_id` and/or `title` globs (`*`, `?`) and may set `floating`,
+`opacity` (`0.0..=1.0`), `blur`, `scratchpad`, `workspace` and `layout`. A rule
+without a match key is rejected rather than applied to every window.
 
 Binding values use the same action grammar as the control protocol, so anything
 `veyronctl` can do can be bound to a key. If a `[bindings]` table is present it
@@ -190,6 +231,9 @@ veyronctl workspace up
 veyronctl move-workspace right
 veyronctl resize width 32
 veyronctl move-floating right 32
+veyronctl layout master-stack
+veyronctl layout next
+veyronctl scratchpad
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit
@@ -202,16 +246,17 @@ Any other program can use the socket directly:
 {"response":"ok"}
 ```
 
-Protocol version 2 includes the signed 2D coordinate in state responses.
-Requests: `action`, `state`, `reload`, `quit`, `ping`. Messages are capped at
-64 KiB; the socket is owner-only (`0600`), the server never deletes a non-socket
-file, and a crashed compositor's stale socket is safely replaced. State reports
-include the active workspace's signed `(x, y)` coordinate.
+Protocol version 3 includes the signed 2D workspace coordinate plus the resolved
+layout name and effective gap in state responses. Requests: `action`, `state`,
+`reload`, `quit`, `ping`. Messages are capped at 64 KiB; the socket is
+owner-only (`0600`), the server never deletes a non-socket file, and a crashed
+compositor's stale socket is safely replaced.
 
 ## Repository layout
 
 ```
-crates/veyron-core/   layout, workspaces, focus, config, actions (no Wayland)
+crates/veyron-core/   layout, tiling modes, motion, rules, workspaces, config,
+                      actions (no Wayland)
 crates/veyron-ipc/    control protocol, framing, client and server helpers
 crates/veyron/        Smithay compositor binary + veyronctl
 docs/ARCHITECTURE.md  architecture, invariants, current protocol boundaries

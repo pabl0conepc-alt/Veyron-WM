@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     action::Direction,
     geometry::{Rect, Size},
+    tiling::LayoutKind,
     window::WindowId,
 };
 
@@ -37,6 +38,13 @@ pub struct LayoutConfig {
     pub min_column_ratio: f64,
     /// Largest width a column can be resized to, as a viewport fraction.
     pub max_column_ratio: f64,
+    /// Tiling layout selected for new workspaces. `Auto` enables dynamic
+    /// tiling: the layout is resolved from the number of tiled windows.
+    pub mode: LayoutKind,
+    /// Remove the gap for a lone window and tighten it on dense layouts.
+    pub smart_gaps: bool,
+    /// Share of the viewport given to the master window in `MasterStack`.
+    pub master_ratio: f64,
 }
 
 impl Default for LayoutConfig {
@@ -47,6 +55,9 @@ impl Default for LayoutConfig {
             default_column_ratio: 0.5,
             min_column_ratio: 0.2,
             max_column_ratio: 1.0,
+            mode: LayoutKind::Scroll,
+            smart_gaps: false,
+            master_ratio: 0.6,
         }
     }
 }
@@ -92,6 +103,12 @@ impl LayoutConfig {
             return Err(format!(
                 "layout.default_column_ratio ({}) must be <= layout.max_column_ratio ({})",
                 self.default_column_ratio, self.max_column_ratio
+            ));
+        }
+        if !(0.1..=0.9).contains(&self.master_ratio) {
+            return Err(format!(
+                "layout.master_ratio must be in [0.1, 0.9] (got {})",
+                self.master_ratio
             ));
         }
         Ok(())
@@ -218,6 +235,83 @@ impl ScrollLayout {
         self.columns
             .iter()
             .flat_map(|column| column.windows.iter().copied())
+    }
+
+    /// Every window in strip order, collected.
+    pub fn order(&self) -> Vec<WindowId> {
+        self.windows().collect()
+    }
+
+    /// Move focus to the previous (`delta < 0`) or next (`delta > 0`) window in
+    /// strip order. Used by layouts where `left/right` means "previous/next"
+    /// rather than "neighbouring column".
+    pub fn focus_order_neighbor(&mut self, delta: isize) -> bool {
+        let order = self.order();
+        let Some(current) = self.focused_window() else {
+            return false;
+        };
+        let Some(index) = order.iter().position(|window| *window == current) else {
+            return false;
+        };
+        let Some(target) = index.checked_add_signed(delta) else {
+            return false;
+        };
+        let Some(target) = order.get(target).copied() else {
+            return false;
+        };
+        self.focus_window(target)
+    }
+
+    /// Swap the focused window with its predecessor/successor in strip order.
+    ///
+    /// The strip is rebuilt with one window per column, preserving every
+    /// window's current ratio, so the other layouts keep a single, predictable
+    /// order source of truth.
+    pub fn move_order_neighbor(&mut self, delta: isize) -> bool {
+        let mut order = self.order();
+        let Some(current) = self.focused_window() else {
+            return false;
+        };
+        let Some(index) = order.iter().position(|window| *window == current) else {
+            return false;
+        };
+        let Some(target) = index.checked_add_signed(delta) else {
+            return false;
+        };
+        if target >= order.len() {
+            return false;
+        }
+        order.swap(index, target);
+
+        let ratios: Vec<(WindowId, f64)> = self
+            .columns
+            .iter()
+            .flat_map(|column| {
+                column
+                    .windows
+                    .iter()
+                    .map(move |window| (*window, column.ratio))
+            })
+            .collect();
+        let (min, max) = self.ratio_bounds();
+        let default_ratio = self.config.default_column_ratio.clamp(min, max);
+        self.columns = order
+            .iter()
+            .map(|window| Column {
+                windows: vec![*window],
+                ratio: ratios
+                    .iter()
+                    .find(|(candidate, _)| candidate == window)
+                    .map(|(_, ratio)| ratio.clamp(min, max))
+                    .unwrap_or(default_ratio),
+            })
+            .collect();
+        self.focus = Some(Position {
+            column: target,
+            row: 0,
+        });
+        self.ensure_focus_visible();
+        true
     }
 
     pub fn contains(&self, window: WindowId) -> bool {
@@ -457,11 +551,16 @@ impl ScrollLayout {
 
     /// Geometry of every window in strip order.
     pub fn placements(&self) -> Vec<Placement> {
+        self.placements_with_gap(self.gap())
+    }
+
+    /// Geometry with an explicit gap, used by smart gaps.
+    pub fn placements_with_gap(&self, gap: i32) -> Vec<Placement> {
         if self.viewport.is_empty() {
             return Vec::new();
         }
 
-        let gap = self.gap();
+        let gap = gap.max(0);
         let mut placements = Vec::with_capacity(self.window_count());
         let mut x = self.viewport.x as f64 - self.scroll;
 
