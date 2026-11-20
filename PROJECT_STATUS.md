@@ -26,7 +26,8 @@ Last reviewed: 2026-11-19.
   passed all checks for `17d8562`.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory and a motion
-  core are implemented and unit-tested (88 core tests) with control-protocol
+  core are implemented and unit-tested (107 core tests plus window-feature
+  integration tests) with control-protocol
   version 3. Renderer wiring for animation/opacity/blur and a nested runtime
   visual check remain open. See [ROADMAP.md](ROADMAP.md).
 - Phase 6 Nix packaging is currently uncommitted: `flake.nix`, `flake.lock`, a

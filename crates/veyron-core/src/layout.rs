@@ -549,6 +549,64 @@ impl ScrollLayout {
         (self.scroll - before).abs() > f64::EPSILON
     }
 
+    /// Rebuild the strip in `order`, preserving every window's column ratio.
+    ///
+    /// Only windows this layout already holds are used; anything missing from
+    /// `order` is appended in its previous position, so a partial list can never
+    /// lose a window. The strip becomes one window per column (stacking is
+    /// flattened) and focus stays on the same window when it survives the move.
+    ///
+    /// Window groups use this to keep members adjacent; session restore uses it
+    /// to reinstate a recorded order.
+    pub fn reorder(&mut self, order: &[WindowId]) {
+        let current = self.order();
+        if current.is_empty() {
+            return;
+        }
+
+        let mut desired: Vec<WindowId> = Vec::with_capacity(current.len());
+        for window in order {
+            if self.contains(*window) && !desired.contains(window) {
+                desired.push(*window);
+            }
+        }
+        for window in &current {
+            if !desired.contains(window) {
+                desired.push(*window);
+            }
+        }
+        if desired == current {
+            return;
+        }
+
+        let focused = self.focused_window();
+        let ratios: Vec<(WindowId, f64)> = self
+            .columns
+            .iter()
+            .flat_map(|column| {
+                column
+                    .windows
+                    .iter()
+                    .map(move |window| (*window, column.ratio))
+            })
+            .collect();
+        let (min, max) = self.ratio_bounds();
+        let default_ratio = self.config.default_column_ratio.clamp(min, max);
+        self.columns = desired
+            .iter()
+            .map(|window| Column {
+                windows: vec![*window],
+                ratio: ratios
+                    .iter()
+                    .find(|(candidate, _)| candidate == window)
+                    .map(|(_, ratio)| ratio.clamp(min, max))
+                    .unwrap_or(default_ratio),
+            })
+            .collect();
+        self.focus = focused.and_then(|window| self.position_of(window));
+        self.ensure_focus_visible();
+    }
+
     /// Geometry of every window in strip order.
     pub fn placements(&self) -> Vec<Placement> {
         self.placements_with_gap(self.gap())

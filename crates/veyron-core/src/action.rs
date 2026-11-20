@@ -9,7 +9,10 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tiling::LayoutKind;
+use crate::{
+    snap::{PipCorner, SnapZone},
+    tiling::LayoutKind,
+};
 
 /// A spatial direction used by focus and move actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -122,6 +125,16 @@ pub enum Action {
     ToggleFloating,
     /// Scroll the focused column into the center of the viewport.
     CenterColumn,
+    /// Snap the focused window to a screen zone, floating it when needed.
+    Snap { zone: SnapZone },
+    /// Toggle picture-in-picture for the focused window.
+    Pip { corner: PipCorner },
+    /// Focus the previously focused window (smart focus).
+    FocusPrevious,
+    /// Add the focused window to the previous window's group, or leave it.
+    GroupToggle,
+    /// Cycle focus inside the focused window's group.
+    GroupCycle { delta: i32 },
     /// Run a shell command.
     Spawn { command: String },
     /// Reload the configuration file.
@@ -145,9 +158,15 @@ impl Action {
 
         match head.to_ascii_lowercase().as_str() {
             "close" | "close-window" => without_argument(rest, Action::Close),
-            "focus" => Ok(Action::Focus {
-                direction: parse_direction(rest)?,
-            }),
+            "focus" => {
+                let value = rest.to_ascii_lowercase();
+                if value == "previous" || value == "last" {
+                    return Ok(Action::FocusPrevious);
+                }
+                Ok(Action::Focus {
+                    direction: parse_direction(rest)?,
+                })
+            }
             "move" => Ok(Action::Move {
                 direction: parse_direction(rest)?,
             }),
@@ -243,6 +262,31 @@ impl Action {
             "toggle-fullscreen" | "fullscreen" => without_argument(rest, Action::ToggleFullscreen),
             "toggle-floating" | "floating" => without_argument(rest, Action::ToggleFloating),
             "center" | "center-column" => without_argument(rest, Action::CenterColumn),
+            "snap" => Ok(Action::Snap {
+                zone: rest.parse::<SnapZone>()?,
+            }),
+            "pip" | "toggle-pip" | "picture-in-picture" => Ok(Action::Pip {
+                corner: if rest.is_empty() {
+                    PipCorner::default()
+                } else {
+                    rest.parse::<PipCorner>()?
+                },
+            }),
+            "focus-previous" | "focus-last" | "last-window" => {
+                without_argument(rest, Action::FocusPrevious)
+            }
+            "group" | "toggle-group" => match rest.to_ascii_lowercase().as_str() {
+                "" => Ok(Action::GroupToggle),
+                "next" => Ok(Action::GroupCycle { delta: 1 }),
+                "prev" | "previous" => Ok(Action::GroupCycle { delta: -1 }),
+                other => Err(ActionParseError::new(format!(
+                    "group takes no argument, 'next' or 'prev', got '{other}'"
+                ))),
+            },
+            "group-next" => without_argument(rest, Action::GroupCycle { delta: 1 }),
+            "group-prev" | "group-previous" => {
+                without_argument(rest, Action::GroupCycle { delta: -1 })
+            }
             "spawn" | "exec" => {
                 if rest.is_empty() {
                     return Err(ActionParseError::new("spawn needs a command"));
@@ -298,6 +342,12 @@ impl fmt::Display for Action {
             Action::ToggleFullscreen => f.write_str("toggle-fullscreen"),
             Action::ToggleFloating => f.write_str("toggle-floating"),
             Action::CenterColumn => f.write_str("center-column"),
+            Action::Snap { zone } => write!(f, "snap {zone}"),
+            Action::Pip { corner } => write!(f, "pip {corner}"),
+            Action::FocusPrevious => f.write_str("focus previous"),
+            Action::GroupToggle => f.write_str("group"),
+            Action::GroupCycle { delta } if *delta > 0 => f.write_str("group next"),
+            Action::GroupCycle { .. } => f.write_str("group prev"),
             Action::Spawn { command } => write!(f, "spawn {command}"),
             Action::ReloadConfig => f.write_str("reload"),
             Action::Quit => f.write_str("quit"),
@@ -357,6 +407,22 @@ mod tests {
             Action::ToggleFullscreen,
             Action::ToggleFloating,
             Action::CenterColumn,
+            Action::Snap {
+                zone: SnapZone::LeftThird,
+            },
+            Action::Snap {
+                zone: SnapZone::Maximize,
+            },
+            Action::Pip {
+                corner: PipCorner::BottomRight,
+            },
+            Action::Pip {
+                corner: PipCorner::TopLeft,
+            },
+            Action::FocusPrevious,
+            Action::GroupToggle,
+            Action::GroupCycle { delta: 1 },
+            Action::GroupCycle { delta: -1 },
             Action::Spawn {
                 command: "alacritty --class veyron".into(),
             },

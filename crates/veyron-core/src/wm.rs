@@ -15,10 +15,16 @@ use crate::{
     action::{Action, Direction, ResizeAxis},
     config::Config,
     geometry::{Rect, Size},
+    groups::{GroupId, GroupSet},
     layout::{default_floating_size, viewport_for, Placement, ScrollLayout},
+    session::Session,
+    snap::{PipCorner, SnapZone},
     tiling::{arrange, smart_gap, LayoutKind},
     window::{NewWindow, Window, WindowId},
 };
+
+/// How many windows smart focus remembers for `focus previous`.
+const FOCUS_HISTORY_LIMIT: usize = 32;
 
 /// A workspace is one scrollable strip plus its floating layer.
 #[derive(Debug, Clone)]
@@ -194,6 +200,8 @@ pub struct PlacementInfo {
     pub opacity: f32,
     /// Whether the renderer should blur behind this window.
     pub blur: bool,
+    /// Whether the window is docked in a picture-in-picture corner.
+    pub pip: bool,
 }
 
 /// Everything the compositor needs to draw one frame.
@@ -257,6 +265,13 @@ pub struct Wm {
     scratchpad: Vec<WindowId>,
     /// Last floating geometry per app id, used by window memory.
     remembered: HashMap<String, Rect>,
+    /// Window groups.
+    groups: GroupSet,
+    /// Recently focused windows, oldest first, used by smart focus.
+    focus_history: Vec<WindowId>,
+    /// Picture-in-picture corner and the geometry restored when it is turned
+    /// off, per window.
+    pip: HashMap<WindowId, (PipCorner, Rect)>,
 }
 
 impl Wm {
@@ -286,6 +301,9 @@ impl Wm {
             next_id: 0,
             scratchpad: Vec::new(),
             remembered: HashMap::new(),
+            groups: GroupSet::new(),
+            focus_history: Vec::new(),
+            pip: HashMap::new(),
         }
     }
 
@@ -355,6 +373,13 @@ impl Wm {
     /// layout. Without rules the window opens tiled on the active workspace,
     /// which is the original behaviour.
     pub fn create_window(&mut self, request: NewWindow) -> WindowId {
+        self.create_window_in(request, None)
+    }
+
+    /// Create a window on an explicit workspace; `None` keeps the rule-driven
+    /// routing (a rule-provided workspace, otherwise the active one). Session
+    /// restore uses this and rules still apply.
+    pub fn create_window_in(&mut self, request: NewWindow, workspace: Option<&str>) -> WindowId {
         self.next_id += 1;
         let id = WindowId(self.next_id);
         let policy = self.config.rules.resolve(&request.app_id, &request.title);
@@ -387,7 +412,7 @@ impl Wm {
         self.windows.insert(id, window);
 
         let output_index = self.active_output;
-        let target = match policy.workspace.as_deref() {
+        let target = match workspace.or(policy.workspace.as_deref()) {
             Some(name) => self.find_or_create_named_workspace(output_index, name),
             None => self.outputs[output_index].active,
         };
@@ -399,6 +424,7 @@ impl Wm {
         if policy.scratchpad {
             self.scratchpad.push(id);
             self.refresh_tiled_rects();
+            self.note_focus();
             return id;
         }
 
@@ -416,6 +442,7 @@ impl Wm {
         }
 
         self.refresh_tiled_rects();
+        self.note_focus();
         id
     }
 
@@ -426,6 +453,8 @@ impl Wm {
             return false;
         }
         self.scratchpad.retain(|window| *window != id);
+        self.pip.remove(&id);
+        self.focus_history.retain(|window| *window != id);
         for output in &mut self.outputs {
             for workspace in &mut output.workspaces {
                 if workspace.fullscreen == Some(id) {
@@ -439,6 +468,7 @@ impl Wm {
             }
         }
         self.refresh_tiled_rects();
+        self.prune_groups();
         true
     }
 
@@ -478,7 +508,9 @@ impl Wm {
             workspace.layout.focus_window(id);
         }
 
-        previous != self.focused_window()
+        let changed = previous != self.focused_window();
+        self.note_focus();
+        changed
     }
 
     /// Dispatch an action, returning the side effects to carry out.
@@ -533,6 +565,25 @@ impl Wm {
             }
             Action::ToggleFullscreen => effects.layout_changed = self.toggle_fullscreen(),
             Action::ToggleFloating => effects.layout_changed = self.toggle_floating(),
+            Action::Snap { zone } => {
+                effects.layout_changed = self.snap_focused(zone);
+                effects.focus_changed = effects.layout_changed;
+            }
+            Action::Pip { corner } => {
+                effects.layout_changed = self.toggle_pip(corner);
+                effects.focus_changed = effects.layout_changed;
+            }
+            Action::FocusPrevious => {
+                effects.focus_changed = self.focus_previous();
+                effects.layout_changed = effects.focus_changed;
+            }
+            Action::GroupToggle => {
+                effects.layout_changed = self.toggle_group();
+            }
+            Action::GroupCycle { delta } => {
+                effects.focus_changed = self.cycle_group(delta);
+                effects.layout_changed = effects.focus_changed;
+            }
             Action::Workspace { index } => {
                 effects.workspace_changed = self.switch_workspace(index.saturating_sub(1));
                 effects.layout_changed = effects.workspace_changed;
@@ -564,6 +615,7 @@ impl Wm {
         if effects.layout_changed {
             self.refresh_tiled_rects();
         }
+        self.note_focus();
         effects
     }
 
@@ -611,6 +663,7 @@ impl Wm {
                     fullscreen: true,
                     opacity,
                     blur,
+                    pip: self.pip.contains_key(&id),
                 });
             }
             _ => {
@@ -634,6 +687,7 @@ impl Wm {
                         fullscreen: false,
                         opacity,
                         blur,
+                        pip: false,
                     });
                 }
                 for id in &workspace.floating {
@@ -645,6 +699,7 @@ impl Wm {
                             fullscreen: false,
                             opacity: window.opacity(),
                             blur: window.blur(),
+                            pip: self.pip.contains_key(id),
                         });
                     }
                 }
@@ -669,6 +724,257 @@ impl Wm {
             focused: workspace.focused_window(),
             placements,
         }
+    }
+
+    /// Most recently focused windows, oldest first.
+    pub fn focus_history(&self) -> &[WindowId] {
+        &self.focus_history
+    }
+
+    /// Every window group of the session.
+    pub fn groups(&self) -> &GroupSet {
+        &self.groups
+    }
+
+    /// The group a window belongs to, if any.
+    pub fn group_of(&self, id: WindowId) -> Option<GroupId> {
+        self.groups.group_of(id)
+    }
+
+    /// Whether the window is docked in a picture-in-picture corner.
+    pub fn is_pip(&self, id: WindowId) -> bool {
+        self.pip.contains_key(&id)
+    }
+
+    /// Capture the session for Veyron Recall.
+    pub fn capture_session(&self) -> Session {
+        Session::capture(self)
+    }
+
+    /// Restore a captured session: recreate every window in its workspace and
+    /// reinstate floating geometry. Returns how many windows were restored.
+    pub fn restore_session(&mut self, session: &Session) -> usize {
+        for name in &session.workspaces {
+            let output_index = self.active_output;
+            self.find_or_create_named_workspace(output_index, name);
+        }
+
+        let mut restored = 0;
+        for record in &session.windows {
+            let id = self.create_window_in(
+                NewWindow {
+                    app_id: record.app_id.clone(),
+                    title: record.title.clone(),
+                    min_size: None,
+                },
+                Some(&record.workspace),
+            );
+            if record.scratchpad {
+                self.park_window(id);
+            } else if record.floating {
+                let viewport = self.viewport();
+                let rect = record
+                    .rect
+                    .unwrap_or_else(|| viewport.centered(default_floating_size(viewport)));
+                self.make_floating(id, rect);
+            }
+            restored += 1;
+        }
+        self.note_focus();
+        restored
+    }
+
+    /// Park a window in the scratchpad layer.
+    fn park_window(&mut self, id: WindowId) {
+        self.detach_window(id);
+        if !self.scratchpad.contains(&id) {
+            self.scratchpad.push(id);
+        }
+        if let Some(window) = self.windows.get_mut(&id) {
+            window.set_scratchpad(true);
+            window.set_floating(true);
+        }
+        self.refresh_tiled_rects();
+    }
+
+    /// Put a window in the floating layer with an explicit geometry, clamped to
+    /// the viewport. Returns whether anything changed.
+    fn make_floating(&mut self, id: WindowId, rect: Rect) -> bool {
+        let Some((output_index, workspace_index, floating)) = self.locate(id) else {
+            return false;
+        };
+
+        if !floating {
+            let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
+            workspace.layout.remove_window(id);
+        }
+
+        let viewport = self.viewport();
+        let size = rect.size().clamp_to(viewport.size());
+        let x = rect
+            .x
+            .clamp(viewport.x, (viewport.right() - size.w).max(viewport.x));
+        let y = rect
+            .y
+            .clamp(viewport.y, (viewport.bottom() - size.h).max(viewport.y));
+        let target = Rect::new(x, y, size.w, size.h);
+
+        let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
+        workspace.floating.retain(|window| *window != id);
+        workspace.floating.push(id);
+        workspace.focused_floating = Some(id);
+        if workspace.fullscreen == Some(id) {
+            workspace.fullscreen = None;
+        }
+
+        let Some(window) = self.windows.get_mut(&id) else {
+            return false;
+        };
+        let changed = !window.is_floating() || window.floating_rect() != target;
+        window.set_floating(true);
+        window.set_floating_rect(target);
+        changed
+    }
+
+    /// Record the focused window in the smart-focus history.
+    fn note_focus(&mut self) {
+        let Some(id) = self.focused_window() else {
+            return;
+        };
+        self.focus_history.retain(|window| *window != id);
+        self.focus_history.push(id);
+        if self.focus_history.len() > FOCUS_HISTORY_LIMIT {
+            self.focus_history.remove(0);
+        }
+    }
+
+    /// The window focused before the current one, if it still exists.
+    fn previous_window(&self) -> Option<WindowId> {
+        let current = self.focused_window();
+        self.focus_history
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| Some(*id) != current && self.windows.contains_key(id))
+    }
+
+    /// Jump to the previously focused window (smart focus).
+    fn focus_previous(&mut self) -> bool {
+        match self.previous_window() {
+            Some(id) => self.focus_window(id),
+            None => false,
+        }
+    }
+
+    /// Snap the focused window to a zone, floating it first if it is tiled.
+    fn snap_focused(&mut self, zone: SnapZone) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        if !self.windows.contains_key(&id) {
+            return false;
+        }
+        let viewport = self.viewport();
+        let gap = smart_gap(&self.config.layout, 1).max(0);
+        let rect = zone.rect(viewport, gap);
+        self.pip.remove(&id);
+        self.make_floating(id, rect)
+    }
+
+    /// Toggle picture-in-picture for the focused window.
+    fn toggle_pip(&mut self, corner: PipCorner) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+
+        if let Some((_, previous)) = self.pip.remove(&id) {
+            let viewport = self.viewport();
+            let rect = if previous.is_empty() {
+                viewport.centered(default_floating_size(viewport))
+            } else {
+                previous
+            };
+            return self.make_floating(id, rect);
+        }
+
+        let viewport = self.viewport();
+        let previous = self
+            .windows
+            .get(&id)
+            .map(Window::floating_rect)
+            .filter(|rect| !rect.is_empty())
+            .unwrap_or_else(|| viewport.centered(default_floating_size(viewport)));
+        let rect = corner.rect(viewport, crate::snap::DEFAULT_PIP_RATIO, 0);
+        let changed = self.make_floating(id, rect);
+        self.pip.insert(id, (corner, previous));
+        changed
+    }
+
+    /// Group the focused window with the previous one, or ungroup it.
+    fn toggle_group(&mut self) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let with = self.previous_window();
+        let before = self.groups.group_of(id);
+        self.groups.toggle(id, with);
+        let after = self.groups.group_of(id);
+        if before == after {
+            return false;
+        }
+        self.regroup_active_workspace();
+        true
+    }
+
+    /// Move focus to the next/previous member of the focused window's group.
+    fn cycle_group(&mut self, delta: i32) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let Some(target) = self.groups.cycle(id, delta as isize) else {
+            return false;
+        };
+        self.focus_window(target)
+    }
+
+    /// Keep the members of a group adjacent in the strip.
+    fn regroup_active_workspace(&mut self) {
+        let output_index = self.active_output;
+        let workspace_index = self.outputs[output_index].active;
+        let current = self.outputs[output_index].workspaces[workspace_index]
+            .layout
+            .order();
+        if current.is_empty() {
+            return;
+        }
+
+        let mut desired: Vec<WindowId> = Vec::with_capacity(current.len());
+        let mut placed: Vec<GroupId> = Vec::new();
+        for window in &current {
+            match self.groups.group_of(*window) {
+                Some(group) => {
+                    if placed.contains(&group) {
+                        continue;
+                    }
+                    placed.push(group);
+                    for member in self.groups.members_of(*window) {
+                        if current.contains(member) && !desired.contains(member) {
+                            desired.push(*member);
+                        }
+                    }
+                }
+                None => desired.push(*window),
+            }
+        }
+        self.outputs[output_index].workspaces[workspace_index]
+            .layout
+            .reorder(&desired);
+    }
+
+    /// Forget windows that no longer exist and drop empty groups.
+    fn prune_groups(&mut self) {
+        let alive: std::collections::HashSet<WindowId> = self.windows.keys().copied().collect();
+        self.groups.prune(&alive);
     }
 
     fn active_workspace_mut(&mut self) -> &mut Workspace {

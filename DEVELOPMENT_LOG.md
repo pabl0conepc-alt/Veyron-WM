@@ -106,3 +106,23 @@
 - Local flake evaluation returned `veyron-wm-0.1.0`. A full local build was
   intentionally not run on the 4 GiB netbook; the first package CI build is
   pending. Keep this Phase 6 item open until CI succeeds.
+
+## 2026-11-20 — Phase 7 snapping, groups and recall
+
+- Added `snap.rs`: `SnapZone` (halves, quadrants, thirds, center, maximize) and
+  `PipCorner` geometry, both clamped into the viewport, plus the `snap <zone>`
+  and `pip [corner]` actions.
+- Added `groups.rs`: exclusive window groups with adjacency in the strip
+  (`ScrollLayout::reorder`), `group` / `group next` / `group prev` and pruning of
+  closed windows.
+- Added smart focus: a bounded most-recently-used history behind `focus
+  previous`, recorded on every focus change.
+- Added `session.rs` (Veyron Recall): validated TOML capture and restore of
+  workspaces, windows and floating geometry through `Wm::create_window_in` and
+  `Wm::restore_session`.
+- `PlacementInfo` now exposes `pip`, and the default keymap gains `super+tab`,
+  `super+shift+g`, `super+shift+n`, `super+shift+p` and `super+ctrl+alt+arrows`.
+- Verified locally: 107 core tests, 5 window-feature integration tests and 8 IPC
+  tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
+  Smithay crate still cannot build here (missing Wayland/XKB development
+  libraries), so no nested runtime or visual check was performed.

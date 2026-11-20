@@ -19,6 +19,14 @@
   transitions yet, so nothing animates today.
 - Per-window opacity and blur reach the snapshot; the renderer still draws every
   window opaque and unblurred. Rounded corners and shadows are absent.
+- Snap zones, picture-in-picture, window groups and smart focus are implemented
+  and tested in the core, and reach the compositor through the snapshot, but
+  they have not been exercised in a nested session.
+- Veyron Recall (`Session`) captures and restores state in the core only: no
+  CLI/IPC command writes or reads a session file yet, and restoring relaunches
+  nothing by itself.
+- Multi-output is not implemented: the window manager owns a single output, so
+  per-monitor workspaces and monitor-aware placement are future work.
 - XWayland, portal services, a stable external shell API, plugin isolation,
   direct DRM/KMS, session management and multi-output hotplug are not supported.
 - No target-machine runtime baseline for RAM, CPU, frame pacing, startup or

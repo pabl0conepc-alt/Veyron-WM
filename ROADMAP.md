@@ -136,6 +136,16 @@ Competitive window management features implemented as protocol-free policy in
   animator, duration and reduced-motion policy, all frame-driver agnostic.
 - [x] Layout, gap and app-routing state exposed on the control protocol
   (version 3) and in `veyronctl state`.
+- [x] Veyron Snap: floating-window zones (halves, quadrants, thirds, center,
+  maximize) with `snap <zone>`; geometry is clamped into the viewport.
+- [x] Picture-in-picture: `pip [corner]` docks the focused window to a 16:9
+  corner overlay and restores its previous geometry when toggled off.
+- [x] Window groups: `group` joins the focused window with the previously
+  focused one, members are kept adjacent in the strip, `group next`/`prev`
+  cycle inside the group and closed windows are pruned.
+- [x] Smart focus: a bounded most-recently-used history behind `focus previous`.
+- [x] Veyron Recall: session capture/restore of workspaces, windows and floating
+  geometry as validated TOML (`Session`), with a bounded window count.
 - [ ] Drive `RectAnimator` from the nested render loop and schedule frames while
   a transition is running; needs nested runtime validation on the target GPU.
 - [ ] Apply per-window opacity/blur in the renderer (policy is already in the
@@ -145,12 +155,15 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Veyron Studio (graphical configuration), native panel/launcher/OSD/
   notifications, plugin isolation, gesture input, HDR/VRR/fractional scaling,
   screencopy/screen sharing, XWayland and multi-GPU work.
+- [ ] Multi-output layout: only one output is created today, so per-output
+  workspaces and monitor-aware placement need backend work first.
 
-**Evidence:** `cargo test -p veyron-core` (88 tests) covers every implemented
-item above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D
-warnings` and `cargo fmt --all --check` pass. The compositor crate was not
-compiled in this environment (Wayland/XKB development libraries are missing),
-and no nested runtime visual check was performed.
+**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (107 core tests, 5
+window-feature integration tests, 8 IPC tests) covers every implemented item
+above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings`
+and `cargo fmt --all --check` pass. The compositor crate was not compiled in
+this environment (Wayland/XKB development libraries are missing), and no nested
+runtime visual check was performed.
 
 **Acceptance:** layouts, rules, scratchpad and gap policy are visible and
 interactive in a nested session, animations are frame-scheduled and can be

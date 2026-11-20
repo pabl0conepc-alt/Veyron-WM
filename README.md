@@ -36,10 +36,17 @@ What works:
 - Smart gaps, per-application window rules (float, opacity, blur, scratchpad,
   named workspace, layout), scratchpad layer and per-app floating geometry
   memory.
+- Snap zones (`snap left`, `snap center-third`, `snap maximize`, ...) and
+  picture-in-picture docking (`pip top-right`), both on the focused window.
+- Window groups: `group` adds the focused window to the previous window's group
+  and keeps members adjacent, `group next`/`group prev` cycle inside it.
+- Smart focus: `focus previous` returns to the last focused window.
+- Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
+  (workspaces, windows, floating geometry) to TOML and rebuild it.
 - Animation foundation (`spring`/eased `RectAnimator`, reduced motion) used by
   the core; the renderer does not schedule frames for it yet.
-- Deterministic, unit-tested state machine (88 core tests) with no GPU or
-  display server required.
+- Deterministic, unit-tested state machine (107 core tests plus integration
+  tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
   (`veyronctl`) with request/response, size limits and stale-socket handling.
@@ -214,7 +221,9 @@ Rules accept `app_id` and/or `title` globs (`*`, `?`) and may set `floating`,
 without a match key is rejected rather than applied to every window.
 
 Binding values use the same action grammar as the control protocol, so anything
-`veyronctl` can do can be bound to a key. If a `[bindings]` table is present it
+`veyronctl` can do can be bound to a key. Besides focus/move/workspace actions
+there are `snap <zone>` (halves, quadrants, thirds, `center`, `maximize`),
+`pip [corner]`, `group`, `group next|prev` and `focus previous`. If a `[bindings]` table is present it
 replaces the default keymap entirely; omit it to keep the defaults.
 
 ## Control protocol

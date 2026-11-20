@@ -123,6 +123,27 @@ of that application.
 animations, so the module is wired into configuration and validated but not into
 rendering; see [ROADMAP](../ROADMAP.md) Phase 7.
 
+### Snapping, groups and sessions
+
+`snap.rs` owns the geometry of screen zones and picture-in-picture corners. Both
+only ever reposition a floating window, so they cannot violate the strip
+invariants, and every result is clamped into the viewport.
+
+`groups.rs` tracks group membership and order only. The strip stays the single
+source of placement order: grouping a window triggers
+`ScrollLayout::reorder`, which rebuilds the strip with the group's members next
+to each other while preserving column ratios. Groups hold ids, never geometry,
+and dead windows are pruned on removal.
+
+`session.rs` defines the serialisable session (workspace names plus one record
+per window) used by Veyron Recall. Capture reads only public window-manager
+state; restore goes through `Wm::create_window_in` and the same floating-layer
+helpers as the interactive actions, so both paths share their invariants.
+
+Smart focus lives in `wm.rs` as a bounded most-recently-used history. Every
+focus change is recorded once, which makes `focus previous` a simple scan of the
+history for the last window that is still alive.
+
 ### Geometry math
 
 With viewport width `W`, column ratio `r`, gap `g`:
