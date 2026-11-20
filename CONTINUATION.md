@@ -1,0 +1,116 @@
+# Veyron-WM project handoff
+
+Last updated: 2026-11-19
+
+This file is the durable continuation note for resuming the user's Veyron-WM
+work if the chat context or token budget ends. Read it together with the
+attached master prompt at `/home/pablo/.codex/attachments/9a1b77f4-c88c-45f2-9ee2-e1609ff0763c/Texto colado.txt`.
+
+## User instructions
+
+- Work only on **Veyron-WM**.
+- Follow the attached prompt and its phases as written. Preserve the low-resource
+  design because the target netbook has 4 GiB RAM; do not add unrelated features.
+- Continue the remaining phases. Make meaningful commits and prepare a PR; do
+  not merge it without the user's request.
+- The user said **do not execute agents**. Continue directly without spawning
+  sub-agents.
+- Keep this handoff, `ROADMAP.md`, `PROJECT_STATUS.md`, and `DEVELOPMENT_LOG.md`
+  current as work advances.
+
+## Repository and git state
+
+- GitHub repository: `pabl0conepc-alt/Veyron-WM`
+- Active worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-finish`
+- Active branch: `codex/finish-roadmap`
+- PR: not created yet. Create one to `main` after a reasonable set of validated
+  phases; keep it draft while work remains.
+- The old scaffold at `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`
+  is preserved and is not the active development tree.
+- Git identity is set to `Pablo Arraes` and the GitHub-linked noreply address
+  `327252850+pabl0conepc-alt@users.noreply.github.com`.
+
+Recent commits on the active branch:
+
+- `9c1776e docs: preserve initial host and backend research`
+- `68f4379 docs: map Veyron against phased acceptance criteria`
+- `6bcc15a perf: make nested rendering event and damage driven`
+- `1fcd322 feat: add sparse 2D workspace navigation`
+
+The branch is pushed to `origin`. CI run
+[44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
+for `1fcd322` was still running at the time of this handoff. Previous CI for
+`6bcc15a` passed format, Clippy, build and tests. Check the latest CI before
+continuing or claiming the 2D change is validated.
+
+## Project design and machine constraints
+
+- Rust workspace: `veyron-core`, `veyron-ipc`, `veyron`; Smithay 0.7 and calloop.
+- Pure window-management policy lives in `veyron-core`; the compositor and real
+  Wayland protocol integration live in `veyron`.
+- Target: NixOS / KDE Plasma Wayland, Intel Core i3-2370M, 4 GiB RAM, likely
+  Intel HD Graphics 3000. Full Smithay builds on the laptop previously caused
+  memory pressure. Prefer serial, scoped local checks; use GitHub Actions for
+  full build/test/clippy/fmt validation. Do not launch uncontrolled parallel
+  builds.
+- At the time of the last work session, `cargo`/`rustfmt` were absent from this
+  shell's PATH. `git diff --check` was available and passed before the latest
+  commit. Check the current toolchain before deciding local commands.
+
+## Phase status and remaining acceptance work
+
+- **Phase 0 — Environment/research: VERIFIED.** See `docs/PHASE0_RESEARCH.md`
+  and `docs/decisions/0001-compositor-foundation.md`.
+- **Phase 1 — Foundation: TESTING.** Smithay nested compositor and headless
+  real-client tests exist. Still run the nested GLES compositor in the target
+  Plasma session and verify a visible real app surface.
+- **Phase 2 — Window management: TESTING.** Layout, focus, floating/fullscreen,
+  sizing and protocol-level configure/activation are implemented. Still
+  exercise user-driven move/resize, popup interactions and floating geometry
+  with real clients in the nested session.
+- **Phase 3 — Infinite Desktop: TESTING.** Latest commit adds sparse signed 2D
+  workspace coordinates, four-way navigation, lazy cell creation, window
+  transfer, bindings, IPC coordinates (protocol version 2), CLI output and a
+  nested window-title coordinate indicator. Added core and headless real-client
+  tests. Validate CI first, then nested runtime; do not mark verified until its
+  acceptance evidence exists.
+- **Phase 4 — Rendering/animations: IMPLEMENTING.** Latest previous commit
+  registers the Wayland display fd in calloop, removes nested periodic polling,
+  and uses Smithay output damage tracking with safe full-redraw fallback. CI
+  passed on `6bcc15a`. Still validate partial damage and idle wakeups in nested
+  runtime, measure idle/client-load CPU, RSS and frames on target hardware, then
+  consider only optional disableable animations if justified.
+- **Phase 5 — Configuration/ecosystem: TESTING.** Strict TOML config/hot reload,
+  versioned bounded Unix IPC, actions/state/reload/ping/shutdown exist. Still
+  research/integrate XWayland with tests, document portal boundary and external
+  shell API/compatibility, and keep dynamic in-process plugins deferred until
+  safe isolation/permissions are designed.
+- **Phase 6 — Stabilization: IMPLEMENTING.** CI format/clippy/build/tests and
+  headless integration exist. Still add a nested smoke where practical, target
+  hardware measurements, security/dependency/license review, compatibility and
+  unsupported-feature docs, and reproducible install/package path after runtime
+  validation.
+
+Full acceptance language is in `ROADMAP.md`; keep its statuses truthful.
+Headless protocol tests do not count as visible nested-runtime validation.
+
+## Immediate next actions
+
+1. Check CI run `44649598532`. If it fails, fix the actual formatting/compile/
+   test issue, commit the correction, push and check the new run.
+2. Refresh `PROJECT_STATUS.md`, `ROADMAP.md`, `DEVELOPMENT_LOG.md` and this file
+   after each meaningful phase milestone.
+3. Continue with the smallest prompt-required phase deliverable that can be
+   validated without stressing the laptop. Prefer meaningful commits; avoid
+   artificial commit splitting.
+4. Create and attach a draft PR against `main` when ready; keep it updated as
+   phases advance. Do not claim GitHub contribution credit before merge.
+
+## Evidence and project files
+
+- `ROADMAP.md` — phase-by-phase acceptance criteria and current state.
+- `PROJECT_STATUS.md` — concise project/machine snapshot.
+- `DEVELOPMENT_LOG.md` — dated implementation and validation history.
+- `KNOWN_ISSUES.md` — limitations and open issues.
+- `PERFORMANCE.md` — measurement plan; do not invent benchmark numbers.
+- `docs/ARCHITECTURE.md` — implementation map and boundaries.
