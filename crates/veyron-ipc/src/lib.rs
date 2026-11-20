@@ -16,7 +16,7 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
     os::unix::{
-        fs::FileTypeExt,
+        fs::{FileTypeExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -183,7 +183,7 @@ pub fn bind_listener(path: &Path) -> Result<UnixListener, IpcError> {
         std::fs::create_dir_all(parent)?;
     }
 
-    match UnixListener::bind(path) {
+    let listener = match UnixListener::bind(path) {
         Ok(listener) => Ok(listener),
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
             if UnixStream::connect(path).is_ok() {
@@ -194,10 +194,12 @@ pub fn bind_listener(path: &Path) -> Result<UnixListener, IpcError> {
                 return Err(IpcError::UnsafeSocketPath(path.to_path_buf()));
             }
             std::fs::remove_file(path)?;
-            Ok(UnixListener::bind(path)?)
+            UnixListener::bind(path).map_err(IpcError::Io)
         }
         Err(error) => Err(IpcError::Io(error)),
-    }
+    }?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
 }
 
 /// Counts control requests that are in flight, so a compositor can let the last
@@ -491,6 +493,29 @@ mod tests {
             std::fs::read(&path).expect("file still exists"),
             b"do not delete me"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn control_socket_is_private_to_the_current_user() {
+        let path = std::env::temp_dir().join(format!(
+            "veyron-ipc-mode-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+
+        let listener = bind_listener(&path).expect("binds a private socket");
+        let mode = std::fs::metadata(&path)
+            .expect("socket metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+
+        drop(listener);
         let _ = std::fs::remove_file(&path);
     }
 }

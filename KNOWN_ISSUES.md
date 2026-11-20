@@ -17,5 +17,6 @@
 - No target-machine runtime baseline for RAM, CPU, frame pacing, startup or
   input latency has been measured. Do not make performance claims.
 - IPC is local to the user's runtime directory and has message bounds and
-  versioning. External plugins are not implemented; spawned commands intentionally
-  execute with the user's own privileges.
+  versioning, and its control socket is restricted to the current user.
+  External plugins are not implemented; spawned commands intentionally execute
+  with the user's own privileges.

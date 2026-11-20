@@ -65,3 +65,10 @@
 - Recorded the optional-feature boundary and real-client acceptance criteria in
   [ADR 0002](docs/decisions/0002-xwayland-integration-boundary.md). The feature
   remains unsupported until that adapter and an X11-client smoke test exist.
+
+## 2026-11-19 — Phase 6 IPC socket permissions
+
+- Restricted the control socket to owner read/write permissions (`0600`) after
+  binding, including after stale-socket recovery.
+- Added a filesystem-mode regression test and documented the trust boundary.
+  CI validation for this change is pending.

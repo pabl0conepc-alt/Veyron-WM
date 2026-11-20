@@ -163,6 +163,7 @@ geometry is pushed to clients on the next sync.
 
 - one JSON object per line, hard limit 64 KiB on both directions;
 - one request → exactly one response;
+- socket permissions are restricted to owner read/write (`0600`) after bind;
 - the server removes only a stale **socket** (never a regular file), refuses to
   start if another compositor answers on the path;
 - read/write timeouts so a stuck client cannot pin a thread forever.

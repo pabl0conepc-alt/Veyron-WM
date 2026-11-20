@@ -101,6 +101,8 @@ compatibility claims are backed by per-feature tests and documented limits.
 
 - [x] Run CI formatting, Clippy with warnings denied, build and workspace tests.
 - [x] Add unit, IPC and headless protocol integration coverage.
+- [x] Restrict the control socket to owner-only read/write permissions and test
+  the resulting mode.
 - [ ] Add nested compositor smoke coverage where a usable display runner exists.
 - [ ] Record repeatable idle/load RSS, CPU, frame timing, layout cost and startup
   measurements on the target hardware. No numbers are claimed before measurement.

@@ -188,9 +188,9 @@ Any other program can use the socket directly:
 
 Protocol version 2 includes the signed 2D coordinate in state responses.
 Requests: `action`, `state`, `reload`, `quit`, `ping`. Messages are capped at
-64 KiB, the server never deletes a non-socket file, and a crashed compositor's
-stale socket is safely replaced. State reports include the active workspace's
-signed `(x, y)` coordinate.
+64 KiB; the socket is owner-only (`0600`), the server never deletes a non-socket
+file, and a crashed compositor's stale socket is safely replaced. State reports
+include the active workspace's signed `(x, y)` coordinate.
 
 ## Repository layout
 
