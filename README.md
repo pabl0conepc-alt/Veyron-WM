@@ -20,8 +20,11 @@ workspace strip ─────────────────────�
 
 ## Status
 
-This is the first engineering milestone: the window-management core, the control
-protocol and a working nested compositor. It is **not** a finished desktop yet.
+The headless protocol path and window-management core are tested, and a nested
+GLES path is implemented. Visual presentation in the target session is still
+unverified. Veyron is **not** a finished desktop yet.
+
+See [the phase roadmap](ROADMAP.md) for verified behavior and remaining work.
 
 What works:
 

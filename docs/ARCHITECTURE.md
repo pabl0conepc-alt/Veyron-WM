@@ -198,16 +198,20 @@ compositor sleeps instead of polling.
 Ordered by the project's priority hierarchy (correctness → security →
 performance → architecture → compatibility → features → effects).
 
-1. **Real output backend**: DRM/KMS + libinput + libseat, multi-output with
-   per-output workspaces, DPMS.
-2. **Desktop integration**: `wlr-layer-shell`, `xdg-decoration`, cursor themes,
-   idle inhibit, screencopy, foreign toplevel, input methods.
-3. **Window identity**: titles/app ids in the core (for IPC output, rules and
-   window switchers), plus per-window rules (float, workspace, size).
-4. **Interactions**: interactive move/resize, drag-and-drop wiring, popup grabs.
-5. **Visual layer**: borders/shadows and animated scroll/workspace transitions,
-   implemented so they can never block the compositor.
-6. **Compatibility**: XWayland, game-mode/unredirect, per-output VRR policy.
+1. **Interactive validation**: visually verify the nested compositor in the
+   target session, then implement Smithay output damage tracking and measure the
+   static renderer on the target hardware.
+2. **Infinite desktop**: extend the current horizontal strip to sparse 2D
+   workspace coordinates and expose spatial navigation/indicators.
+3. **Compatibility and shell boundary**: investigate XWayland and portal
+   integration; define a versioned external shell interface and test toolkit
+   behavior before claiming compatibility.
+4. **Interactions**: window identity and rules, interactive move/resize,
+   drag-and-drop wiring and popup grabs.
+5. **Visual layer**: optional animated scroll/workspace transitions, borders and
+   shadows, implemented so they can never block the compositor.
+6. **Standalone sessions**: DRM/KMS + libinput + libseat, multi-output and DPMS
+   only after nested behavior and security boundaries are stable.
 
 The headless runtime and its protocol-level test suite are done (see §7); the
 next milestone is the real output backend.
