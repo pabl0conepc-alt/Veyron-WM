@@ -10,9 +10,12 @@
 
 - The headless calloop loop waits on the Wayland display fd and control channel;
   it retains a 50 ms bound to retry blocked client flushes.
-- The nested loop currently uses a bounded 16 ms wait. It redraws only when
-  compositor state changes, but it clears and submits the full output for each
-  rendered frame.
+- The nested loop now waits on calloop readiness from Wayland, IPC and Winit
+  sources rather than waking on a fixed 16 ms timer. The headless loop keeps a
+  50 ms retry bound for blocked socket flushes.
+- The nested renderer now tracks scene damage with Smithay and passes damaged
+  regions to EGL. When the backend reports no usable buffer age, Smithay
+  requests a complete redraw for correctness.
 - GitHub CI has built and tested the workspace, but it is not a runtime
   performance measurement for the target laptop.
 

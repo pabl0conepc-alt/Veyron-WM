@@ -14,9 +14,7 @@ use smithay::{
             PointerAxisEvent, PointerButtonEvent,
         },
         renderer::{
-            gles::GlesRenderer,
-            utils::{draw_render_elements, on_commit_buffer_handler},
-            Color32F, Frame, Renderer,
+            damage::OutputDamageTracker, gles::GlesRenderer, utils::on_commit_buffer_handler,
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
     },
@@ -32,7 +30,7 @@ use smithay::{
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
         Client, DisplayHandle,
     },
-    utils::{Logical, Point, Rectangle, Serial, Transform, SERIAL_COUNTER},
+    utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{
@@ -92,6 +90,7 @@ pub struct Veyron {
 
     output: Output,
     space: Space<Window>,
+    damage_tracker: OutputDamageTracker,
     /// `None` in headless mode: the compositor then runs the full protocol
     /// stack and window model without drawing anything.
     backend: Option<WinitGraphicsBackend<GlesRenderer>>,
@@ -185,6 +184,7 @@ impl Veyron {
 
         let mut space = Space::default();
         space.map_output(&output, (0, 0));
+        let damage_tracker = OutputDamageTracker::new((size.w, size.h), 1.0, Transform::Flipped180);
 
         let startup = config.startup.clone();
         let wm = Wm::new(config, "VEYRON-1", size);
@@ -204,6 +204,7 @@ impl Veyron {
             pointer,
             output,
             space,
+            damage_tracker,
             backend,
             wm,
             windows: HashMap::new(),
@@ -498,6 +499,7 @@ impl Veyron {
             .change_current_state(Some(mode), None, None, None);
         self.output.set_preferred(mode);
         self.space.map_output(&self.output, (0, 0));
+        self.damage_tracker = OutputDamageTracker::new(window_size, 1.0, Transform::Flipped180);
     }
 
     /// Match the scene graph to the layout snapshot and configure clients.
@@ -610,29 +612,28 @@ impl Veyron {
         let Some(backend) = self.backend.as_mut() else {
             return Ok(());
         };
-        let size = backend.window_size();
-        let damage = Rectangle::from_size(size);
-
-        // Scope the frame: `finish` consumes it and the framebuffer borrow must
-        // end before the buffers are submitted.
-        {
+        // After the first bind, the EGL surface remains current between swaps.
+        // A missing or unavailable age forces a correct full redraw in Smithay.
+        let age = backend.buffer_age().unwrap_or(0);
+        let background = self.wm.config().appearance.background_rgba();
+        let damage = {
             let (renderer, mut framebuffer) = backend.bind()?;
-
             let elements = self
                 .space
                 .render_elements_for_output(renderer, &self.output, 1.0)?;
-
-            let background = self.wm.config().appearance.background_rgba();
-            let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
-            frame.clear(
-                Color32F::new(background[0], background[1], background[2], background[3]),
-                &[damage],
+            let rendered = self.damage_tracker.render_output(
+                renderer,
+                &mut framebuffer,
+                age,
+                &elements,
+                background,
             )?;
-            draw_render_elements(&mut frame, 1.0, &elements, &[damage])?;
-            let _ = frame.finish()?;
-        }
+            rendered.damage.cloned()
+        };
 
-        backend.submit(Some(&[damage]))?;
+        if let Some(damage) = damage.filter(|damage| !damage.is_empty()) {
+            backend.submit(Some(&damage))?;
+        }
         Ok(())
     }
 

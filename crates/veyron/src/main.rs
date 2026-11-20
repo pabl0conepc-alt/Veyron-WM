@@ -50,9 +50,7 @@ WAYLAND_DISPLAY.
 Control:  veyronctl state | veyronctl focus left | veyronctl quit
 ";
 
-/// Upper bound for one event-loop wait. The loop normally blocks until a source
-/// is ready; the timeout only re-flushes clients whose buffers were full.
-const NESTED_WAIT: Duration = Duration::from_millis(16);
+/// Headless bound also retries Wayland client flushes whose buffers were full.
 const HEADLESS_WAIT: Duration = Duration::from_millis(50);
 /// How long shutdown waits for an in-flight control reply before giving up.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
@@ -158,7 +156,12 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
         "VEYRON WM is running headless"
     );
 
-    serve(&mut event_loop, &mut display, &mut state, HEADLESS_WAIT)?;
+    serve(
+        &mut event_loop,
+        &mut display,
+        &mut state,
+        Some(HEADLESS_WAIT),
+    )?;
 
     // Let the last control reply reach its client before the process exits.
     ipc_activity.wait_idle(SHUTDOWN_GRACE);
@@ -176,10 +179,10 @@ fn serve(
     event_loop: &mut EventLoop<'static, Veyron>,
     display: &mut Display<Veyron>,
     state: &mut Veyron,
-    wait: Duration,
+    wait: Option<Duration>,
 ) -> Result<(), Box<dyn Error>> {
     while !state.exit {
-        event_loop.dispatch(Some(wait), state)?;
+        event_loop.dispatch(wait, state)?;
         display.dispatch_clients(state)?;
         state.tick()?;
         display.flush_clients()?;
@@ -238,6 +241,14 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
             }
         })?;
 
+    // Client protocol requests wake calloop directly. This lets the nested
+    // compositor wait for a real source instead of waking at 60 Hz while idle.
+    let wakeup = display.backend().poll_fd().try_clone_to_owned()?;
+    event_loop.handle().insert_source(
+        Generic::new(wakeup, Interest::READ, Mode::Level),
+        |_, _, _| Ok::<_, std::io::Error>(PostAction::Continue),
+    )?;
+
     event_loop
         .handle()
         .insert_source(winit_loop, |event, _, state: &mut Veyron| {
@@ -261,7 +272,7 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
         "VEYRON WM is running"
     );
 
-    serve(&mut event_loop, &mut display, &mut state, NESTED_WAIT)?;
+    serve(&mut event_loop, &mut display, &mut state, None)?;
 
     // Let the last control reply reach its client, then remove our socket so a
     // restart starts from a clean state.

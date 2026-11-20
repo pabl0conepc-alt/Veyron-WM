@@ -126,10 +126,12 @@ features.
   the exact modifier set and keysym name in the configuration; unbound keys are
   forwarded to the focused client. Presses only trigger actions, releases are
   always forwarded.
-- **Rendering:** GLES renderer, one damage rectangle per frame, background from
-  `appearance.background`, then `Space::render_elements_for_output`.
-- **Event loop:** `calloop` with the winit event loop as a source, an IPC
-  channel, and a bounded 16 ms wait so Wayland clients are dispatched regularly.
+- **Rendering:** GLES renderer with Smithay's `OutputDamageTracker`; buffer age
+  is used when the Winit EGL surface exposes it and age `0` safely falls back to
+  a full redraw. The output damage is also submitted to EGL for swap damage.
+- **Event loop:** `calloop` watches the winit loop, Wayland display fd and IPC
+  channel. Nested mode blocks on readiness sources; headless mode retains a
+  bounded 50 ms wait to retry clients whose socket buffers were full.
 
 ## 5. Configuration
 

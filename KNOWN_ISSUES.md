@@ -6,9 +6,9 @@
 - The spatial desktop currently expands horizontally only. Vertical movement,
   2D coordinates and a visible spatial indicator are required by the master
   prompt and remain open.
-- Rendering redraws only when marked dirty, but each rendered frame currently
-  damages the full output. Nested calloop waits are bounded and the scene does
-  not yet use Smithay's `OutputDamageTracker`.
+- Rendering now uses Smithay's output damage tracker and buffer age when
+  available. The nested implementation has not yet been runtime-checked on the
+  target EGL driver, and must fall back to full redraw if age is unavailable.
 - Animations, transparency, blur and per-effect configuration are absent.
 - XWayland, portal services, a stable external shell API, plugin isolation,
   direct DRM/KMS, session management and multi-output hotplug are not supported.

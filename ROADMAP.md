@@ -59,10 +59,12 @@ keeps windows and focus state, and visibly identifies the active region.
 
 - [x] Render nested GLES surfaces through Smithay's scene graph and only redraw
   when compositor state is marked dirty.
-- [ ] Wake the nested event loop from Wayland, IPC and window events instead of
+- [x] Wake the nested event loop from Wayland, IPC and window events instead of
   periodic idle polling.
-- [ ] Use Smithay output damage tracking and the backend's buffer-age support
+- [x] Use Smithay output damage tracking and the backend's buffer-age support
   when available; fall back to a full redraw when it is unavailable.
+- [ ] Verify partial damage and idle wakeups in a nested runtime on the target
+  graphics session.
 - [ ] Measure idle and client-load CPU, RSS and frame behavior before setting
   targets.
 - [ ] Add optional, independently configurable animations only after the
