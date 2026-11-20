@@ -7,12 +7,15 @@ Last reviewed: 2026-11-19.
 - Current base: `feat/headless-calloop-loop` at `c91d39e`; GitHub Actions passed
   format, Clippy, build and tests for this exact revision.
 - Current work branch: `codex/finish-roadmap`.
-- Phase 0 is `VERIFIED`; Phase 1 and 2 are `TESTING`; Phase 3 and 4 are
-  `IMPLEMENTING`; Phase 5 and 6 are `TESTING` and `IMPLEMENTING` respectively.
+- Phase 0 is `VERIFIED`; Phase 1 and 2 are `TESTING`; Phase 3 is `TESTING`
+  pending nested runtime validation; Phase 4 is `IMPLEMENTING`; Phase 5 and 6
+  are `TESTING` and `IMPLEMENTING` respectively.
 - A headless compositor and real Wayland client integration tests exist. A
   visible nested GLES smoke test on the target desktop has not been recorded.
-- The current desktop is an unbounded horizontal strip. Two-dimensional spatial
-  workspaces required by the master prompt are not implemented yet.
+- The current branch adds sparse two-dimensional workspaces, four-way
+  navigation, window transfer, state IPC coordinates and a nested title
+  indicator. The new code is awaiting CI; nested runtime behavior still needs
+  validation.
 
 ## Target environment and constraints
 
@@ -32,9 +35,10 @@ Last reviewed: 2026-11-19.
   `cargo test --workspace --locked`, Clippy and rustfmt.
 - The headless suite uses genuine Wayland clients and checks configure sizes,
   activation, mapping, workspace scrolling and clean shutdown.
-- Continue with event-driven nested scheduling and Smithay damage tracking,
-  then implement sparse two-dimensional workspaces and their protocol/IPC
-  integration. Do not mark a phase verified without its stated runtime evidence.
+- Latest confirmed CI run [44648180669](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44648180669)
+  passed on `6bcc15a` (event-driven nested scheduling and output damage). The
+  current sparse 2D workspace changes have not yet run through CI. Do not mark
+  a phase verified without its stated runtime evidence.
 
 See [ROADMAP.md](ROADMAP.md), [architecture](docs/ARCHITECTURE.md), and
 [known issues](KNOWN_ISSUES.md).

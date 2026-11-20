@@ -79,6 +79,10 @@ pub enum Action {
     ColumnWidth { delta: i32 },
     /// Switch to a 1-based workspace index, creating it when needed.
     Workspace { index: usize },
+    /// Navigate to an adjacent spatial workspace, creating it on demand.
+    WorkspaceNavigate { direction: Direction },
+    /// Move the focused window to an adjacent workspace and activate it.
+    MoveToWorkspace { direction: Direction },
     /// Switch to the next workspace, creating it when at the end.
     WorkspaceNext,
     /// Switch to the previous workspace.
@@ -131,6 +135,15 @@ impl Action {
                 match value.as_str() {
                     "next" => Ok(Action::WorkspaceNext),
                     "prev" | "previous" => Ok(Action::WorkspacePrev),
+                    "left" | "right" | "up" | "down" => {
+                        if let Some(direction) = Direction::parse(&value) {
+                            Ok(Action::WorkspaceNavigate { direction })
+                        } else {
+                            Err(ActionParseError::new(format!(
+                                "unknown workspace direction '{rest}'"
+                            )))
+                        }
+                    }
                     _ => {
                         let index = rest.parse::<usize>().map_err(|_| {
                             ActionParseError::new(format!(
@@ -144,6 +157,9 @@ impl Action {
                     }
                 }
             }
+            "move-workspace" | "send-to-workspace" => Ok(Action::MoveToWorkspace {
+                direction: parse_direction(rest)?,
+            }),
             "toggle-fullscreen" | "fullscreen" => without_argument(rest, Action::ToggleFullscreen),
             "toggle-floating" | "floating" => without_argument(rest, Action::ToggleFloating),
             "center" | "center-column" => without_argument(rest, Action::CenterColumn),
@@ -188,6 +204,8 @@ impl fmt::Display for Action {
             Action::Move { direction } => write!(f, "move {direction}"),
             Action::ColumnWidth { delta } => write!(f, "column-width {delta}"),
             Action::Workspace { index } => write!(f, "workspace {index}"),
+            Action::WorkspaceNavigate { direction } => write!(f, "workspace {direction}"),
+            Action::MoveToWorkspace { direction } => write!(f, "move-workspace {direction}"),
             Action::WorkspaceNext => f.write_str("workspace next"),
             Action::WorkspacePrev => f.write_str("workspace prev"),
             Action::ToggleFullscreen => f.write_str("toggle-fullscreen"),
@@ -225,6 +243,12 @@ mod tests {
             Action::ColumnWidth { delta: -10 },
             Action::ColumnWidth { delta: 25 },
             Action::Workspace { index: 3 },
+            Action::WorkspaceNavigate {
+                direction: Direction::Up,
+            },
+            Action::MoveToWorkspace {
+                direction: Direction::Right,
+            },
             Action::WorkspaceNext,
             Action::WorkspacePrev,
             Action::ToggleFullscreen,
@@ -258,6 +282,23 @@ mod tests {
                 command: "foot".into()
             })
         );
+    }
+
+    #[test]
+    fn workspace_actions_accept_spatial_directions() {
+        assert_eq!(
+            Action::parse("workspace up"),
+            Ok(Action::WorkspaceNavigate {
+                direction: Direction::Up,
+            })
+        );
+        assert_eq!(
+            Action::parse("move-workspace down"),
+            Ok(Action::MoveToWorkspace {
+                direction: Direction::Down,
+            })
+        );
+        assert!(Action::parse("workspace north").is_err());
     }
 
     #[test]

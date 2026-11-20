@@ -31,4 +31,4 @@ pub use config::{Binding, Config, ConfigError, Modifiers};
 pub use geometry::{Point, Rect, Size};
 pub use layout::{LayoutConfig, Placement, ScrollLayout};
 pub use window::{NewWindow, Window, WindowId};
-pub use wm::{Effects, OutputState, PlacementInfo, Snapshot, Wm, Workspace};
+pub use wm::{Effects, OutputState, PlacementInfo, Snapshot, Wm, Workspace, WorkspacePosition};

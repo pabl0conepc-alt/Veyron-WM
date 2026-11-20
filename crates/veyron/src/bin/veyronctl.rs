@@ -84,9 +84,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "workspace {}/{}  windows {}  scroll {:.0}px",
+                    "workspace {}/{} @ ({}, {})  windows {}  scroll {:.0}px",
                     report.workspace_index + 1,
                     report.workspace_count,
+                    report.workspace_position[0],
+                    report.workspace_position[1],
                     report.windows.len(),
                     report.scroll
                 );

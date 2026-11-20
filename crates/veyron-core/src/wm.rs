@@ -23,6 +23,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Workspace {
     name: String,
+    position: WorkspacePosition,
     layout: ScrollLayout,
     floating: Vec<WindowId>,
     focused_floating: Option<WindowId>,
@@ -30,9 +31,15 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    fn new(name: String, config: &crate::layout::LayoutConfig, viewport: Rect) -> Self {
+    fn new(
+        name: String,
+        position: WorkspacePosition,
+        config: &crate::layout::LayoutConfig,
+        viewport: Rect,
+    ) -> Self {
         Self {
             name,
+            position,
             layout: ScrollLayout::new(config.clone(), viewport),
             floating: Vec::new(),
             focused_floating: None,
@@ -42,6 +49,10 @@ impl Workspace {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn position(&self) -> WorkspacePosition {
+        self.position
     }
 
     pub fn layout(&self) -> &ScrollLayout {
@@ -65,12 +76,36 @@ impl Workspace {
     }
 }
 
+/// Sparse signed coordinates for an infinite desktop workspace.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct WorkspacePosition {
+    pub x: i64,
+    pub y: i64,
+}
+
+impl WorkspacePosition {
+    fn offset(self, direction: crate::action::Direction) -> Option<Self> {
+        use crate::action::Direction;
+        let (dx, dy) = match direction {
+            Direction::Left => (-1, 0),
+            Direction::Right => (1, 0),
+            Direction::Up => (0, -1),
+            Direction::Down => (0, 1),
+        };
+        Some(Self {
+            x: self.x.checked_add(dx)?,
+            y: self.y.checked_add(dy)?,
+        })
+    }
+}
+
 /// One output (monitor) and the workspaces it shows.
 #[derive(Debug, Clone)]
 pub struct OutputState {
     name: String,
     rect: Rect,
     workspaces: Vec<Workspace>,
+    workspace_indices: HashMap<WorkspacePosition, usize>,
     active: usize,
 }
 
@@ -89,6 +124,10 @@ impl OutputState {
 
     pub fn active_workspace_index(&self) -> usize {
         self.active
+    }
+
+    pub fn active_workspace_position(&self) -> WorkspacePosition {
+        self.active_workspace().position
     }
 
     pub fn active_workspace(&self) -> &Workspace {
@@ -142,6 +181,8 @@ pub struct Snapshot {
     pub workspace: String,
     pub workspace_index: usize,
     pub workspace_count: usize,
+    /// Signed 2D coordinate on the sparse infinite desktop.
+    pub workspace_position: WorkspacePosition,
     pub columns: usize,
     pub scroll: f64,
     pub focused: Option<WindowId>,
@@ -190,7 +231,13 @@ impl Wm {
     pub fn new(config: Config, output_name: impl Into<String>, size: Size) -> Self {
         let rect = Rect::from_size(size);
         let viewport = viewport_for(rect, &config.layout);
-        let workspace = Workspace::new("1".to_string(), &config.layout, viewport);
+        let workspace = Workspace::new(
+            "1".to_string(),
+            WorkspacePosition::default(),
+            &config.layout,
+            viewport,
+        );
+        let workspace_indices = HashMap::from([(WorkspacePosition::default(), 0)]);
         Self {
             config,
             windows: HashMap::new(),
@@ -198,6 +245,7 @@ impl Wm {
                 name: output_name.into(),
                 rect,
                 workspaces: vec![workspace],
+                workspace_indices,
                 active: 0,
             }],
             active_output: 0,
@@ -375,19 +423,26 @@ impl Wm {
                 effects.layout_changed = effects.workspace_changed;
                 effects.focus_changed = effects.workspace_changed;
             }
+            Action::WorkspaceNavigate { direction } => {
+                effects.workspace_changed = self.navigate_workspace(direction);
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
+            }
+            Action::MoveToWorkspace { direction } => {
+                effects.workspace_changed = self.move_focused_to_workspace(direction);
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
+            }
             Action::WorkspaceNext => {
-                let next = self.active_output().active + 1;
-                effects.workspace_changed = self.switch_workspace(next);
+                effects.workspace_changed =
+                    self.navigate_workspace(crate::action::Direction::Right);
                 effects.layout_changed = effects.workspace_changed;
                 effects.focus_changed = effects.workspace_changed;
             }
             Action::WorkspacePrev => {
-                let current = self.active_output().active;
-                if current > 0 {
-                    effects.workspace_changed = self.switch_workspace(current - 1);
-                    effects.layout_changed = effects.workspace_changed;
-                    effects.focus_changed = effects.workspace_changed;
-                }
+                effects.workspace_changed = self.navigate_workspace(crate::action::Direction::Left);
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
             }
         }
 
@@ -458,6 +513,7 @@ impl Wm {
             workspace: workspace.name.clone(),
             workspace_index: output.active,
             workspace_count: output.workspaces.len(),
+            workspace_position: workspace.position,
             columns: workspace.layout.column_count(),
             scroll: workspace.layout.scroll(),
             focused: workspace.focused_window(),
@@ -490,14 +546,8 @@ impl Wm {
         // Workspaces are created on demand: the strip is conceptually endless,
         // so there is no fixed maximum.
         while self.outputs[output_index].workspaces.len() <= index {
-            let number = self.outputs[output_index].workspaces.len() + 1;
-            let rect = self.outputs[output_index].rect;
-            let viewport = viewport_for(rect, &self.config.layout);
-            self.outputs[output_index].workspaces.push(Workspace::new(
-                number.to_string(),
-                &self.config.layout,
-                viewport,
-            ));
+            let position = self.next_linear_position(output_index);
+            self.append_workspace(output_index, position);
         }
 
         let output = &mut self.outputs[output_index];
@@ -505,6 +555,110 @@ impl Wm {
             return false;
         }
         output.active = index;
+        true
+    }
+
+    fn next_linear_position(&self, output_index: usize) -> WorkspacePosition {
+        let positions = &self.outputs[output_index].workspace_indices;
+        let mut x = 0_i64;
+        while positions.contains_key(&WorkspacePosition { x, y: 0 }) {
+            let Some(next) = x.checked_add(1) else {
+                return WorkspacePosition { x, y: 0 };
+            };
+            x = next;
+        }
+        WorkspacePosition { x, y: 0 }
+    }
+
+    fn append_workspace(&mut self, output_index: usize, position: WorkspacePosition) -> usize {
+        let output = &mut self.outputs[output_index];
+        let index = output.workspaces.len();
+        let viewport = viewport_for(output.rect, &self.config.layout);
+        output.workspaces.push(Workspace::new(
+            (index + 1).to_string(),
+            position,
+            &self.config.layout,
+            viewport,
+        ));
+        output.workspace_indices.insert(position, index);
+        index
+    }
+
+    fn navigate_workspace(&mut self, direction: crate::action::Direction) -> bool {
+        let output_index = self.active_output;
+        let current = self.outputs[output_index].active_workspace_position();
+        let Some(position) = current.offset(direction) else {
+            return false;
+        };
+        self.switch_workspace_at(output_index, position)
+    }
+
+    fn switch_workspace_at(&mut self, output_index: usize, position: WorkspacePosition) -> bool {
+        let index = self.outputs[output_index]
+            .workspace_indices
+            .get(&position)
+            .copied()
+            .unwrap_or_else(|| self.append_workspace(output_index, position));
+        let output = &mut self.outputs[output_index];
+        if output.active == index {
+            return false;
+        }
+        output.active = index;
+        true
+    }
+
+    fn move_focused_to_workspace(&mut self, direction: crate::action::Direction) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let output_index = self.active_output;
+        let source_index = self.outputs[output_index].active;
+        let source = &self.outputs[output_index].workspaces[source_index];
+        let Some(destination_position) = source.position.offset(direction) else {
+            return false;
+        };
+        if source.position == destination_position {
+            return false;
+        }
+
+        let was_floating = source.floating.contains(&id);
+        let was_fullscreen = source.fullscreen == Some(id);
+        let occupied_fullscreen = self.outputs[output_index]
+            .workspace_indices
+            .get(&destination_position)
+            .and_then(|index| self.outputs[output_index].workspaces[*index].fullscreen);
+        if was_fullscreen && occupied_fullscreen.is_some() {
+            return false;
+        }
+        let destination_index = self.outputs[output_index]
+            .workspace_indices
+            .get(&destination_position)
+            .copied()
+            .unwrap_or_else(|| self.append_workspace(output_index, destination_position));
+
+        let output = &mut self.outputs[output_index];
+        let source = &mut output.workspaces[source_index];
+        source.layout.remove_window(id);
+        source.floating.retain(|window| *window != id);
+        if source.focused_floating == Some(id) {
+            source.focused_floating = None;
+        }
+        if source.fullscreen == Some(id) {
+            source.fullscreen = None;
+        }
+
+        let destination = &mut output.workspaces[destination_index];
+        if was_floating {
+            destination.floating.push(id);
+            destination.focused_floating = Some(id);
+        } else {
+            destination.layout.insert_window(id);
+        }
+        if was_fullscreen {
+            destination.fullscreen = Some(id);
+        }
+        output.active = destination_index;
+        self.refresh_tiled_rects();
         true
     }
 
@@ -757,7 +911,84 @@ mod tests {
         assert_eq!(snapshot.focused, Some(first));
         assert_eq!(snapshot.placements.len(), 1);
 
-        assert!(!wm.dispatch(Action::WorkspacePrev).workspace_changed);
+        assert!(wm.dispatch(Action::WorkspacePrev).workspace_changed);
+        assert_eq!(
+            wm.snapshot().workspace_position,
+            WorkspacePosition { x: -1, y: 0 }
+        );
+    }
+
+    #[test]
+    fn spatial_navigation_lazily_creates_and_revisits_signed_coordinates() {
+        let mut wm = wm();
+        let first = wm.create_window(NewWindow::default());
+
+        for direction in [
+            Direction::Up,
+            Direction::Right,
+            Direction::Down,
+            Direction::Left,
+        ] {
+            assert!(
+                wm.dispatch(Action::WorkspaceNavigate { direction })
+                    .workspace_changed
+            );
+        }
+
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.workspace_position, WorkspacePosition::default());
+        assert_eq!(snapshot.workspace_count, 4);
+        assert_eq!(snapshot.focused, Some(first));
+        assert_eq!(snapshot.placements.len(), 1);
+    }
+
+    #[test]
+    fn moving_a_floating_window_keeps_its_id_mode_and_geometry() {
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow::default());
+        wm.dispatch(Action::ToggleFloating);
+        let original = wm
+            .snapshot()
+            .placement_of(id)
+            .map(|placement| placement.rect);
+
+        let effects = wm.dispatch(Action::MoveToWorkspace {
+            direction: Direction::Up,
+        });
+        assert!(effects.workspace_changed);
+        let moved = wm.snapshot();
+        assert_eq!(moved.workspace_position, WorkspacePosition { x: 0, y: -1 });
+        assert_eq!(moved.focused, Some(id));
+        assert!(moved.is_floating(id));
+        assert_eq!(
+            moved.placement_of(id).map(|placement| placement.rect),
+            original
+        );
+
+        assert!(
+            wm.dispatch(Action::WorkspaceNavigate {
+                direction: Direction::Down,
+            })
+            .workspace_changed
+        );
+        assert!(wm.snapshot().placements.is_empty());
+        assert!(
+            wm.dispatch(Action::WorkspaceNavigate {
+                direction: Direction::Up,
+            })
+            .workspace_changed
+        );
+        assert_eq!(wm.snapshot().focused, Some(id));
+    }
+
+    #[test]
+    fn coordinate_overflow_rejects_navigation_without_mutating_state() {
+        let position = WorkspacePosition { x: i64::MAX, y: 0 };
+        assert_eq!(position.offset(Direction::Right), None);
+        assert_eq!(
+            position.offset(Direction::Up),
+            Some(WorkspacePosition { x: i64::MAX, y: -1 })
+        );
     }
 
     #[test]

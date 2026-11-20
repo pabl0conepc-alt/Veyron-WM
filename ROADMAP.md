@@ -40,17 +40,19 @@ strong integration evidence, but does not replace this visual runtime check.
 **Acceptance:** multiple application windows can be opened, arranged, focused,
 moved, resized and closed without losing client state.
 
-## Phase 3 — Infinite Desktop — IMPLEMENTING
+## Phase 3 — Infinite Desktop — TESTING
 
 - [x] Allocate workspaces on demand and preserve their independent window state.
 - [x] Navigate indefinitely through a horizontal strip; focus scrolls the strip.
 - [x] Verify workspace switching and scroll offsets through real headless
   Wayland clients.
-- [ ] Add sparse two-dimensional workspace coordinates and vertical navigation.
-- [ ] Move windows between spatial workspaces while preserving focus, layout
-  mode and floating geometry.
-- [ ] Show a visible location indicator and validate navigation in the nested
-  session. Gesture navigation and multi-output support remain later work.
+- [x] Add sparse signed two-dimensional coordinates and four-way navigation.
+- [x] Move windows between spatial workspaces while preserving identity, focus,
+  layout mode and floating geometry; expose coordinates through IPC.
+- [x] Add default key bindings, CLI state coordinates and a visible nested
+  window-title location indicator.
+- [ ] Validate spatial navigation in a nested session. Gesture navigation and
+  multi-output support remain later work.
 
 **Acceptance:** horizontal and vertical spatial navigation works dynamically,
 keeps windows and focus state, and visibly identifies the active region.
@@ -79,8 +81,8 @@ scheduling, and measured behavior. Blur and transparency remain optional.
   errors; invalid reloads keep the last valid configuration.
 - [x] Provide a bounded, versioned Unix socket protocol and `veyronctl`.
 - [x] Expose actions, state, reload, ping and graceful shutdown over IPC.
-- [ ] Add vertical-workspace, window-transfer and rendering controls to the IPC
-  only as those core actions become real.
+- [x] Expose spatial workspace coordinates and window-transfer actions through
+  the core action parser, default bindings and state IPC.
 - [ ] Research and integrate XWayland with compatibility tests.
 - [ ] Define a portal integration boundary and document which desktop portal
   services are external to the compositor.

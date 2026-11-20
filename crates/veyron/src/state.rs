@@ -119,7 +119,9 @@ impl Veyron {
     ) -> Result<Self, Box<dyn Error>> {
         let window_size = backend.window_size();
         let size = VSize::new(window_size.w, window_size.h);
-        Self::build(config_path, config, size, Some(backend), display_handle)
+        let state = Self::build(config_path, config, size, Some(backend), display_handle)?;
+        state.update_workspace_indicator();
+        Ok(state)
     }
 
     /// Build a headless compositor: the real `Display`, socket, protocol
@@ -405,6 +407,10 @@ impl Veyron {
             self.sync_focus();
         }
 
+        if effects.workspace_changed {
+            self.update_workspace_indicator();
+        }
+
         if effects.needs_redraw() {
             self.needs_redraw = true;
         }
@@ -446,6 +452,7 @@ impl Veyron {
             workspace: snapshot.workspace.clone(),
             workspace_index: snapshot.workspace_index,
             workspace_count: snapshot.workspace_count,
+            workspace_position: [snapshot.workspace_position.x, snapshot.workspace_position.y],
             windows: snapshot
                 .placements
                 .iter()
@@ -484,6 +491,19 @@ impl Veyron {
         self.backend
             .as_ref()
             .map_or(1.0, |backend| backend.scale_factor())
+    }
+
+    /// Show the active spatial coordinate in the nested window title and host
+    /// desktop decorations.
+    fn update_workspace_indicator(&self) {
+        let Some(backend) = self.backend.as_ref() else {
+            return;
+        };
+        let position = self.wm.snapshot().workspace_position;
+        backend.window().set_title(&format!(
+            "VEYRON WM — Workspace ({}, {})",
+            position.x, position.y
+        ));
     }
 
     fn update_output(&mut self) {

@@ -120,6 +120,8 @@ Default keybindings (all configurable):
 | `super+space` | toggle floating |
 | `super+1` … `super+5` | switch workspace |
 | `super+bracketright` / `super+bracketleft` | next / previous workspace |
+| `super+ctrl+arrow` | navigate the sparse 2D workspace grid |
+| `super+ctrl+shift+arrow` | move the focused window to a neighboring workspace |
 | `super+r` | reload the configuration |
 | `super+shift+e` | quit |
 
@@ -168,6 +170,8 @@ socket (`$XDG_RUNTIME_DIR/veyron.sock` by default, `--socket` or
 veyronctl state --json
 veyronctl focus left
 veyronctl workspace 2
+veyronctl workspace up
+veyronctl move-workspace right
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit
@@ -180,9 +184,11 @@ Any other program can use the socket directly:
 {"response":"ok"}
 ```
 
+Protocol version 2 includes the signed 2D coordinate in state responses.
 Requests: `action`, `state`, `reload`, `quit`, `ping`. Messages are capped at
 64 KiB, the server never deletes a non-socket file, and a crashed compositor's
-stale socket is safely replaced.
+stale socket is safely replaced. State reports include the active workspace's
+signed `(x, y)` coordinate.
 
 ## Repository layout
 

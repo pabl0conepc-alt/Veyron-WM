@@ -705,6 +705,42 @@ fn workspace_scroll_and_navigation_reach_clients() {
 }
 
 #[test]
+fn spatial_workspace_navigation_and_window_transfer_reach_real_clients() {
+    let harness = Harness::start("spatial", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _toplevel = client.create_toplevel("spatial-window");
+    let original = harness.state();
+    assert_eq!(original.workspace_position, [0, 0]);
+    let window_id = original.windows[0].id;
+
+    harness.action("toggle-floating");
+    let floating = harness.state();
+    let geometry = floating.windows[0].rect;
+    assert!(floating.windows[0].floating);
+
+    harness.action("move-workspace up");
+    let moved = harness.state();
+    assert_eq!(moved.workspace_position, [0, -1]);
+    assert_eq!(moved.windows.len(), 1);
+    assert_eq!(moved.windows[0].id, window_id);
+    assert!(moved.windows[0].floating);
+    assert_eq!(moved.windows[0].rect, geometry);
+
+    harness.action("workspace right");
+    assert_eq!(harness.state().workspace_position, [1, -1]);
+    harness.action("workspace down");
+    assert_eq!(harness.state().workspace_position, [1, 0]);
+    harness.action("workspace left");
+    assert_eq!(harness.state().workspace_position, [0, 0]);
+    assert!(harness.state().windows.is_empty());
+    harness.action("workspace up");
+    let restored = harness.state();
+    assert_eq!(restored.workspace_position, [0, -1]);
+    assert_eq!(restored.windows[0].id, window_id);
+    assert_eq!(restored.windows[0].rect, geometry);
+}
+
+#[test]
 fn headless_shuts_down_cleanly_on_quit_request() {
     let mut harness = Harness::start("quit", 800, 600);
     let _client = Client::connect(&harness.wayland_socket);
