@@ -167,6 +167,10 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Veyron Profiles: named layout/motion preset patches with
   `default_profile`, a `profile <name>` action and strict validation, so a preset
   can never leave the layout configuration invalid.
+- [x] Gesture policy: a thresholded swipe tracker with dominant-axis detection
+  and repeated steps per swipe, driven by deltas the input layer supplies.
+- [ ] Forward libinput hold/swipe gestures from the nested input layer and bind
+  them to the workspace actions.
 - [x] Workspace overview policy: a paged grid of an output's workspaces ordered
   by sparse coordinate, with window counts, hit-testing and page navigation for
   an exposé-style view.
@@ -175,7 +179,7 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (112 core tests, 5
+**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (117 core tests, 5
 window-feature integration tests, 9 multi-output integration tests, 8 profile
 integration tests, 6 overview integration tests, 8 IPC tests) covers every
 implemented item

@@ -23,6 +23,8 @@
 - Snap zones, picture-in-picture, window groups and smart focus are implemented
   and tested in the core, and reach the compositor through the snapshot, but
   they have not been exercised in a nested session.
+- Touchpad gestures are a policy module only: the nested input layer does not
+  forward swipe/hold events and no gesture is bound to an action at runtime.
 - The workspace overview exists as grid policy only: no thumbnails, no
   open/close action or binding and no nested rendering yet.
 - Veyron Profiles are parsed, validated and applied by the core and accepted by

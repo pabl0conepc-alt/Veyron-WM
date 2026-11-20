@@ -147,6 +147,19 @@
   tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
   backend still binds one output, so hotplug remains unverified at runtime.
 
+## 2026-11-20 — Phase 7 gesture policy
+
+- Added `gestures.rs`: `GestureConfig` (`enabled`, `swipe_threshold`,
+  `axis_ratio`) and `SwipeTracker`, which accumulates swipe deltas, requires the
+  dominant axis to win by the configured ratio and emits one `Direction` per
+  threshold while keeping the remainder.
+- `Config` gained a validated `[gestures]` table; it round-trips through
+  `--print-config`.
+- Four gesture unit tests plus a configuration test cover repeated steps,
+  dominance and diagonal rejection (noise is dropped, never accumulated),
+  disabled/invalid input with cancellation, and validation. The nested input
+  layer still does not forward gestures, so nothing reacts at runtime yet.
+
 ## 2026-11-20 — Phase 7 workspace overview policy
 
 - Added `overview.rs`: `OverviewConfig`, `OverviewEntry` and `Overview`, which

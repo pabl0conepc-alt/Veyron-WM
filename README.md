@@ -47,6 +47,9 @@ What works:
   `move-output <direction>` sends the focused window there and
   `workspace-output <direction>` takes the whole active workspace along.
   `Wm::snapshots()` returns one frame description per output.
+- Gesture policy: `SwipeTracker` accumulates libinput swipe deltas, resolves the
+  dominant axis and emits workspace directions once per threshold. The nested
+  input layer does not forward gestures yet.
 - Workspace overview policy: `Overview` lays every workspace of an output out
   in a paged grid ordered by sparse coordinate, reports window counts and maps
   a click back to a workspace. The compositor still has to draw it.
@@ -60,7 +63,7 @@ What works:
   and `Transitions`, which follows a frame of placements, redirects running
   transitions and reports whether another frame is needed. The renderer does
   not drive it yet.
-- Deterministic, unit-tested state machine (112 core tests plus integration
+- Deterministic, unit-tested state machine (117 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -212,6 +215,11 @@ reduce_motion = false
 
 [behavior]
 remember_geometry = true     # restore floating geometry per app id
+
+[gestures]                   # policy only; the nested input layer does not
+enabled = false              # forward touchpad swipes yet
+swipe_threshold = 220.0      # logical pixels of travel per workspace step
+axis_ratio = 1.2             # how much the dominant axis must win
 
 # Per-application rules, evaluated in order; later fields win.
 [[rules]]

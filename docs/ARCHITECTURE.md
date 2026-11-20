@@ -155,6 +155,15 @@ all of them when the patch asks for it, re-clamps floating windows for the new
 outer margin and records `active_profile`. `Wm::new` applies `default_profile`,
 and a reload clears it when the new configuration no longer defines that name.
 
+### Gestures
+
+`gestures::SwipeTracker` turns libinput swipe deltas into `Direction`s. It
+requires the dominant axis to win by `axis_ratio` (so diagonal noise never
+fires), emits one direction per `swipe_threshold` pixels and keeps the
+remainder, which lets a single long swipe step through several workspaces.
+`cancel` runs at gesture end or interruption. The policy is configured by the
+`[gestures]` table; the nested input layer does not forward gestures yet.
+
 ### Overview
 
 `overview::Overview::build` produces the geometry of an exposé-style grid for
