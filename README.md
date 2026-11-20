@@ -66,6 +66,20 @@ cargo build --release          # builds veyron and veyronctl
 cargo test                     # core, IPC and headless protocol suites
 ```
 
+### Nix
+
+The repository includes a locked Nix flake for `x86_64-linux`. Build it from a
+checkout with:
+
+```sh
+nix build .#default
+./result/bin/veyron --help
+nix profile install .#default
+```
+
+The package build is also checked by GitHub Actions. The first CI build for this
+flake is pending; nested runtime support still needs validation on the target.
+
 ## Running
 
 Veyron runs **nested**: it opens a window in your current session and serves a

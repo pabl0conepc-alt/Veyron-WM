@@ -45,3 +45,16 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+  nix-package:
+    name: reproducible Nix package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Evaluate and build package
+        run: nix build .#default --no-link

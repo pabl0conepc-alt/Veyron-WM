@@ -111,6 +111,8 @@ compatibility claims are backed by per-feature tests and documented limits.
 - [ ] Review input, IPC, process spawning, socket ownership, client handling and
   shutdown paths; add dependency/license auditing.
 - [ ] Document tested protocol/toolkit compatibility and unsupported features.
+- [ ] Validate the locked Nix flake package in GitHub Actions (definition and
+  package job added; first package build pending).
 - [ ] Establish a reproducible user installation/package path after runtime
   validation.
 

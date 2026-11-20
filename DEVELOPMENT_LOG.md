@@ -81,3 +81,11 @@
 - Added core boundary coverage and extended the real-client IPC scenario to
   move and resize the same floating window. GitHub Actions run `44651966135`
   passed format, Clippy, build and all workspace tests for `5ce2aa4`.
+
+## 2026-11-19 — Phase 6 Nix packaging started
+
+- Added a locked `x86_64-linux` Nix flake package for `veyron` and `veyronctl`,
+  a GitHub Actions package-build job, and initial README usage instructions.
+- Local flake evaluation returned `veyron-wm-0.1.0`. A full local build was
+  intentionally not run on the 4 GiB netbook; the first package CI build is
+  pending. Keep this Phase 6 item open until CI succeeds.

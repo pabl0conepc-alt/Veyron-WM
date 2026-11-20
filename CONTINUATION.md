@@ -59,6 +59,13 @@ CI run
 [44651966135](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651966135)
 passed format, Clippy, build and tests for floating-window movement at `5ce2aa4`.
 
+The current worktree also has an **uncommitted Phase 6 Nix packaging change**:
+`flake.nix`, pinned `flake.lock`, and a `nix-package` GitHub Actions job in
+`.github/workflows/ci.yml`. Flake evaluation succeeded locally and reported
+`veyron-wm-0.1.0`; a complete local Nix build was deliberately not run on the
+4 GiB netbook. The package build has not yet passed CI, so this is still
+in-progress and must not be marked complete until the workflow proves it.
+
 ## Project design and machine constraints
 
 - Rust workspace: `veyron-core`, `veyron-ipc`, `veyron`; Smithay 0.7 and calloop.
@@ -109,24 +116,40 @@ passed format, Clippy, build and tests for floating-window movement at `5ce2aa4`
   headless integration exist. Still add a nested smoke where practical, target
   hardware measurements, broader security/dependency/license review,
   compatibility and unsupported-feature docs, and reproducible install/package
-  path after runtime validation. The IPC socket now has owner-only `0600`
-  permissions with a passing filesystem-mode regression test.
+  path after runtime validation. Nix packaging is defined but awaits its first
+  CI build. The IPC socket has owner-only `0600` permissions with a passing
+  filesystem-mode regression test.
 
 Full acceptance language is in `ROADMAP.md`; keep its statuses truthful.
 Headless protocol tests do not count as visible nested-runtime validation.
 
-## Immediate next actions
+## Exact stop point and next actions
 
-1. Continue Phase 5 by implementing the XWayland/XWM adapter only after checking
-   that the required Smithay 0.7 APIs can be built and tested without changing
-   the low-memory default runtime path.
-2. Refresh `PROJECT_STATUS.md`, `ROADMAP.md`, `DEVELOPMENT_LOG.md` and this file
-   after each meaningful phase milestone.
-3. Continue with the smallest prompt-required phase deliverable that can be
-   validated without stressing the laptop. Prefer meaningful commits; avoid
-   artificial commit splitting.
-4. Keep the PR updated as phases advance. Do not claim GitHub contribution
-   credit before merge.
+The last active task was Phase 6 reproducible Nix packaging for the user's
+NixOS netbook. The working tree contains an initial locked flake and a CI job
+that runs `nix build .#default --no-link`; these changes are **not yet
+committed** and package CI has **not yet run**. The package uses the existing
+Cargo lockfile, targets `x86_64-linux`, and installs `veyron` plus `veyronctl`.
+The user's low-memory constraint is why validation should happen in GitHub
+Actions instead of a full local build.
+
+Resume in this order:
+
+1. Inspect `git diff`, `flake.lock`, and the CI workflow. Confirm the flake
+   evaluates and that its install phase matches the existing binary names.
+2. Add a brief README section for building/installing with Nix, clearly saying
+   the first CI package build is pending until it passes.
+3. Run `git diff --check`, commit the Nix package, workflow and progress docs,
+   push `codex/finish-roadmap`, and let GitHub Actions build it.
+4. Inspect the package CI result. Fix any failure and repeat until the Nix
+   package job passes. Only then record Phase 6's reproducible package check as
+   complete; runtime validation remains a separate open acceptance item.
+5. Update this handoff, `ROADMAP.md`, `PROJECT_STATUS.md`, and
+   `DEVELOPMENT_LOG.md`, and refresh the draft PR #1. Do not merge.
+6. Continue remaining prompt work: nested runtime validation on the target,
+   Phase 5 XWayland/XWM integration and portal/shell compatibility boundaries,
+   security/dependency/license review, and repeatable performance measurements.
+   Keep phase statuses evidence-based and avoid heavy parallel local builds.
 
 ## Evidence and project files
 

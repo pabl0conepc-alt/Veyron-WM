@@ -24,6 +24,10 @@ Last reviewed: 2026-11-19.
 - The IPC control socket now enforces owner-only `0600` permissions; CI run
   [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
   passed all checks for `17d8562`.
+- Phase 6 Nix packaging is currently uncommitted: `flake.nix`, `flake.lock`, a
+  README usage section and a GitHub Actions package job are in the worktree.
+  Local flake evaluation returned `veyron-wm-0.1.0`; no complete local build
+  was run due to the 4 GiB limit, and the first package CI build is pending.
 
 ## Target environment and constraints
 
