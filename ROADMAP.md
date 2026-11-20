@@ -146,6 +146,8 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Smart focus: a bounded most-recently-used history behind `focus previous`.
 - [x] Veyron Recall: session capture/restore of workspaces, windows and floating
   geometry as validated TOML (`Session`), with a bounded window count.
+- [x] Expose Recall through `veyronctl session save|restore FILE` and versioned
+  IPC requests, preserving TOML validation and the protocol message limit.
 - [x] Window identity: the app id and title a client announces on its first
   commit reach the core, applying the matching window rules exactly once;
   `veyronctl state` reports identity and rule opacity per window.

@@ -1,5 +1,14 @@
 # Development log
 
+## 2026-11-20 — Recall over IPC
+
+- Added `veyronctl session save FILE` and `veyronctl session restore FILE`.
+- The control socket transfers validated session TOML through capture/restore
+  requests. Oversized captures return a clear error at the existing 64 KiB
+  message boundary; restore continues to use the core's bounded validation.
+- Restore rebuilds window-management policy state only. It does not start
+  applications or reconnect restored records to future Wayland surfaces.
+
 ## 2026-11-20 — Window identity and profile cycling
 
 - The compositor now forwards the app id and title a client announces on its

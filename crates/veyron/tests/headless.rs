@@ -792,6 +792,48 @@ fn spatial_workspace_navigation_and_window_transfer_reach_real_clients() {
 }
 
 #[test]
+fn recall_session_round_trips_through_control_socket() {
+    let mut harness = Harness::start("recall-ipc", 1280, 800);
+    let toml = r#"
+workspaces = ["1", "2"]
+
+[[windows]]
+app_id = "foot"
+title = "terminal"
+workspace = "2"
+floating = true
+rect = { x = 30, y = 40, w = 500, h = 350 }
+"#;
+    match veyron_ipc::request(
+        &harness.control_socket,
+        &Request::RestoreSession {
+            toml: toml.to_string(),
+        },
+    ) {
+        Ok(Response::Ok) => {}
+        other => panic!("restore-session request failed: {other:?}"),
+    }
+
+    let captured = match veyron_ipc::request(&harness.control_socket, &Request::CaptureSession) {
+        Ok(Response::Session { toml }) => toml,
+        other => panic!("capture-session request failed: {other:?}"),
+    };
+    let session = veyron_core::Session::from_toml(&captured).expect("captured TOML is valid");
+    assert_eq!(session.workspaces, ["1", "2"]);
+    assert_eq!(session.windows.len(), 1);
+    assert_eq!(session.windows[0].app_id, "foot");
+    assert_eq!(session.windows[0].title, "terminal");
+    assert_eq!(session.windows[0].workspace, "2");
+    assert!(session.windows[0].floating);
+    assert_eq!(
+        session.windows[0].rect,
+        Some(veyron_core::Rect::new(30, 40, 500, 350))
+    );
+
+    harness.shutdown();
+}
+
+#[test]
 fn headless_shuts_down_cleanly_on_quit_request() {
     let mut harness = Harness::start("quit", 800, 600);
     let _client = Client::connect(&harness.wayland_socket);

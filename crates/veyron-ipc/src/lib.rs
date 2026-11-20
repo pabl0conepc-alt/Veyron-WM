@@ -47,6 +47,10 @@ pub enum Request {
     Action { action: String },
     /// Ask for a description of the current layout.
     State,
+    /// Capture the current window-manager session as validated TOML.
+    CaptureSession,
+    /// Restore a previously captured session from TOML.
+    RestoreSession { toml: String },
     /// Re-read the configuration file.
     Reload,
     /// Ask the compositor to exit.
@@ -65,6 +69,8 @@ pub enum Response {
     Pong,
     /// Reply to [`Request::State`].
     State(StateReport),
+    /// Reply to [`Request::CaptureSession`].
+    Session { toml: String },
     /// The request was rejected. The message is meant for humans.
     Error { message: String },
 }
@@ -356,6 +362,10 @@ mod tests {
         let requests = [
             Request::Ping,
             Request::State,
+            Request::CaptureSession,
+            Request::RestoreSession {
+                toml: "workspaces = []\nwindows = []\n".into(),
+            },
             Request::Quit,
             Request::Action {
                 action: "focus left".into(),

@@ -28,10 +28,11 @@
 - Veyron Profiles are parsed, validated and applied by the core and accepted by
   the action/IPC grammar; `super+p` cycles them with `profile next`. The
   renderer still ignores the motion settings a profile can change.
-- Veyron Recall (`Session`) captures and restores state in the core only: no
-  CLI/IPC command writes or reads a session file yet, and restoring relaunches
-  nothing by itself. Capture records the app id and title a client announces,
-  so a saved session identifies windows by application.
+- Veyron Recall saves and restores validated TOML through `veyronctl session
+  save|restore`. Restore recreates policy state in the core; it does not launch
+  applications or reconnect restored records to future client surfaces.
+  Capture records the app id and title a client announces, so a saved session
+  identifies windows by application.
 - Multi-output policy exists in the core (runtime add/remove, per-output
   workspaces and viewports, monitor-directed focus and window/workspace moves)
   but the nested backend still creates a single output, so real hotplug and

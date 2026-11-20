@@ -54,7 +54,9 @@ What works:
   configuration invalid is refused instead of partially applied.
 - Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
   (workspaces, windows with their announced app id and title, floating geometry)
-  to TOML and rebuild it.
+  to TOML. `veyronctl session save FILE` captures it over IPC, and
+  `veyronctl session restore FILE` restores policy state; it does not launch
+  applications.
 - Window identity: the app id and title a client announces on its first commit
   reach the core, so rules, opacity, Recall and `veyronctl state` use the real
   metadata instead of empty strings.
@@ -300,6 +302,8 @@ veyronctl layout master-stack
 veyronctl layout next
 veyronctl profile coding
 veyronctl scratchpad
+veyronctl session save ~/.local/state/veyron/session.toml
+veyronctl session restore ~/.local/state/veyron/session.toml
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit
@@ -314,8 +318,9 @@ Any other program can use the socket directly:
 
 Protocol version 3 includes the signed 2D workspace coordinate, the resolved
 layout name, the effective gap and, per window, the announced app id, title,
-rule opacity, geometry and state. Requests: `action`, `state`, `reload`,
-`quit`, `ping`. Messages are capped at 64 KiB; the socket is
+rule opacity, geometry and state. Requests: `action`, `state`, `capture-session`,
+`restore-session`, `reload`, `quit`, `ping`. Session TOML and all other messages
+are capped at 64 KiB; the socket is
 owner-only (`0600`), the server never deletes a non-socket file, and a crashed
 compositor's stale socket is safely replaced.
 

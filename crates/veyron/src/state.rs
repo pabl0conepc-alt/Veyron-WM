@@ -51,8 +51,10 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
 };
-use veyron_core::{Action, Config, Effects, Modifiers, NewWindow, Size as VSize, WindowId, Wm};
-use veyron_ipc::{Response, StateReport, WindowReport};
+use veyron_core::{
+    Action, Config, Effects, Modifiers, NewWindow, Session, Size as VSize, WindowId, Wm,
+};
+use veyron_ipc::{Response, StateReport, WindowReport, MAX_LINE_BYTES};
 
 use crate::ipc::Job;
 
@@ -426,6 +428,33 @@ impl Veyron {
         let response = match job.request {
             veyron_ipc::Request::Ping => Response::Pong,
             veyron_ipc::Request::State => Response::State(self.state_report()),
+            veyron_ipc::Request::CaptureSession => match self.wm.capture_session().to_toml() {
+                Ok(toml) => {
+                    let response = Response::Session { toml };
+                    match serde_json::to_vec(&response) {
+                        Ok(encoded) if encoded.len() < MAX_LINE_BYTES => response,
+                        Ok(_) => Response::Error {
+                            message: format!(
+                                "captured session exceeds the {MAX_LINE_BYTES} byte IPC message limit"
+                            ),
+                        },
+                        Err(error) => Response::Error {
+                            message: format!("could not encode captured session: {error}"),
+                        },
+                    }
+                }
+                Err(message) => Response::Error { message },
+            },
+            veyron_ipc::Request::RestoreSession { toml } => match Session::from_toml(&toml) {
+                Ok(session) => {
+                    self.wm.restore_session(&session);
+                    self.sync_layout();
+                    self.sync_focus();
+                    self.needs_redraw = true;
+                    Response::Ok
+                }
+                Err(message) => Response::Error { message },
+            },
             veyron_ipc::Request::Reload => {
                 self.apply_action(Action::ReloadConfig);
                 Response::Ok

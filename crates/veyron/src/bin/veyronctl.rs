@@ -9,6 +9,8 @@ veyronctl — control a running VEYRON WM
 
 Usage:
   veyronctl state [--json]        Show the current layout
+  veyronctl session save <FILE>   Save the current session as TOML
+  veyronctl session restore <FILE> Restore a session from TOML
   veyronctl ping                  Check the compositor is alive
   veyronctl reload                Reload the configuration
   veyronctl quit                  Ask the compositor to exit
@@ -56,8 +58,18 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("no command given".into());
     }
 
+    let mut save_session_to = None;
     let request = match words[0].as_str() {
         "state" | "status" if words.len() == 1 => Request::State,
+        "session" if words.len() == 3 && words[1] == "save" => {
+            save_session_to = Some(PathBuf::from(&words[2]));
+            Request::CaptureSession
+        }
+        "session" if words.len() == 3 && words[1] == "restore" => {
+            let toml = std::fs::read_to_string(&words[2])?;
+            Request::RestoreSession { toml }
+        }
+        "session" => return Err("usage: veyronctl session save|restore <FILE>".into()),
         "ping" if words.len() == 1 => Request::Ping,
         "reload" if words.len() == 1 => Request::Reload,
         "quit" if words.len() == 1 => Request::Quit,
@@ -77,6 +89,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         Response::Ok => Ok(()),
         Response::Pong => {
             println!("pong");
+            Ok(())
+        }
+        Response::Session { toml } => {
+            let path = save_session_to.ok_or("unexpected session response")?;
+            std::fs::write(&path, toml)?;
+            println!("saved session to {}", path.display());
             Ok(())
         }
         Response::State(report) => {
