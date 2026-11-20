@@ -1069,6 +1069,13 @@ mod tests {
         assert!(
             wm.dispatch(Action::Resize {
                 axis: ResizeAxis::Height,
+                delta: -64,
+            })
+            .layout_changed
+        );
+        assert!(
+            wm.dispatch(Action::Resize {
+                axis: ResizeAxis::Height,
                 delta: 64,
             })
             .layout_changed
