@@ -53,9 +53,11 @@ What works:
   refused instead of partially applied.
 - Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
   (workspaces, windows, floating geometry) to TOML and rebuild it.
-- Animation foundation (`spring`/eased `RectAnimator`, reduced motion) used by
-  the core; the renderer does not schedule frames for it yet.
-- Deterministic, unit-tested state machine (109 core tests plus integration
+- Animation foundation: `spring`/eased `RectAnimator`, reduced-motion policy
+  and `Transitions`, which follows a frame of placements, redirects running
+  transitions and reports whether another frame is needed. The renderer does
+  not drive it yet.
+- Deterministic, unit-tested state machine (112 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket

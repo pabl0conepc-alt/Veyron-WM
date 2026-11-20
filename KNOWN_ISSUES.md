@@ -14,9 +14,10 @@
 - Layouts (master-stack, dwindle, auto), smart gaps, window rules, scratchpad
   and per-app floating geometry memory exist in the core and are unit-tested,
   but they have not been visually validated in a nested session.
-- The animation core (spring/easing/rect animator, duration, reduced motion) is
-  implemented and tested, but the nested renderer does not schedule frames for
-  transitions yet, so nothing animates today.
+- The animation core (spring/easing/rect animator, `Transitions`, duration,
+  reduced motion) is implemented and tested, but the nested renderer does not
+  feed it placements or schedule frames for transitions yet, so nothing animates
+  today.
 - Per-window opacity and blur reach the snapshot; the renderer still draws every
   window opaque and unblurred. Rounded corners and shadows are absent.
 - Snap zones, picture-in-picture, window groups and smart focus are implemented

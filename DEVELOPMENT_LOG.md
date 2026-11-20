@@ -147,6 +147,18 @@
   tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
   backend still binds one output, so hotplug remains unverified at runtime.
 
+## 2026-11-20 — Phase 7 transition set for the render loop
+
+- Added `motion::Transitions`: a per-window `RectAnimator` set driven by the
+  caller's clock. `sync` follows a frame of placements (animating from in-flight
+  or last-drawn geometry), `tick(dt)` advances and reports whether another frame
+  is needed, and windows that leave the frame are dropped.
+- Turning motion off or enabling reduced motion clears the set, so the renderer
+  draws real target geometry immediately.
+- Three new unit tests cover following placements, snapping when motion turns
+  off and retarget/forget bookkeeping. The nested renderer still does not drive
+  the set, so nothing animates at runtime yet.
+
 ## 2026-11-20 — Phase 7 Veyron Profiles
 
 - Added `profiles.rs`: `LayoutPatch`/`MotionPatch` with optional fields, so a

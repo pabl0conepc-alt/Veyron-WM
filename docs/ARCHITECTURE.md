@@ -157,6 +157,16 @@ and a reload clears it when the new configuration no longer defines that name.
 
 ### Motion
 
+`motion::Transitions` is the bridge between the target geometry in a
+`Snapshot` and what the renderer draws. `sync` is called once per frame with
+the placements: each window animates from its in-flight rectangle (or from the
+last rectangle it was drawn at) towards the new target, a retarget keeps the
+current position so a fast retile never jumps backwards, and windows that leave
+the frame are dropped. `tick(dt)` advances every track with the caller's clock
+and returns whether any animation is still running, which is exactly the signal
+the event loop needs to request another frame. With motion disabled or reduced
+the set stays empty and the real target geometry is drawn immediately.
+
 `motion.rs` provides a spring, easing curves and a rectangle animator that take
 `dt` from the caller. The compositor does not yet own a frame clock for
 animations, so the module is wired into configuration and validated but not into

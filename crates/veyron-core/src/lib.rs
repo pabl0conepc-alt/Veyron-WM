@@ -38,7 +38,7 @@ pub use config::{Behavior, Binding, Config, ConfigError, Modifiers};
 pub use geometry::{Point, Rect, Size};
 pub use groups::{GroupId, GroupSet, WindowGroup};
 pub use layout::{LayoutConfig, Placement, ScrollLayout};
-pub use motion::{Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig};
+pub use motion::{Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig, Transitions};
 pub use profiles::{LayoutPatch, MotionPatch, Profile, Profiles};
 pub use rules::{Glob, RuleSet, WindowPolicy, WindowRule};
 pub use session::{Session, WindowRecord};

@@ -134,6 +134,9 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Per-app floating geometry memory (`behavior.remember_geometry`).
 - [x] Animation core: critically tunable spring, easing curves, rectangle
   animator, duration and reduced-motion policy, all frame-driver agnostic.
+- [x] Per-window transition set (`Transitions`): follows a frame of placements,
+  redirects running transitions from their in-flight geometry, drops windows
+  that stop being drawn and reports when another frame is needed.
 - [x] Layout, gap and app-routing state exposed on the control protocol
   (version 3) and in `veyronctl state`.
 - [x] Veyron Snap: floating-window zones (halves, quadrants, thirds, center,
@@ -146,8 +149,9 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Smart focus: a bounded most-recently-used history behind `focus previous`.
 - [x] Veyron Recall: session capture/restore of workspaces, windows and floating
   geometry as validated TOML (`Session`), with a bounded window count.
-- [ ] Drive `RectAnimator` from the nested render loop and schedule frames while
-  a transition is running; needs nested runtime validation on the target GPU.
+- [ ] Drive `Transitions` from the nested render loop (replace placement
+  rectangles with in-flight ones and request a frame while it reports work);
+  needs nested runtime validation on the target GPU.
 - [ ] Apply per-window opacity/blur in the renderer (policy is already in the
   snapshot; no shader or scene-graph mutation is implemented).
 - [ ] Rounded corners, shadows, real GPU blur, workspace-transition effects and
@@ -166,7 +170,7 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (109 core tests, 5
+**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (112 core tests, 5
 window-feature integration tests, 9 multi-output integration tests, 8 profile
 integration tests, 8 IPC tests) covers every implemented item
 above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings`
