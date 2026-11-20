@@ -71,4 +71,5 @@
 - Restricted the control socket to owner read/write permissions (`0600`) after
   binding, including after stale-socket recovery.
 - Added a filesystem-mode regression test and documented the trust boundary.
-  CI validation for this change is pending.
+  GitHub Actions run `44651444722` passed format, Clippy, build and all
+  workspace tests for commit `17d8562`.

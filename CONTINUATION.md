@@ -41,6 +41,8 @@ Recent commits on the active branch:
 - `97491c2 feat: add bounded floating window resize actions`
 - `92e5b27 style: apply Rust formatting to resize actions`
 - `e632b52 test: cover floating resize maximum height`
+- `c97fb8d docs: record XWayland integration boundary`
+- `17d8562 security: restrict control socket permissions`
 
 The branch is pushed to `origin`. CI run
 [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
@@ -48,6 +50,9 @@ for `1fcd322` passed format, Clippy, build and tests. CI for `6bcc15a` also
 passed these checks. CI run
 [44650727970](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44650727970)
 also passed format, Clippy, build and tests for floating resize at `e632b52`.
+CI run
+[44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
+passed the same checks for owner-only socket permissions at `17d8562`.
 
 ## Project design and machine constraints
 
@@ -96,9 +101,10 @@ also passed format, Clippy, build and tests for floating resize at `e632b52`.
   designed.
 - **Phase 6 — Stabilization: IMPLEMENTING.** CI format/clippy/build/tests and
   headless integration exist. Still add a nested smoke where practical, target
-  hardware measurements, security/dependency/license review, compatibility and
-  unsupported-feature docs, and reproducible install/package path after runtime
-  validation.
+  hardware measurements, broader security/dependency/license review,
+  compatibility and unsupported-feature docs, and reproducible install/package
+  path after runtime validation. The IPC socket now has owner-only `0600`
+  permissions with a passing filesystem-mode regression test.
 
 Full acceptance language is in `ROADMAP.md`; keep its statuses truthful.
 Headless protocol tests do not count as visible nested-runtime validation.
