@@ -129,9 +129,13 @@ compositor draws and the geometry the user configured cannot disagree.
 `config.rules` is an ordered `RuleSet`. A rule matches `app_id` and/or `title`
 with a small glob language (`*`, `?`, no regex dependency) and contributes
 floating, opacity, blur, scratchpad, named workspace and layout policy. Later
-rules override earlier ones per field. The policy is applied when the window is
-created, before it is inserted into a workspace, so a rule can never briefly
-show a window in the wrong place.
+rules override earlier ones per field. A window created with a known identity
+(core tests, session restore) gets its policy before it is inserted into a
+workspace, so a rule can never briefly show it in the wrong place. In the
+compositor a toplevel exists before its client announces anything: the window is
+created unruled, and `Wm::set_window_identity` applies the rules once, on the
+first commit that carries an app id or title. Later title changes only refresh
+the stored metadata, so a retitled window is never re-routed or re-floated.
 
 Windows that live in the scratchpad are kept in `Wm::scratchpad` and detached
 from every workspace. Toggling the scratchpad shows them as cascading floating
@@ -145,7 +149,10 @@ of that application.
 `Option`, so applying a profile copies only what it sets and the rest keeps its
 current value. `Profiles` is a name-indexed set built at configuration time,
 rejecting duplicate names, names with whitespace (the selector is the single
-argument of `profile <name>`) and patches that would be invalid on their own.
+argument of `profile <name>`, so `next` and `prev` are reserved) and patches
+that would be invalid on their own. `profile next` / `profile prev` cycle the
+configured order and wrap around, starting at the first (or last) entry when no
+profile has been applied yet.
 
 `Wm::apply_profile` re-validates the patched layout and motion against the
 current configuration before committing anything, so an invalid combination
@@ -275,6 +282,10 @@ geometry is pushed to clients on the next sync.
 
 Because actions are text in the same grammar as keybindings, there is a single
 parser (`Action::parse`) and no second source of truth for "what can Veyron do".
+State reports carry the active workspace, layout, gap and scroll offset plus one
+entry per window with its geometry, floating/fullscreen state and the app id,
+title and rule opacity the core knows; identity comes from the client's first
+commit, so a signed-out or as-yet anonymous toplevel reports empty strings.
 
 Threading: IPC connections are handled on their own threads; requests are
 forwarded to the compositor loop through a `calloop` channel and replies return

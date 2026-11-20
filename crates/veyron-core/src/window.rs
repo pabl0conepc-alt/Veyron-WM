@@ -52,6 +52,10 @@ pub struct Window {
     /// the layout, never stored here, so the two can never disagree.
     floating_rect: Rect,
     last_tiled_rect: Rect,
+    /// Whether the configured rules have been applied. The compositor creates
+    /// a toplevel before its client announces an app id, so rules are applied
+    /// once when that identity arrives.
+    rules_applied: bool,
 }
 
 impl Window {
@@ -67,6 +71,7 @@ impl Window {
             scratchpad: false,
             floating_rect: Rect::ZERO,
             last_tiled_rect: Rect::ZERO,
+            rules_applied: false,
         }
     }
 
@@ -108,6 +113,14 @@ impl Window {
 
     pub fn last_tiled_rect(&self) -> Rect {
         self.last_tiled_rect
+    }
+
+    pub(crate) fn rules_applied(&self) -> bool {
+        self.rules_applied
+    }
+
+    pub(crate) fn set_rules_applied(&mut self, rules_applied: bool) {
+        self.rules_applied = rules_applied;
     }
 
     pub(crate) fn set_app_id(&mut self, app_id: String) {

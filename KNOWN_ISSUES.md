@@ -12,8 +12,9 @@
   available. The nested implementation has not yet been runtime-checked on the
   target EGL driver, and must fall back to full redraw if age is unavailable.
 - Layouts (master-stack, dwindle, auto), smart gaps, window rules, scratchpad
-  and per-app floating geometry memory exist in the core and are unit-tested,
-  but they have not been visually validated in a nested session.
+  and per-app floating geometry memory exist in the core and are unit-tested.
+  Rules now match the real app id and title the client announces on its first
+  commit, but they have not been visually validated in a nested session.
 - The animation core (spring/easing/rect animator, duration, reduced motion) is
   implemented and tested, but the nested renderer neither uses it nor schedules
   frames for transitions yet, so nothing animates today.
@@ -25,11 +26,12 @@
 - Touchpad gestures and an exposé-style workspace overview are not implemented:
   the input layer forwards no swipe/hold events and there is no overview grid.
 - Veyron Profiles are parsed, validated and applied by the core and accepted by
-  the action/IPC grammar, but the renderer still ignores the motion settings a
-  profile can change and no default chord is bound to `profile <name>`.
+  the action/IPC grammar; `super+p` cycles them with `profile next`. The
+  renderer still ignores the motion settings a profile can change.
 - Veyron Recall (`Session`) captures and restores state in the core only: no
   CLI/IPC command writes or reads a session file yet, and restoring relaunches
-  nothing by itself.
+  nothing by itself. Capture records the app id and title a client announces,
+  so a saved session identifies windows by application.
 - Multi-output policy exists in the core (runtime add/remove, per-output
   workspaces and viewports, monitor-directed focus and window/workspace moves)
   but the nested backend still creates a single output, so real hotplug and

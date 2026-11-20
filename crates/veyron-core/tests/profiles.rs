@@ -145,6 +145,32 @@ fn applying_a_profile_retiles_every_workspace_and_keeps_unset_fields() {
 }
 
 #[test]
+fn cycling_profiles_walks_the_configured_order_and_wraps() {
+    let mut wm = wm();
+    assert_eq!(wm.active_profile(), Some("coding"));
+
+    assert!(wm.dispatch(Action::ProfileNext).layout_changed);
+    assert_eq!(wm.active_profile(), Some("cinema"));
+    assert_eq!(wm.config().layout.gap, 24);
+
+    assert!(wm.dispatch(Action::ProfileNext).layout_changed);
+    assert_eq!(wm.active_profile(), Some("coding"), "cycling wraps around");
+
+    assert!(wm.dispatch(Action::ProfilePrev).layout_changed);
+    assert_eq!(wm.active_profile(), Some("cinema"));
+
+    assert!(wm.dispatch(Action::ProfilePrev).layout_changed);
+    assert_eq!(wm.active_profile(), Some("coding"));
+
+    let mut plain = Wm::new(Config::default(), "VEYRON-TEST", Size::new(1280, 800));
+    assert!(
+        !plain.dispatch(Action::ProfileNext).layout_changed,
+        "without configured profiles cycling is a no-op"
+    );
+    assert_eq!(plain.active_profile(), None);
+}
+
+#[test]
 fn unknown_profiles_change_nothing() {
     let mut wm = wm();
     let before = wm.config().layout.gap;

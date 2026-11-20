@@ -223,6 +223,7 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+shift+period", "move-output right"),
     ("super+ctrl+comma", "workspace-output left"),
     ("super+ctrl+period", "workspace-output right"),
+    ("super+p", "profile next"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];

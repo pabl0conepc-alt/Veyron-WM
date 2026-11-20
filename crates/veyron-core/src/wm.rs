@@ -17,6 +17,7 @@ use crate::{
     geometry::{Rect, Size},
     groups::{GroupId, GroupSet},
     layout::{default_floating_size, viewport_for, Placement, ScrollLayout},
+    rules::WindowPolicy,
     session::Session,
     snap::{PipCorner, SnapZone},
     tiling::{arrange, smart_gap, LayoutKind},
@@ -786,9 +787,19 @@ impl Wm {
     pub fn create_window_in(&mut self, request: NewWindow, workspace: Option<&str>) -> WindowId {
         self.next_id += 1;
         let id = WindowId(self.next_id);
-        let policy = self.config.rules.resolve(&request.app_id, &request.title);
+        // A toplevel exists before its client announces anything, so the
+        // compositor creates windows without an app id or title. Such a window
+        // is not matched here; `set_window_identity` applies the rules once the
+        // first commit delivers the client's identity.
+        let named = !request.app_id.is_empty() || !request.title.is_empty();
+        let policy = if named {
+            self.config.rules.resolve(&request.app_id, &request.title)
+        } else {
+            WindowPolicy::default()
+        };
 
         let mut window = Window::new(id, request);
+        window.set_rules_applied(named);
         window.set_opacity(policy.opacity);
         window.set_blur(policy.blur);
         let viewport = self.viewport();
@@ -876,16 +887,87 @@ impl Wm {
         true
     }
 
-    pub fn set_window_title(&mut self, id: WindowId, title: impl Into<String>) {
-        if let Some(window) = self.windows.get_mut(&id) {
-            window.set_title(title.into());
+    /// Update the metadata a client announced for one of its windows.
+    ///
+    /// A toplevel exists before its client sends `set_app_id`/`set_title`, so
+    /// the compositor learns the identity on the first commit and reports it
+    /// here. The first non-empty identity applies the configured rules exactly
+    /// once — opacity, blur, floating, scratchpad, workspace routing and
+    /// layout — while later title changes only refresh the metadata.
+    pub fn set_window_identity(&mut self, id: WindowId, app_id: &str, title: &str) -> Effects {
+        let mut effects = Effects::default();
+        let Some(window) = self.windows.get_mut(&id) else {
+            return effects;
+        };
+        window.set_app_id(app_id.to_string());
+        window.set_title(title.to_string());
+        if (app_id.is_empty() && title.is_empty()) || window.rules_applied() {
+            return effects;
         }
+        window.set_rules_applied(true);
+
+        let policy = self.config.rules.resolve(app_id, title);
+        window.set_opacity(policy.opacity);
+        window.set_blur(policy.blur);
+
+        if policy.scratchpad {
+            self.park_window(id);
+            effects.layout_changed = true;
+            effects.focus_changed = true;
+            return effects;
+        }
+
+        if policy.floating {
+            let fallback = self
+                .windows
+                .get(&id)
+                .map(Window::floating_rect)
+                .unwrap_or(Rect::ZERO);
+            let rect = self
+                .remembered
+                .get(app_id)
+                .copied()
+                .filter(|rect| !rect.is_empty())
+                .unwrap_or(fallback);
+            effects.layout_changed |= self.make_floating(id, rect);
+        }
+
+        if let Some(name) = policy.workspace.as_deref() {
+            effects.layout_changed |= self.route_window(id, name);
+        }
+
+        if let Some(kind) = policy.layout {
+            if let Some((output_index, workspace_index, _)) = self.locate(id) {
+                self.outputs[output_index].workspaces[workspace_index].layout_mode = kind;
+                effects.layout_changed = true;
+            }
+        }
+
+        if effects.layout_changed {
+            self.note_focus();
+        }
+        effects
     }
 
-    pub fn set_window_app_id(&mut self, id: WindowId, app_id: impl Into<String>) {
-        if let Some(window) = self.windows.get_mut(&id) {
-            window.set_app_id(app_id.into());
+    /// Move a window to the named workspace, creating it on demand. Returns
+    /// whether the window changed workspace.
+    fn route_window(&mut self, id: WindowId, name: &str) -> bool {
+        let Some((output_index, current, floating)) = self.locate(id) else {
+            return false;
+        };
+        let target = self.find_or_create_named_workspace(output_index, name);
+        if target == current {
+            return false;
         }
+        self.detach_window(id);
+        let workspace = &mut self.outputs[output_index].workspaces[target];
+        if floating {
+            workspace.floating.push(id);
+        } else {
+            workspace.layout.insert_window(id);
+        }
+        self.refresh_tiled_rects();
+        true
     }
 
     /// Focus a window, activating its workspace and output if necessary.
@@ -915,6 +997,29 @@ impl Wm {
         let changed = previous != self.focused_window();
         self.note_focus();
         changed
+    }
+
+    /// Apply the next (`delta > 0`) or previous configured profile, wrapping
+    /// around. Without an active profile this starts at the first (or last)
+    /// one, so the default chord works before any profile is applied by hand.
+    fn cycle_profile(&mut self, delta: isize) -> bool {
+        let profiles = self.config.profiles.as_slice();
+        if profiles.is_empty() {
+            return false;
+        }
+        let index = match self.active_profile.as_deref() {
+            Some(active) => {
+                let current = profiles
+                    .iter()
+                    .position(|profile| profile.name == active)
+                    .unwrap_or(0);
+                (current as isize + delta).rem_euclid(profiles.len() as isize) as usize
+            }
+            None if delta >= 0 => 0,
+            None => profiles.len() - 1,
+        };
+        let name = profiles[index].name.clone();
+        self.apply_profile(&name)
     }
 
     /// Dispatch an action, returning the side effects to carry out.
@@ -1032,6 +1137,8 @@ impl Wm {
             Action::Profile { name } => {
                 effects.layout_changed = self.apply_profile(&name);
             }
+            Action::ProfileNext => effects.layout_changed = self.cycle_profile(1),
+            Action::ProfilePrev => effects.layout_changed = self.cycle_profile(-1),
         }
 
         if effects.layout_changed {
@@ -2617,6 +2724,63 @@ mod tests {
         assert_eq!(wm.scratchpad_windows(), &[id]);
         assert!(wm.dispatch(Action::ToggleScratchpad).layout_changed);
         assert!(wm.snapshot().placement_of(id).is_some());
+    }
+
+    #[test]
+    fn late_window_identity_applies_rules_once() {
+        let mut wm = wm_with_rules(vec![WindowRule {
+            floating: Some(true),
+            opacity: Some(0.6),
+            ..rule("firefox")
+        }]);
+
+        // The compositor creates the window before its client announces itself.
+        let id = wm.create_window(NewWindow::default());
+        let window = wm.window(id).expect("window");
+        assert_eq!(window.app_id(), "");
+        assert!(!window.is_floating());
+        assert_eq!(window.opacity(), 1.0);
+
+        let effects = wm.set_window_identity(id, "firefox", "Start Page");
+        assert!(
+            effects.layout_changed,
+            "the floating rule reflows the window"
+        );
+        let window = wm.window(id).expect("window");
+        assert_eq!(window.app_id(), "firefox");
+        assert_eq!(window.title(), "Start Page");
+        assert!(window.is_floating());
+        assert_eq!(window.opacity(), 0.6);
+
+        let again = wm.set_window_identity(id, "firefox", "Later Title");
+        assert_eq!(again, Effects::default(), "rules are applied only once");
+        assert_eq!(wm.window(id).expect("window").title(), "Later Title");
+    }
+
+    #[test]
+    fn late_window_identity_routes_to_the_rule_workspace() {
+        let mut wm = wm_with_rules(vec![WindowRule {
+            workspace: Some("chat".into()),
+            layout: Some(LayoutKind::Dwindle),
+            ..rule("signal")
+        }]);
+
+        let id = wm.create_window(NewWindow::default());
+        wm.set_window_identity(id, "signal", "Signal");
+
+        let index = wm.outputs()[0]
+            .workspace_index_by_name("chat")
+            .expect("routing creates the workspace");
+        assert!(wm.outputs()[0].workspaces()[index]
+            .layout()
+            .order()
+            .contains(&id));
+        assert_eq!(
+            wm.outputs()[0].workspaces()[index].layout_mode(),
+            LayoutKind::Dwindle
+        );
+        assert_eq!(wm.snapshot().workspace, "1", "routing does not steal focus");
+        assert!(wm.snapshot().placements.is_empty());
     }
 
     #[test]

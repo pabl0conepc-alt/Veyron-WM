@@ -146,6 +146,9 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Smart focus: a bounded most-recently-used history behind `focus previous`.
 - [x] Veyron Recall: session capture/restore of workspaces, windows and floating
   geometry as validated TOML (`Session`), with a bounded window count.
+- [x] Window identity: the app id and title a client announces on its first
+  commit reach the core, applying the matching window rules exactly once;
+  `veyronctl state` reports identity and rule opacity per window.
 - [ ] Drive the animation core from the nested render loop (replace placement
   rectangles with in-flight ones and request a frame while it reports work);
   needs nested runtime validation on the target GPU.
@@ -162,18 +165,19 @@ Competitive window management features implemented as protocol-free policy in
   `workspace-output <direction>` moves the whole workspace, with floating
   geometry re-clamped to the destination and windows migrated on unplug.
 - [x] Veyron Profiles: named layout/motion preset patches with
-  `default_profile`, a `profile <name>` action and strict validation, so a preset
-  can never leave the layout configuration invalid.
+  `default_profile`, `profile <name>`, `profile next|prev` cycling (bound to
+  `super+p`) and strict validation, so a preset can never leave the layout
+  configuration invalid.
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test -p veyron-core -p veyron-ipc` (109 core tests, 5
-window-feature integration tests, 9 multi-output integration tests, 9 profile
-integration tests, 8 IPC tests) covers every implemented item above;
-`cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings` and
-`cargo fmt --all --check` pass. The compositor crate was not compiled in
-this environment (Wayland/XKB development libraries are missing), and no nested
-runtime visual check was performed.
+**Evidence:** `cargo test --workspace` (112 core tests, 5 window-feature
+integration tests, 9 multi-output integration tests, 10 profile integration
+tests, 8 IPC tests and 6 headless Wayland-client integration tests) covers every
+implemented item above; `cargo clippy --workspace --all-targets -- -D warnings`
+and `cargo fmt --all --check` pass. The compositor crate builds in this
+environment with locally extracted Wayland/XKB runtime libraries and its
+headless suite passes, but no nested GLES visual check was performed.
 
 **Acceptance:** layouts, rules, scratchpad and gap policy are visible and
 interactive in a nested session, animations are frame-scheduled and can be

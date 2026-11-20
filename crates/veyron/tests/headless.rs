@@ -54,6 +54,10 @@ struct Harness {
 
 impl Harness {
     fn start(test: &str, width: i32, height: i32) -> Self {
+        Self::start_with_config(test, width, height, "")
+    }
+
+    fn start_with_config(test: &str, width: i32, height: i32, config: &str) -> Self {
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -63,6 +67,9 @@ impl Harness {
         fs::create_dir_all(&dir).expect("create runtime dir");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
             .expect("restrict runtime dir permissions");
+        if !config.is_empty() {
+            fs::write(dir.join("veyron.toml"), config).expect("write the test configuration");
+        }
 
         let wayland_name = "wayland-veyron-it";
         let control_socket = dir.join("control.sock");
@@ -309,11 +316,15 @@ impl Client {
     /// Create a toplevel, wait for its configure, attach a real SHM buffer and
     /// commit it — the same sequence any toolkit performs.
     fn create_toplevel(&mut self, title: &str) -> Toplevel {
+        self.create_toplevel_with_app(title, "veyron-integration-test")
+    }
+
+    fn create_toplevel_with_app(&mut self, title: &str, app_id: &str) -> Toplevel {
         let surface = self.compositor.create_surface(&self.qh, ());
         let xdg_surface = self.wm_base.get_xdg_surface(&surface, &self.qh, ());
         let toplevel = xdg_surface.get_toplevel(&self.qh, ());
         toplevel.set_title(title.to_string());
-        toplevel.set_app_id("veyron-integration-test".to_string());
+        toplevel.set_app_id(app_id.to_string());
         surface.commit();
 
         let configure = self.wait_for_configure();
@@ -615,6 +626,33 @@ fn headless_maps_toplevel_with_configure_matching_layout() {
         "destroying the surface unmaps the window"
     );
     assert_eq!(state.focused, None, "focus is cleared with the last window");
+}
+
+#[test]
+fn window_rules_follow_the_client_identity() {
+    let harness = Harness::start_with_config(
+        "rules",
+        1280,
+        800,
+        r#"
+        [[rules]]
+        app_id = "veyron-integration-test"
+        floating = true
+        opacity = 0.5
+        "#,
+    );
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _toplevel = client.create_toplevel("identity");
+
+    let state = harness.state();
+    let window = state.windows.first().expect("the window is managed");
+    assert_eq!(
+        window.app_id, "veyron-integration-test",
+        "the app id the client announced reaches the core"
+    );
+    assert_eq!(window.title, "identity");
+    assert_eq!(window.opacity, 0.5, "the matching rule sets the opacity");
+    assert!(window.floating, "the matching rule floats the window");
 }
 
 #[test]

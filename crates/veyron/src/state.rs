@@ -34,8 +34,8 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            with_surface_tree_downward, CompositorClientState, CompositorHandler, CompositorState,
-            SurfaceAttributes, TraversalAction,
+            with_states, with_surface_tree_downward, CompositorClientState, CompositorHandler,
+            CompositorState, SurfaceAttributes, TraversalAction,
         },
         output::OutputManagerState,
         selection::{
@@ -46,6 +46,7 @@ use smithay::{
         },
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+            XdgToplevelSurfaceData,
         },
         shm::{ShmHandler, ShmState},
     },
@@ -458,21 +459,57 @@ impl Veyron {
             windows: snapshot
                 .placements
                 .iter()
-                .map(|placement| WindowReport {
-                    id: placement.window.0,
-                    rect: [
-                        placement.rect.x,
-                        placement.rect.y,
-                        placement.rect.w,
-                        placement.rect.h,
-                    ],
-                    floating: placement.floating,
-                    fullscreen: placement.fullscreen,
+                .map(|placement| {
+                    let window = self.wm.window(placement.window);
+                    WindowReport {
+                        id: placement.window.0,
+                        rect: [
+                            placement.rect.x,
+                            placement.rect.y,
+                            placement.rect.w,
+                            placement.rect.h,
+                        ],
+                        floating: placement.floating,
+                        fullscreen: placement.fullscreen,
+                        app_id: window
+                            .map(|window| window.app_id().to_string())
+                            .unwrap_or_default(),
+                        title: window
+                            .map(|window| window.title().to_string())
+                            .unwrap_or_default(),
+                        opacity: placement.opacity,
+                    }
                 })
                 .collect(),
             focused: snapshot.focused.map(|id| id.0),
             scroll: snapshot.scroll,
         }
+    }
+
+    /// Report the identity a client announced for its toplevel to the core, so
+    /// window rules, `veyronctl state` and Veyron Recall see the real app id
+    /// and title. Rules are applied by the core on the first announcement.
+    fn sync_identity(&mut self, id: WindowId) {
+        let Some(toplevel) = self.windows.get(&id).and_then(Window::toplevel) else {
+            return;
+        };
+        let (app_id, title) = with_states(toplevel.wl_surface(), |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|attributes| {
+                    let attributes = attributes
+                        .lock()
+                        .expect("toplevel attributes are not poisoned");
+                    (
+                        attributes.app_id.clone().unwrap_or_default(),
+                        attributes.title.clone().unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default()
+        });
+        let effects = self.wm.set_window_identity(id, &app_id, &title);
+        self.apply_effects(effects);
     }
 
     fn reload_config(&mut self) {
@@ -721,14 +758,20 @@ impl CompositorHandler for Veyron {
         on_commit_buffer_handler::<Self>(surface);
         self.popup_manager.commit(surface);
 
-        for window in self.windows.values() {
+        let mut committed = None;
+        for (id, window) in &self.windows {
             if window
                 .toplevel()
                 .map(|toplevel| toplevel.wl_surface() == surface)
                 .unwrap_or(false)
             {
                 window.on_commit();
+                committed = Some(*id);
             }
+        }
+
+        if let Some(id) = committed {
+            self.sync_identity(id);
         }
 
         self.needs_redraw = true;

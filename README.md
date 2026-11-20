@@ -49,14 +49,19 @@ What works:
   `Wm::snapshots()` returns one frame description per output.
 - Veyron Profiles: named presets that patch only the layout and motion fields
   they set, applied at startup with `default_profile` and at runtime with
-  `profile <name>`; a profile that would leave the configuration invalid is
-  refused instead of partially applied.
+  `profile <name>`; `profile next` / `profile prev` cycle them in configuration
+  order (bound to `super+p` by default). A profile that would leave the
+  configuration invalid is refused instead of partially applied.
 - Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
-  (workspaces, windows, floating geometry) to TOML and rebuild it.
+  (workspaces, windows with their announced app id and title, floating geometry)
+  to TOML and rebuild it.
+- Window identity: the app id and title a client announces on its first commit
+  reach the core, so rules, opacity, Recall and `veyronctl state` use the real
+  metadata instead of empty strings.
 - Animation foundation: a `spring` and eased `RectAnimator` that integrate a
   `dt` supplied by the caller, plus duration and reduced-motion policy. The
   renderer does not animate frames yet.
-- Deterministic, unit-tested state machine (109 core tests plus integration
+- Deterministic, unit-tested state machine (112 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -79,8 +84,9 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
   animated transitions.
 - Popup grabs, layer-shell (bars/panels), screencopy, idle and input-method
   protocols are not implemented.
-- Window titles/app ids are not exposed to the core yet, so `veyronctl state`
-  identifies windows by id and geometry.
+- Window rules, opacity and Veyron Recall see the identity a client announces
+  on its first commit, but the renderer still draws every window opaque and
+  unblurred.
 
 ## Building
 
@@ -161,6 +167,7 @@ Default keybindings (all configurable):
 | `super+f` | toggle fullscreen |
 | `super+space` | toggle floating |
 | `super+shift+l` | cycle tiling layout (scroll → master-stack → dwindle → auto) |
+| `super+p` | apply the next profile (cycles through `[[profiles]]`) |
 | `super+shift+s` | send the focused window to / recall it from the scratchpad |
 | `super+1` … `super+5` | switch workspace |
 | `super+bracketright` / `super+bracketleft` | next / previous workspace |
@@ -259,9 +266,10 @@ without a match key is rejected rather than applied to every window.
 Profiles accept `name` (required, no whitespace) and `[profiles.layout]` /
 `[profiles.motion]` patches. Applying a profile reflows
 every workspace on every output, so a margin change is visible immediately;
-`mode` also selects that layout for all workspaces. Duplicate names, an unknown
-`default_profile` and patches that violate the layout ratios are configuration
-errors.
+`mode` also selects that layout for all workspaces. `profile next` / `profile
+prev` apply the next or previous entry in configuration order, so `next` and
+`prev` are reserved profile names. Duplicate names, an unknown `default_profile`
+and patches that violate the layout ratios are configuration errors.
 
 Binding values use the same action grammar as the control protocol, so anything
 `veyronctl` can do can be bound to a key. Besides focus/move/workspace actions
@@ -304,9 +312,10 @@ Any other program can use the socket directly:
 {"response":"ok"}
 ```
 
-Protocol version 3 includes the signed 2D workspace coordinate plus the resolved
-layout name and effective gap in state responses. Requests: `action`, `state`,
-`reload`, `quit`, `ping`. Messages are capped at 64 KiB; the socket is
+Protocol version 3 includes the signed 2D workspace coordinate, the resolved
+layout name, the effective gap and, per window, the announced app id, title,
+rule opacity, geometry and state. Requests: `action`, `state`, `reload`,
+`quit`, `ping`. Messages are capped at 64 KiB; the socket is
 owner-only (`0600`), the server never deletes a non-socket file, and a crashed
 compositor's stale socket is safely replaced.
 

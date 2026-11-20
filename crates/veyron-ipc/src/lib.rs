@@ -94,7 +94,7 @@ pub struct StateReport {
 }
 
 /// One window in a [`StateReport`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowReport {
     /// Window id (same ids the compositor logs and the layout uses).
     pub id: u64,
@@ -104,6 +104,12 @@ pub struct WindowReport {
     pub floating: bool,
     /// Whether the window is fullscreen.
     pub fullscreen: bool,
+    /// App id the client announced (`""` until it does).
+    pub app_id: String,
+    /// Title the client announced (`""` until it does).
+    pub title: String,
+    /// Opacity requested by the window rules (`1.0` when none match).
+    pub opacity: f32,
 }
 
 /// IPC failure.
@@ -379,6 +385,9 @@ mod tests {
                 rect: [10, 20, 30, 40],
                 floating: false,
                 fullscreen: true,
+                app_id: "foot".into(),
+                title: "Terminal".into(),
+                opacity: 0.8,
             }],
             focused: Some(7),
             scroll: 12.5,

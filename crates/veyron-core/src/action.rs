@@ -122,6 +122,10 @@ pub enum Action {
     WorkspaceToOutput { direction: Direction },
     /// Apply a named layout/motion profile.
     Profile { name: String },
+    /// Apply the next configured profile, wrapping around at the end.
+    ProfileNext,
+    /// Apply the previous configured profile, wrapping around at the start.
+    ProfilePrev,
     /// Select the tiling layout of the active workspace.
     Layout { kind: LayoutKind },
     /// Cycle the active workspace to the next tiling layout.
@@ -268,6 +272,14 @@ impl Action {
                 direction: parse_direction(rest)?,
             }),
             "profile" | "apply-profile" => {
+                // `next` and `prev` cycle the configured profiles in order, like
+                // `layout next`; a profile cannot use those names.
+                if rest.eq_ignore_ascii_case("next") {
+                    return Ok(Action::ProfileNext);
+                }
+                if rest.eq_ignore_ascii_case("prev") {
+                    return Ok(Action::ProfilePrev);
+                }
                 if rest.is_empty() {
                     return Err(ActionParseError::new("profile needs a name"));
                 }
@@ -373,6 +385,8 @@ impl fmt::Display for Action {
                 write!(f, "workspace-output {direction}")
             }
             Action::Profile { name } => write!(f, "profile {name}"),
+            Action::ProfileNext => f.write_str("profile next"),
+            Action::ProfilePrev => f.write_str("profile prev"),
             Action::Layout { kind } => write!(f, "layout {kind}"),
             Action::LayoutNext => f.write_str("layout next"),
             Action::ToggleScratchpad => f.write_str("scratchpad"),
@@ -553,6 +567,19 @@ mod tests {
         );
         assert!(Action::parse("profile").is_err());
         assert!(Action::parse("profile two names").is_err());
+    }
+
+    #[test]
+    fn profile_cycling_is_its_own_action() {
+        assert_eq!(Action::parse("profile next"), Ok(Action::ProfileNext));
+        assert_eq!(Action::parse("profile prev"), Ok(Action::ProfilePrev));
+        assert_eq!(Action::ProfileNext.to_string(), "profile next");
+        assert_eq!(Action::ProfilePrev.to_string(), "profile prev");
+        assert_eq!(
+            Action::parse("profile next").expect("parses").to_string(),
+            "profile next",
+            "the text form round-trips through the parser"
+        );
     }
 
     #[test]

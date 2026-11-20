@@ -1,5 +1,27 @@
 # Development log
 
+## 2026-11-20 — Window identity and profile cycling
+
+- The compositor now forwards the app id and title a client announces on its
+  first commit. `Wm::set_window_identity` stores them and applies the matching
+  window rules exactly once (opacity, blur, floating, scratchpad, workspace
+  routing, layout), so rules stop being inert in a real session.
+- `veyronctl state` (and the JSON report) now includes each window's app id,
+  title and rule opacity; `veyronctl` prints the identity above the title.
+- Added `profile next` / `profile prev` plus a default `super+p` chord, which
+  closes the gap where no chord could select a profile whose name the user has
+  not bound by hand. `next` and `prev` are reserved profile names.
+- Kept the control protocol at version 3: the new state fields are additive, so
+  existing clients keep working.
+- Verified in this environment: `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets --locked -- -D warnings` and
+  `cargo test --workspace --locked` (112 core tests, 5 window-feature, 9
+  multi-output, 10 profile, 1 README-config, 8 IPC and 6 headless Wayland-client
+  integration tests). The compositor crate now links and runs here because the
+  Wayland and XKB runtime libraries were extracted into a local prefix; the
+  earlier note that it could not be compiled is superseded. No GPU/nested GLES
+  session or visual check was performed.
+
 ## 2026-11-20 — Layouts, rules, scratchpad and motion core
 
 - Added `tiling`, `motion` and `rules` modules to `veyron-core` and wired them

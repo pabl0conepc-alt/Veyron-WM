@@ -1,6 +1,6 @@
 # Project status
 
-Last reviewed: 2026-11-19.
+Last reviewed: 2026-11-20.
 
 ## Current state
 
@@ -26,12 +26,20 @@ Last reviewed: 2026-11-19.
   passed all checks for `17d8562`.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
-  core, multi-output policy and named layout/motion profiles are implemented and
-  unit-tested (109 core tests plus window-feature, multi-output and profile
-  integration tests) with control-protocol version 3. Renderer wiring for
-  animation/opacity/blur, backend multi-output hotplug and a nested runtime
-  visual check remain open. Gesture and overview policy modules were removed
-  before any consumer existed. See [ROADMAP.md](ROADMAP.md).
+  core, multi-output policy, named layout/motion profiles with `profile
+  next|prev` cycling, and window identity wiring are implemented and tested (112
+  core tests plus window-feature, multi-output, profile and headless integration
+  tests) with control-protocol version 3. The compositor forwards the app id and
+  title a client announces on its first commit, so rules and `veyronctl state`
+  use real metadata; the renderer still ignores opacity/blur, the backend still
+  creates one output, and no nested runtime visual check exists. Gesture and
+  overview policy modules were removed before any consumer existed. See
+  [ROADMAP.md](ROADMAP.md).
+- `cargo test --workspace` now runs in this environment, including the 6 headless
+tests that drive the real compositor with genuine Wayland clients, using Wayland
+and XKB runtime libraries extracted to a local prefix (no system packages were
+installed). That is protocol-level evidence only: no GPU presentation, nested
+GLES session or target-hardware measurement was performed.
 - Phase 6 Nix packaging is currently uncommitted: `flake.nix`, `flake.lock`, a
   README usage section and a GitHub Actions package job are in the worktree.
   Local flake evaluation returned `veyron-wm-0.1.0`; no complete local build

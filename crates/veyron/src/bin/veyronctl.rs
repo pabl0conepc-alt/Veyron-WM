@@ -109,14 +109,19 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "tiled"
                     };
                     println!(
-                        "{marker} #{} {:<10} x={} y={} w={} h={}",
+                        "{marker} #{} {:<10} app={:<24} x={} y={} w={} h={} opacity={:.2}",
                         window.id,
                         kind,
+                        window.app_id,
                         window.rect[0],
                         window.rect[1],
                         window.rect[2],
-                        window.rect[3]
+                        window.rect[3],
+                        window.opacity
                     );
+                    if !window.title.is_empty() {
+                        println!("      title: {}", window.title);
+                    }
                 }
             }
             Ok(())
