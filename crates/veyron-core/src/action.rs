@@ -120,6 +120,8 @@ pub enum Action {
     /// Move the active workspace, windows included, to the output in that
     /// direction and follow it there.
     WorkspaceToOutput { direction: Direction },
+    /// Apply a named layout/motion profile.
+    Profile { name: String },
     /// Select the tiling layout of the active workspace.
     Layout { kind: LayoutKind },
     /// Cycle the active workspace to the next tiling layout.
@@ -265,6 +267,19 @@ impl Action {
             "workspace-output" | "move-workspace-to-output" => Ok(Action::WorkspaceToOutput {
                 direction: parse_direction(rest)?,
             }),
+            "profile" | "apply-profile" => {
+                if rest.is_empty() {
+                    return Err(ActionParseError::new("profile needs a name"));
+                }
+                if rest.split_whitespace().count() != 1 {
+                    return Err(ActionParseError::new(
+                        "profile takes exactly one name without whitespace",
+                    ));
+                }
+                Ok(Action::Profile {
+                    name: rest.to_string(),
+                })
+            }
             "layout" | "set-layout" => {
                 if rest.eq_ignore_ascii_case("next") {
                     return Ok(Action::LayoutNext);
@@ -357,6 +372,7 @@ impl fmt::Display for Action {
             Action::WorkspaceToOutput { direction } => {
                 write!(f, "workspace-output {direction}")
             }
+            Action::Profile { name } => write!(f, "profile {name}"),
             Action::Layout { kind } => write!(f, "layout {kind}"),
             Action::LayoutNext => f.write_str("layout next"),
             Action::ToggleScratchpad => f.write_str("scratchpad"),
@@ -425,6 +441,9 @@ mod tests {
             },
             Action::WorkspaceToOutput {
                 direction: Direction::Up,
+            },
+            Action::Profile {
+                name: "coding".into(),
             },
             Action::Layout {
                 kind: LayoutKind::Dwindle,
@@ -522,6 +541,18 @@ mod tests {
         );
         assert!(Action::parse("output").is_err());
         assert!(Action::parse("output sideways").is_err());
+    }
+
+    #[test]
+    fn profile_actions_need_exactly_one_name() {
+        assert_eq!(
+            Action::parse("profile media"),
+            Ok(Action::Profile {
+                name: "media".into()
+            })
+        );
+        assert!(Action::parse("profile").is_err());
+        assert!(Action::parse("profile two names").is_err());
     }
 
     #[test]

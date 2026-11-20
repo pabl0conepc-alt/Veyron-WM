@@ -146,3 +146,20 @@
 - Verified locally: 108 core tests, 5 window-feature, 9 multi-output and 8 IPC
   tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
   backend still binds one output, so hotplug remains unverified at runtime.
+
+## 2026-11-20 — Phase 7 Veyron Profiles
+
+- Added `profiles.rs`: `LayoutPatch`/`MotionPatch` with optional fields, so a
+  profile only overrides what it lists, plus `Profile`/`Profiles` with name,
+  duplicate and whitespace validation.
+- `Config` gained `[[profiles]]` and root `default_profile`; an unknown default
+  profile is a configuration error and both round-trip through `--print-config`.
+- `Wm::apply_profile` re-validates the patched layout and motion against the
+  current configuration, reflows every workspace on every output, selects the
+  patch's layout when it sets `mode`, and records `active_profile`; `Wm::new`
+  applies `default_profile`.
+- New action `profile <name>` (also `apply-profile`), usable from bindings and
+  IPC without a protocol change.
+- Verified locally: 109 core tests, 5 window-feature, 9 multi-output, 8 profile
+  and 8 IPC tests pass; Clippy with warnings denied and `cargo fmt --check` are
+  clean. The renderer still ignores motion settings changed by a profile.

@@ -139,6 +139,22 @@ windows on the active workspace, or detaches them again. `behavior.remember_geom
 stores the last floating rectangle per app id and restores it on the next window
 of that application.
 
+### Profiles
+
+`profiles::Profile` holds a `LayoutPatch` and a `MotionPatch`: every field is an
+`Option`, so applying a profile copies only what it sets and the rest keeps its
+current value. `Profiles` is a name-indexed set built at configuration time,
+rejecting duplicate names, names with whitespace (the selector is the single
+argument of `profile <name>`) and patches that would be invalid on their own.
+
+`Wm::apply_profile` re-validates the patched layout and motion against the
+current configuration before committing anything, so an invalid combination
+returns `false` and leaves the session untouched. On success it re-applies the
+layout configuration to every workspace of every output, sets `layout.mode` on
+all of them when the patch asks for it, re-clamps floating windows for the new
+outer margin and records `active_profile`. `Wm::new` applies `default_profile`,
+and a reload clears it when the new configuration no longer defines that name.
+
 ### Motion
 
 `motion.rs` provides a spring, easing curves and a rectangle animator that take

@@ -22,6 +22,9 @@
 - Snap zones, picture-in-picture, window groups and smart focus are implemented
   and tested in the core, and reach the compositor through the snapshot, but
   they have not been exercised in a nested session.
+- Veyron Profiles are parsed, validated and applied by the core and accepted by
+  the action/IPC grammar, but the renderer still ignores the motion settings a
+  profile can change and no default chord is bound to `profile <name>`.
 - Veyron Recall (`Session`) captures and restores state in the core only: no
   CLI/IPC command writes or reads a session file yet, and restoring relaunches
   nothing by itself.

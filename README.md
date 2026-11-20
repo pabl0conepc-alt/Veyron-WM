@@ -47,11 +47,15 @@ What works:
   `move-output <direction>` sends the focused window there and
   `workspace-output <direction>` takes the whole active workspace along.
   `Wm::snapshots()` returns one frame description per output.
+- Veyron Profiles: named presets that patch only the layout and motion fields
+  they set, applied at startup with `default_profile` and at runtime with
+  `profile <name>`; a profile that would leave the configuration invalid is
+  refused instead of partially applied.
 - Veyron Recall: `Wm::capture_session` / `restore_session` serialise the session
   (workspaces, windows, floating geometry) to TOML and rebuild it.
 - Animation foundation (`spring`/eased `RectAnimator`, reduced motion) used by
   the core; the renderer does not schedule frames for it yet.
-- Deterministic, unit-tested state machine (108 core tests plus integration
+- Deterministic, unit-tested state machine (109 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -180,6 +184,8 @@ target/release/veyron --print-config > ~/.config/veyron/veyron.toml
 ```toml
 # Commands started once at launch (root key, before any table):
 startup = ["waybar"]
+# Profile applied at startup; must exist in [[profiles]] below.
+default_profile = "coding"
 
 [layout]
 gap = 8                      # pixels between columns and stacked windows
@@ -219,6 +225,26 @@ app_id = "signal"
 workspace = "chat"
 layout = "dwindle"
 
+# Named presets: only the fields listed here are overridden, everything else
+# keeps its current value. `profile <name>` applies one at runtime.
+[[profiles]]
+name = "coding"
+description = "dense master-stack while editing"
+[profiles.layout]
+gap = 4
+mode = "master-stack"
+smart_gaps = true
+[profiles.motion]
+enabled = true
+duration_ms = 120
+
+[[profiles]]
+name = "cinema"
+[profiles.layout]
+gap = 24
+outer_margin = 32
+mode = "scroll"
+
 [bindings]
 "super+return" = "spawn foot"
 "super+left" = "focus left"
@@ -229,6 +255,13 @@ layout = "dwindle"
 Rules accept `app_id` and/or `title` globs (`*`, `?`) and may set `floating`,
 `opacity` (`0.0..=1.0`), `blur`, `scratchpad`, `workspace` and `layout`. A rule
 without a match key is rejected rather than applied to every window.
+
+Profiles accept `name` (required, no whitespace), an optional `description`, and
+`[profiles.layout]` / `[profiles.motion]` patches. Applying a profile reflows
+every workspace on every output, so a margin change is visible immediately;
+`mode` also selects that layout for all workspaces. Duplicate names, an unknown
+`default_profile` and patches that violate the layout ratios are configuration
+errors.
 
 Binding values use the same action grammar as the control protocol, so anything
 `veyronctl` can do can be bound to a key. Besides focus/move/workspace actions
@@ -257,6 +290,7 @@ veyronctl resize width 32
 veyronctl move-floating right 32
 veyronctl layout master-stack
 veyronctl layout next
+veyronctl profile coding
 veyronctl scratchpad
 veyronctl spawn "foot --class veyron"
 veyronctl reload

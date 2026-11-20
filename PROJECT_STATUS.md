@@ -26,8 +26,9 @@ Last reviewed: 2026-11-19.
   passed all checks for `17d8562`.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
-  core and multi-output policy are implemented and unit-tested (108 core tests
-  plus window-feature and multi-output integration tests) with control-protocol
+  core, multi-output policy and named layout/motion profiles are implemented and
+  unit-tested (109 core tests plus window-feature, multi-output and profile
+  integration tests) with control-protocol
   version 3. Renderer wiring for animation/opacity/blur, backend multi-output
   hotplug and a nested runtime visual check remain open. See
   [ROADMAP.md](ROADMAP.md).

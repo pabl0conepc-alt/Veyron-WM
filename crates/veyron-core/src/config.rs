@@ -12,6 +12,7 @@ use crate::{
     action::{Action, ActionParseError},
     layout::LayoutConfig,
     motion::MotionConfig,
+    profiles::{Profile, Profiles},
     rules::{RuleSet, WindowRule},
 };
 
@@ -159,6 +160,10 @@ pub struct Config {
     pub bindings: Vec<Binding>,
     /// Commands started once when the compositor comes up.
     pub startup: Vec<String>,
+    /// Named layout/motion presets usable with `profile <name>`.
+    pub profiles: Profiles,
+    /// Profile applied when the compositor starts.
+    pub default_profile: Option<String>,
 }
 
 /// Default chords. Kept in one place so the documentation, the default config
@@ -232,6 +237,8 @@ impl Default for Config {
             rules: RuleSet::default(),
             bindings: Vec::new(),
             startup: Vec::new(),
+            profiles: Profiles::default(),
+            default_profile: None,
         };
         for (chord, action) in DEFAULT_BINDINGS {
             let binding = Binding::parse(
@@ -290,6 +297,17 @@ impl Config {
             None => bindings = Config::default().bindings,
         }
 
+        let profiles =
+            Profiles::new(raw.profiles.unwrap_or_default()).map_err(ConfigError::Invalid)?;
+        let default_profile = raw.default_profile;
+        if let Some(name) = &default_profile {
+            if profiles.get(name).is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "default_profile '{name}' is not defined in [[profiles]]"
+                )));
+            }
+        }
+
         Ok(Config {
             layout,
             appearance,
@@ -298,6 +316,8 @@ impl Config {
             rules,
             bindings,
             startup: raw.startup.unwrap_or_default(),
+            profiles,
+            default_profile,
         })
     }
 
@@ -351,9 +371,11 @@ impl Config {
             appearance: &'a Appearance,
             motion: &'a MotionConfig,
             behavior: &'a Behavior,
+            default_profile: &'a Option<String>,
             rules: &'a [WindowRule],
             bindings: BTreeMap<String, String>,
             startup: &'a Vec<String>,
+            profiles: &'a [Profile],
         }
 
         let serializable = Serializable {
@@ -361,9 +383,11 @@ impl Config {
             appearance: &self.appearance,
             motion: &self.motion,
             behavior: &self.behavior,
+            default_profile: &self.default_profile,
             rules: self.rules.rules(),
             bindings,
             startup: &self.startup,
+            profiles: self.profiles.as_slice(),
         };
         Ok(toml::to_string_pretty(&serializable)?)
     }
@@ -394,6 +418,8 @@ struct RawConfig {
     rules: Option<Vec<WindowRule>>,
     bindings: Option<BTreeMap<String, String>>,
     startup: Option<Vec<String>>,
+    profiles: Option<Vec<Profile>>,
+    default_profile: Option<String>,
 }
 
 /// Configuration failures.

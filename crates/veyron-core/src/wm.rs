@@ -17,6 +17,7 @@ use crate::{
     geometry::{Rect, Size},
     groups::{GroupId, GroupSet},
     layout::{default_floating_size, viewport_for, Placement, ScrollLayout},
+    profiles::Profiles,
     session::Session,
     snap::{PipCorner, SnapZone},
     tiling::{arrange, smart_gap, LayoutKind},
@@ -276,6 +277,8 @@ pub struct Wm {
     /// Picture-in-picture corner and the geometry restored when it is turned
     /// off, per window.
     pip: HashMap<WindowId, (PipCorner, Rect)>,
+    /// Profile applied most recently, if any.
+    active_profile: Option<String>,
 }
 
 impl Wm {
@@ -290,7 +293,7 @@ impl Wm {
             viewport,
         );
         let workspace_indices = HashMap::from([(WorkspacePosition::default(), 0)]);
-        Self {
+        let mut wm = Self {
             config,
             windows: HashMap::new(),
             outputs: vec![OutputState {
@@ -308,7 +311,12 @@ impl Wm {
             groups: GroupSet::new(),
             focus_history: Vec::new(),
             pip: HashMap::new(),
+            active_profile: None,
+        };
+        if let Some(name) = wm.config.default_profile.clone() {
+            wm.apply_profile(&name);
         }
+        wm
     }
 
     pub fn config(&self) -> &Config {
@@ -325,8 +333,67 @@ impl Wm {
                 workspace.layout.set_viewport(viewport);
             }
         }
+        if self
+            .active_profile
+            .as_deref()
+            .is_some_and(|name| self.config.profiles.get(name).is_none())
+        {
+            self.active_profile = None;
+        }
         self.clamp_floating_windows();
         self.refresh_tiled_rects();
+    }
+
+    /// Profiles declared by the current configuration.
+    pub fn profiles(&self) -> &Profiles {
+        &self.config.profiles
+    }
+
+    /// Name of the profile applied most recently, if any.
+    pub fn active_profile(&self) -> Option<&str> {
+        self.active_profile.as_deref()
+    }
+
+    /// Apply a named profile: its layout patch replaces the matching layout
+    /// fields, its motion patch the matching motion fields, and a `mode` in the
+    /// patch also selects that layout for every workspace.
+    ///
+    /// Returns `false` for an unknown name or a patch that would leave the
+    /// layout or motion configuration invalid; nothing changes in that case.
+    pub fn apply_profile(&mut self, name: &str) -> bool {
+        let Some(profile) = self.config.profiles.get(name).cloned() else {
+            return false;
+        };
+
+        let mut layout = self.config.layout.clone();
+        profile.layout.apply(&mut layout);
+        if layout.validate().is_err() {
+            return false;
+        }
+        let mut motion = self.config.motion;
+        profile.motion.apply(&mut motion);
+        if motion.validate().is_err() {
+            return false;
+        }
+
+        self.config.layout = layout;
+        self.config.motion = motion;
+        self.active_profile = Some(name.to_string());
+
+        for index in 0..self.outputs.len() {
+            let viewport = self.viewport_of(index);
+            for workspace in &mut self.outputs[index].workspaces {
+                workspace.layout.set_config(self.config.layout.clone());
+                workspace.layout.set_viewport(viewport);
+                if let Some(mode) = profile.layout.mode {
+                    workspace.layout_mode = mode;
+                }
+            }
+        }
+
+        self.clamp_floating_windows();
+        self.refresh_tiled_rects();
+        true
     }
 
     pub fn outputs(&self) -> &[OutputState] {
@@ -967,6 +1034,9 @@ impl Wm {
                 effects.workspace_changed = self.move_active_workspace_in_direction(direction);
                 effects.layout_changed = effects.workspace_changed;
                 effects.focus_changed = effects.workspace_changed;
+            }
+            Action::Profile { name } => {
+                effects.layout_changed = self.apply_profile(&name);
             }
         }
 
