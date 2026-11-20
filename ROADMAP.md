@@ -167,12 +167,18 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Veyron Profiles: named layout/motion preset patches with
   `default_profile`, a `profile <name>` action and strict validation, so a preset
   can never leave the layout configuration invalid.
+- [x] Workspace overview policy: a paged grid of an output's workspaces ordered
+  by sparse coordinate, with window counts, hit-testing and page navigation for
+  an exposé-style view.
+- [ ] Draw the overview in the nested renderer (thumbnails of live surfaces) and
+  add the binding/action that opens and closes it.
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
 **Evidence:** `cargo test -p veyron-core -p veyron-ipc` (112 core tests, 5
 window-feature integration tests, 9 multi-output integration tests, 8 profile
-integration tests, 8 IPC tests) covers every implemented item
+integration tests, 6 overview integration tests, 8 IPC tests) covers every
+implemented item
 above; `cargo clippy -p veyron-core -p veyron-ipc --all-targets -- -D warnings`
 and `cargo fmt --all --check` pass. The compositor crate was not compiled in
 this environment (Wayland/XKB development libraries are missing), and no nested

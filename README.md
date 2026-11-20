@@ -47,6 +47,9 @@ What works:
   `move-output <direction>` sends the focused window there and
   `workspace-output <direction>` takes the whole active workspace along.
   `Wm::snapshots()` returns one frame description per output.
+- Workspace overview policy: `Overview` lays every workspace of an output out
+  in a paged grid ordered by sparse coordinate, reports window counts and maps
+  a click back to a workspace. The compositor still has to draw it.
 - Veyron Profiles: named presets that patch only the layout and motion fields
   they set, applied at startup with `default_profile` and at runtime with
   `profile <name>`; a profile that would leave the configuration invalid is

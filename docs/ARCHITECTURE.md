@@ -155,6 +155,17 @@ all of them when the patch asks for it, re-clamps floating windows for the new
 outer margin and records `active_profile`. `Wm::new` applies `default_profile`,
 and a reload clears it when the new configuration no longer defines that name.
 
+### Overview
+
+`overview::Overview::build` produces the geometry of an exposé-style grid for
+one output: workspaces are sorted by sparse coordinate (`y`, then `x`), split
+into pages of `columns²` cells, and each cell is sized so the grid fills the
+viewport exactly (the last column and row absorb the rounding remainder).
+`hit` maps a click point back to a workspace, `build_page` renders a specific
+page while the page index is clamped after workspaces disappear, and `active`
+(the workspace its output shows) is kept separate from `focused` (the output
+that has focus). The compositor owns the drawing; the core owns the layout.
+
 ### Motion
 
 `motion::Transitions` is the bridge between the target geometry in a

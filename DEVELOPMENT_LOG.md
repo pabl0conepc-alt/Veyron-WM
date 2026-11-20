@@ -147,6 +147,19 @@
   tests pass; Clippy with warnings denied and `cargo fmt --check` are clean. The
   backend still binds one output, so hotplug remains unverified at runtime.
 
+## 2026-11-20 — Phase 7 workspace overview policy
+
+- Added `overview.rs`: `OverviewConfig`, `OverviewEntry` and `Overview`, which
+  lays an output's workspaces out in a paged grid ordered by sparse coordinate,
+  reports per-workspace window counts, maps a click back to a workspace and
+  exposes page navigation. `Overview::build_page` clamps the page index so a
+  workspace closing cannot leave the grid pointing at a stale page.
+- Entries distinguish `active` (the workspace its output shows) from `focused`
+  (the output that has focus), which matters with several monitors.
+- Added six integration tests: grid fill and non-overlap, hit-testing, spatial
+  ordering, paging, window counts and per-output isolation.
+- The compositor does not draw the overview yet; no action or binding opens it.
+
 ## 2026-11-20 — Phase 7 transition set for the render loop
 
 - Added `motion::Transitions`: a per-window `RectAnimator` set driven by the
