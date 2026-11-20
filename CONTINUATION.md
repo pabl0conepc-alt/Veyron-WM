@@ -23,8 +23,8 @@ attached master prompt at `/home/pablo/.codex/attachments/9a1b77f4-c88c-45f2-9ee
 - GitHub repository: `pabl0conepc-alt/Veyron-WM`
 - Active worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-finish`
 - Active branch: `codex/finish-roadmap`
-- PR: not created yet. Create one to `main` after a reasonable set of validated
-  phases; keep it draft while work remains.
+- PR: create a draft to `main` now that the 2D workspace implementation passed
+  CI, then update it as remaining phases advance.
 - The old scaffold at `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`
   is preserved and is not the active development tree.
 - Git identity is set to `Pablo Arraes` and the GitHub-linked noreply address
@@ -39,9 +39,8 @@ Recent commits on the active branch:
 
 The branch is pushed to `origin`. CI run
 [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
-for `1fcd322` was still running at the time of this handoff. Previous CI for
-`6bcc15a` passed format, Clippy, build and tests. Check the latest CI before
-continuing or claiming the 2D change is validated.
+for `1fcd322` passed format, Clippy, build and tests. CI for `6bcc15a` also
+passed these checks.
 
 ## Project design and machine constraints
 
@@ -68,12 +67,12 @@ continuing or claiming the 2D change is validated.
   sizing and protocol-level configure/activation are implemented. Still
   exercise user-driven move/resize, popup interactions and floating geometry
   with real clients in the nested session.
-- **Phase 3 — Infinite Desktop: TESTING.** Latest commit adds sparse signed 2D
-  workspace coordinates, four-way navigation, lazy cell creation, window
+- **Phase 3 — Infinite Desktop: TESTING.** Commit `1fcd322` adds sparse signed
+  2D workspace coordinates, four-way navigation, lazy cell creation, window
   transfer, bindings, IPC coordinates (protocol version 2), CLI output and a
-  nested window-title coordinate indicator. Added core and headless real-client
-  tests. Validate CI first, then nested runtime; do not mark verified until its
-  acceptance evidence exists.
+  nested window-title coordinate indicator. CI passed including core and
+  headless real-client tests. Still validate the nested runtime; do not mark
+  verified until its acceptance evidence exists.
 - **Phase 4 — Rendering/animations: IMPLEMENTING.** Latest previous commit
   registers the Wayland display fd in calloop, removes nested periodic polling,
   and uses Smithay output damage tracking with safe full-redraw fallback. CI
@@ -96,15 +95,14 @@ Headless protocol tests do not count as visible nested-runtime validation.
 
 ## Immediate next actions
 
-1. Check CI run `44649598532`. If it fails, fix the actual formatting/compile/
-   test issue, commit the correction, push and check the new run.
+1. Create and attach a draft PR against `main` for the pushed branch.
 2. Refresh `PROJECT_STATUS.md`, `ROADMAP.md`, `DEVELOPMENT_LOG.md` and this file
    after each meaningful phase milestone.
 3. Continue with the smallest prompt-required phase deliverable that can be
    validated without stressing the laptop. Prefer meaningful commits; avoid
    artificial commit splitting.
-4. Create and attach a draft PR against `main` when ready; keep it updated as
-   phases advance. Do not claim GitHub contribution credit before merge.
+4. Keep the PR updated as phases advance. Do not claim GitHub contribution
+   credit before merge.
 
 ## Evidence and project files
 

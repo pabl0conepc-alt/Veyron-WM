@@ -39,7 +39,7 @@
   fullscreen state; added real-client headless integration coverage.
 - Exposed coordinates in IPC state (protocol version 2), added default key
   bindings and a visible workspace coordinate in the nested window title.
-- `git diff --check` passes. This shell currently has no Rust toolchain on its
-  PATH, so formatting, compilation and tests for this change are pending CI.
-  The full local Smithay build remains delegated to GitHub Actions to avoid
-  memory pressure on the 4 GiB target laptop.
+- `git diff --check` passes. GitHub Actions run `44649598532` passed format,
+  Clippy, build and the complete workspace tests for commit `1fcd322`. The full
+  local Smithay build remains delegated to CI to avoid memory pressure on the
+  4 GiB target laptop.

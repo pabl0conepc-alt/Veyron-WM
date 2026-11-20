@@ -14,8 +14,8 @@ Last reviewed: 2026-11-19.
   visible nested GLES smoke test on the target desktop has not been recorded.
 - The current branch adds sparse two-dimensional workspaces, four-way
   navigation, window transfer, state IPC coordinates and a nested title
-  indicator. The new code is awaiting CI; nested runtime behavior still needs
-  validation.
+  indicator. CI run [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
+  passed for `1fcd322`; nested runtime behavior still needs validation.
 
 ## Target environment and constraints
 
@@ -35,10 +35,9 @@ Last reviewed: 2026-11-19.
   `cargo test --workspace --locked`, Clippy and rustfmt.
 - The headless suite uses genuine Wayland clients and checks configure sizes,
   activation, mapping, workspace scrolling and clean shutdown.
-- Latest confirmed CI run [44648180669](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44648180669)
-  passed on `6bcc15a` (event-driven nested scheduling and output damage). The
-  current sparse 2D workspace changes have not yet run through CI. Do not mark
-  a phase verified without its stated runtime evidence.
+- Latest feature CI run [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
+  passed format, Clippy, build and tests for the sparse 2D workspace change at
+  `1fcd322`. Do not mark a phase verified without its stated runtime evidence.
 
 See [ROADMAP.md](ROADMAP.md), [architecture](docs/ARCHITECTURE.md), and
 [known issues](KNOWN_ISSUES.md).
