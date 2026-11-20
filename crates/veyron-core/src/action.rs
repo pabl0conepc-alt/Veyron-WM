@@ -156,10 +156,16 @@ impl Action {
                 let axis = match axis.to_ascii_lowercase().as_str() {
                     "width" => ResizeAxis::Width,
                     "height" => ResizeAxis::Height,
-                    _ => return Err(ActionParseError::new("resize dimension must be width or height")),
+                    _ => {
+                        return Err(ActionParseError::new(
+                            "resize dimension must be width or height",
+                        ))
+                    }
                 };
                 let delta = amount.trim().parse::<i32>().map_err(|_| {
-                    ActionParseError::new(format!("resize needs an integer pixel delta, got '{amount}'"))
+                    ActionParseError::new(format!(
+                        "resize needs an integer pixel delta, got '{amount}'"
+                    ))
                 })?;
                 if delta == 0 {
                     return Err(ActionParseError::new("resize pixel delta cannot be zero"));

@@ -1049,31 +1049,42 @@ mod tests {
         });
         wm.dispatch(Action::ToggleFloating);
 
-        assert!(wm
-            .dispatch(Action::Resize {
+        assert!(
+            wm.dispatch(Action::Resize {
                 axis: ResizeAxis::Width,
                 delta: 10_000,
             })
-            .layout_changed);
-        let expanded = wm.snapshot().placement_of(id).expect("floating placement").rect;
+            .layout_changed
+        );
+        let expanded = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("floating placement")
+            .rect;
         let viewport = wm.snapshot().viewport;
         assert_eq!(expanded.w, viewport.w);
         assert!(expanded.x >= viewport.x);
         assert!(expanded.right() <= viewport.right());
 
-        assert!(wm
-            .dispatch(Action::Resize {
+        assert!(
+            wm.dispatch(Action::Resize {
                 axis: ResizeAxis::Height,
                 delta: 64,
             })
-            .layout_changed);
-        assert!(wm
-            .dispatch(Action::Resize {
+            .layout_changed
+        );
+        assert!(
+            wm.dispatch(Action::Resize {
                 axis: ResizeAxis::Height,
                 delta: -10_000,
             })
-            .layout_changed);
-        let resized = wm.snapshot().placement_of(id).expect("floating placement").rect;
+            .layout_changed
+        );
+        let resized = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("floating placement")
+            .rect;
         assert_eq!(resized.h, 100);
         assert!(resized.y >= viewport.y);
         assert!(resized.bottom() <= viewport.bottom());
@@ -1083,14 +1094,24 @@ mod tests {
     fn resize_action_does_not_change_a_tiled_window() {
         let mut wm = wm();
         let id = wm.create_window(NewWindow::default());
-        let original = wm.snapshot().placement_of(id).expect("tiled placement").rect;
-        assert!(!wm
-            .dispatch(Action::Resize {
+        let original = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("tiled placement")
+            .rect;
+        assert!(
+            !wm.dispatch(Action::Resize {
                 axis: ResizeAxis::Width,
                 delta: 32,
             })
-            .layout_changed);
-        assert_eq!(wm.snapshot().placement_of(id).map(|placement| placement.rect), Some(original));
+            .layout_changed
+        );
+        assert_eq!(
+            wm.snapshot()
+                .placement_of(id)
+                .map(|placement| placement.rect),
+            Some(original)
+        );
     }
 
     #[test]
