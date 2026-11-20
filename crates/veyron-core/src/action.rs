@@ -19,6 +19,23 @@ pub enum Direction {
     Down,
 }
 
+/// Dimension of a floating window changed by a resize action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeAxis {
+    Width,
+    Height,
+}
+
+impl fmt::Display for ResizeAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ResizeAxis::Width => "width",
+            ResizeAxis::Height => "height",
+        })
+    }
+}
+
 impl Direction {
     pub const ALL: [Direction; 4] = [
         Direction::Left,
@@ -77,6 +94,8 @@ pub enum Action {
     Move { direction: Direction },
     /// Resize the focused column by a percentage of the viewport.
     ColumnWidth { delta: i32 },
+    /// Resize the focused floating window by logical pixels.
+    Resize { axis: ResizeAxis, delta: i32 },
     /// Switch to a 1-based workspace index, creating it when needed.
     Workspace { index: usize },
     /// Navigate to an adjacent spatial workspace, creating it on demand.
@@ -129,6 +148,23 @@ impl Action {
                     ))
                 })?;
                 Ok(Action::ColumnWidth { delta })
+            }
+            "resize" => {
+                let (axis, amount) = rest.split_once(char::is_whitespace).ok_or_else(|| {
+                    ActionParseError::new("resize needs a dimension and pixel delta")
+                })?;
+                let axis = match axis.to_ascii_lowercase().as_str() {
+                    "width" => ResizeAxis::Width,
+                    "height" => ResizeAxis::Height,
+                    _ => return Err(ActionParseError::new("resize dimension must be width or height")),
+                };
+                let delta = amount.trim().parse::<i32>().map_err(|_| {
+                    ActionParseError::new(format!("resize needs an integer pixel delta, got '{amount}'"))
+                })?;
+                if delta == 0 {
+                    return Err(ActionParseError::new("resize pixel delta cannot be zero"));
+                }
+                Ok(Action::Resize { axis, delta })
             }
             "workspace" => {
                 let value = rest.to_ascii_lowercase();
@@ -203,6 +239,7 @@ impl fmt::Display for Action {
             Action::Focus { direction } => write!(f, "focus {direction}"),
             Action::Move { direction } => write!(f, "move {direction}"),
             Action::ColumnWidth { delta } => write!(f, "column-width {delta}"),
+            Action::Resize { axis, delta } => write!(f, "resize {axis} {delta}"),
             Action::Workspace { index } => write!(f, "workspace {index}"),
             Action::WorkspaceNavigate { direction } => write!(f, "workspace {direction}"),
             Action::MoveToWorkspace { direction } => write!(f, "move-workspace {direction}"),
@@ -242,6 +279,10 @@ mod tests {
             },
             Action::ColumnWidth { delta: -10 },
             Action::ColumnWidth { delta: 25 },
+            Action::Resize {
+                axis: ResizeAxis::Height,
+                delta: 32,
+            },
             Action::Workspace { index: 3 },
             Action::WorkspaceNavigate {
                 direction: Direction::Up,
@@ -299,6 +340,18 @@ mod tests {
             })
         );
         assert!(Action::parse("workspace north").is_err());
+    }
+
+    #[test]
+    fn floating_resize_actions_round_trip_and_reject_invalid_deltas() {
+        let action = Action::Resize {
+            axis: ResizeAxis::Width,
+            delta: -32,
+        };
+        assert_eq!(Action::parse("resize width -32"), Ok(action.clone()));
+        assert_eq!(action.to_string(), "resize width -32");
+        assert!(Action::parse("resize width 0").is_err());
+        assert!(Action::parse("resize depth 20").is_err());
     }
 
     #[test]

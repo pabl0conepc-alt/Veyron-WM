@@ -34,6 +34,8 @@ strong integration evidence, but does not replace this visual runtime check.
 - [x] Drive layout configures, activation and removal from real xdg-shell
   surfaces in headless integration tests.
 - [x] Provide keyboard actions and a versioned control socket.
+- [x] Resize floating windows through the same keybinding/IPC action grammar,
+  respecting client minimum size and the current viewport.
 - [ ] Exercise user-driven move/resize, popup interactions and floating geometry
   against real clients in a nested session.
 

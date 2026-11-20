@@ -26,7 +26,7 @@ pub mod layout;
 pub mod window;
 pub mod wm;
 
-pub use action::{Action, ActionParseError, Direction};
+pub use action::{Action, ActionParseError, Direction, ResizeAxis};
 pub use config::{Binding, Config, ConfigError, Modifiers};
 pub use geometry::{Point, Rect, Size};
 pub use layout::{LayoutConfig, Placement, ScrollLayout};

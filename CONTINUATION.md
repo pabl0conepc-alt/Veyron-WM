@@ -23,8 +23,9 @@ attached master prompt at `/home/pablo/.codex/attachments/9a1b77f4-c88c-45f2-9ee
 - GitHub repository: `pabl0conepc-alt/Veyron-WM`
 - Active worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-finish`
 - Active branch: `codex/finish-roadmap`
-- PR: create a draft to `main` now that the 2D workspace implementation passed
-  CI, then update it as remaining phases advance.
+- Draft PR: [#1](https://github.com/pabl0conepc-alt/Veyron-WM/pull/1), base
+  `main`; it is attached to this Codex task. Keep it updated while the remaining
+  phases advance; do not merge without the user's request.
 - The old scaffold at `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`
   is preserved and is not the active development tree.
 - Git identity is set to `Pablo Arraes` and the GitHub-linked noreply address
@@ -36,6 +37,7 @@ Recent commits on the active branch:
 - `68f4379 docs: map Veyron against phased acceptance criteria`
 - `6bcc15a perf: make nested rendering event and damage driven`
 - `1fcd322 feat: add sparse 2D workspace navigation`
+- `92caf72 docs: record 2D workspace CI result`
 
 The branch is pushed to `origin`. CI run
 [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
@@ -64,9 +66,11 @@ passed these checks.
   real-client tests exist. Still run the nested GLES compositor in the target
   Plasma session and verify a visible real app surface.
 - **Phase 2 — Window management: TESTING.** Layout, focus, floating/fullscreen,
-  sizing and protocol-level configure/activation are implemented. Still
-  exercise user-driven move/resize, popup interactions and floating geometry
-  with real clients in the nested session.
+  sizing, floating keyboard/IPC resizing and protocol-level configure/activation
+  are implemented. The current commit adds min-size/viewport clamping and a
+  headless resize integration assertion. CI is pending. Still exercise
+  move/resize, popup interactions and floating geometry with real clients in
+  the nested session; pointer-driven move/resize is not implemented.
 - **Phase 3 — Infinite Desktop: TESTING.** Commit `1fcd322` adds sparse signed
   2D workspace coordinates, four-way navigation, lazy cell creation, window
   transfer, bindings, IPC coordinates (protocol version 2), CLI output and a

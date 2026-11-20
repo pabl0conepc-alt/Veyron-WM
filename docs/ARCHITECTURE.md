@@ -38,7 +38,10 @@ column is always fully visible".
 ## 2. The scrollable tiling model
 
 A workspace is an **unbounded horizontal strip of columns**. Each column holds
-windows stacked vertically.
+windows stacked vertically. Outputs contain a sparse, lazily-created grid of
+these workspaces at signed `(x, y)` coordinates. Moving across the grid keeps
+each workspace's layout and focus state; moving a window transfers it to a
+neighbor and activates that destination.
 
 Why this model:
 
@@ -74,6 +77,8 @@ Policies:
    addressing another window.
 6. Every placement has positive width and height and lies within the viewport's
    vertical extent.
+7. Each workspace coordinate maps to exactly one workspace on its output;
+   navigating to an unvisited coordinate creates it once.
 
 ### Geometry math
 
@@ -132,6 +137,9 @@ features.
 - **Event loop:** `calloop` watches the winit loop, Wayland display fd and IPC
   channel. Nested mode blocks on readiness sources; headless mode retains a
   bounded 50 ms wait to retry clients whose socket buffers were full.
+- **Spatial indicator:** nested window decorations show the active signed
+  workspace coordinate; the same coordinate is part of the version 2 IPC state
+  report and `veyronctl state` output.
 
 ## 5. Configuration
 
@@ -167,10 +175,9 @@ forwarded to the compositor loop through a `calloop` channel and replies return
 over a oneshot channel with a 2 s timeout. Window-management state is therefore
 only ever touched on the compositor thread.
 
-Both run modes share the same `calloop` loop. Nested mode is woken by winit and
-by a bounded timeout; headless mode waits on the display's poll fd (readable
-while any client has pending requests) plus the control channel, so an idle
-compositor sleeps instead of polling.
+Both run modes share the same `calloop` loop. Nested mode waits on winit, the
+Wayland display poll fd and IPC readiness; headless mode waits on the display
+fd and control channel with a bounded timeout to retry blocked client flushes.
 
 ## 7. Testing strategy
 
@@ -187,8 +194,8 @@ compositor sleeps instead of polling.
   Veyron's own state through the control protocol (`Request::State`) and on what
   the client observed (configure size, activation states, viewport scrolling).
   The suite covers mapping, layout-driven configure size and re-configure,
-  focus/activation following the model, workspace navigation and scroll
-  offsets, unmap on destroy and clean shutdown.
+  focus/activation following the model, horizontal scroll offsets, 2D workspace
+  navigation and window transfer, unmap on destroy and clean shutdown.
 - These tests are mutation-checked: disabling the configure send in
   `sync_layout`, the activation configure in `sync_focus`, or window removal in
   `toplevel_destroyed` each makes the suite fail. Development of the harness
@@ -200,23 +207,19 @@ compositor sleeps instead of polling.
 Ordered by the project's priority hierarchy (correctness → security →
 performance → architecture → compatibility → features → effects).
 
-1. **Interactive validation**: visually verify the nested compositor in the
-   target session, then implement Smithay output damage tracking and measure the
-   static renderer on the target hardware.
-2. **Infinite desktop**: extend the current horizontal strip to sparse 2D
-   workspace coordinates and expose spatial navigation/indicators.
+1. **Interactive validation**: visually verify the nested compositor, damage
+   behavior and spatial indicator in the target session; measure the static
+   renderer on target hardware.
+2. **Window interactions**: real-client nested move/resize, popup grabs,
+   floating geometry and drag-and-drop wiring.
 3. **Compatibility and shell boundary**: investigate XWayland and portal
    integration; define a versioned external shell interface and test toolkit
    behavior before claiming compatibility.
-4. **Interactions**: window identity and rules, interactive move/resize,
-   drag-and-drop wiring and popup grabs.
-5. **Visual layer**: optional animated scroll/workspace transitions, borders and
-   shadows, implemented so they can never block the compositor.
-6. **Standalone sessions**: DRM/KMS + libinput + libseat, multi-output and DPMS
-   only after nested behavior and security boundaries are stable.
-
-The headless runtime and its protocol-level test suite are done (see §7); the
-next milestone is the real output backend.
+4. **Stabilization**: security/dependency audit, measured performance and a
+   reproducible installation path.
+5. **Optional follow-up**: disableable animations only after the static renderer
+   is validated; DRM/KMS, multi-output and DPMS after nested behavior and
+   security boundaries are stable.
 
 ## 9. Security notes
 

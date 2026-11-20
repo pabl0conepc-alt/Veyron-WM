@@ -3,9 +3,11 @@
 - The nested GLES compositor has not yet been visually exercised in the target
   Plasma Wayland session. Headless integration tests do not validate GPU
   presentation.
-- The spatial desktop currently expands horizontally only. Vertical movement,
-  2D coordinates and a visible spatial indicator are required by the master
-  prompt and remain open.
+- Sparse 2D workspace navigation, transfer and state coordinates now have
+  passing CI coverage. The visible nested title indicator and navigation still
+  need validation in the target Plasma session.
+- Floating windows can be resized by keyboard or IPC; pointer-driven move/resize,
+  popup grabs and drag-and-drop are not wired or runtime-tested yet.
 - Rendering now uses Smithay's output damage tracker and buffer age when
   available. The nested implementation has not yet been runtime-checked on the
   target EGL driver, and must fall back to full redraw if age is unavailable.

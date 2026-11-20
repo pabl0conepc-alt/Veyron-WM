@@ -43,3 +43,14 @@
   Clippy, build and the complete workspace tests for commit `1fcd322`. The full
   local Smithay build remains delegated to CI to avoid memory pressure on the
   4 GiB target laptop.
+
+## 2026-11-19 — Phase 2 floating-window resizing
+
+- Added `resize width|height <pixels>` to the shared keybinding/IPC action
+  grammar and mapped `super+alt+arrow` to 32-pixel floating-window resizing.
+- Resizing keeps the window centered around its previous center, clamps it to
+  the active viewport and honors client minimum dimensions. Tiled windows keep
+  using the separate column-width controls.
+- Added core boundary tests and extended the real-client headless scenario to
+  exercise resize over IPC. CI validation is pending for this commit; nested
+  pointer-driven interaction and popup runtime checks remain open.

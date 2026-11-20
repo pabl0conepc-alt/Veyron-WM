@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    action::Action,
+    action::{Action, ResizeAxis},
     config::Config,
     geometry::{Rect, Size},
     layout::{default_floating_size, viewport_for, Placement, ScrollLayout},
@@ -413,6 +413,9 @@ impl Wm {
             Action::ColumnWidth { delta } => {
                 effects.layout_changed = self.active_workspace_mut().layout.resize_focused(delta);
             }
+            Action::Resize { axis, delta } => {
+                effects.layout_changed = self.resize_focused_floating(axis, delta);
+            }
             Action::CenterColumn => {
                 effects.layout_changed = self.active_workspace_mut().layout.center_focus();
             }
@@ -726,6 +729,62 @@ impl Wm {
         true
     }
 
+    fn resize_focused_floating(&mut self, axis: ResizeAxis, delta: i32) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let Some(window) = self.windows.get(&id) else {
+            return false;
+        };
+        if !window.is_floating() {
+            return false;
+        }
+
+        let mut rect = window.floating_rect();
+        let requested_min = window.min_size().unwrap_or(Size::new(64, 48));
+        let viewport = self.viewport();
+        let (old_size, new_size, min_size, origin, extent) = match axis {
+            ResizeAxis::Width => (
+                rect.w,
+                rect.w.saturating_add(delta),
+                requested_min.w.max(64).min(viewport.w),
+                rect.x - viewport.x,
+                viewport.w,
+            ),
+            ResizeAxis::Height => (
+                rect.h,
+                rect.h.saturating_add(delta),
+                requested_min.h.max(48).min(viewport.h),
+                rect.y - viewport.y,
+                viewport.h,
+            ),
+        };
+        let new_size = new_size.clamp(min_size, extent);
+        if old_size == new_size {
+            return false;
+        }
+
+        let new_origin = origin
+            .saturating_sub((new_size - old_size) / 2)
+            .clamp(0, extent - new_size);
+        match axis {
+            ResizeAxis::Width => {
+                rect.x = viewport.x + new_origin;
+                rect.w = new_size;
+            }
+            ResizeAxis::Height => {
+                rect.y = viewport.y + new_origin;
+                rect.h = new_size;
+            }
+        }
+        if let Some(window) = self.windows.get_mut(&id) {
+            window.set_floating_rect(rect);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Keep floating windows on screen after an output resize or margin change.
     fn clamp_floating_windows(&mut self) {
         let viewport = self.viewport();
@@ -979,6 +1038,59 @@ mod tests {
             .workspace_changed
         );
         assert_eq!(wm.snapshot().focused, Some(id));
+    }
+
+    #[test]
+    fn floating_resize_respects_client_minimum_and_viewport_bounds() {
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow {
+            min_size: Some(Size::new(200, 100)),
+            ..NewWindow::default()
+        });
+        wm.dispatch(Action::ToggleFloating);
+
+        assert!(wm
+            .dispatch(Action::Resize {
+                axis: ResizeAxis::Width,
+                delta: 10_000,
+            })
+            .layout_changed);
+        let expanded = wm.snapshot().placement_of(id).expect("floating placement").rect;
+        let viewport = wm.snapshot().viewport;
+        assert_eq!(expanded.w, viewport.w);
+        assert!(expanded.x >= viewport.x);
+        assert!(expanded.right() <= viewport.right());
+
+        assert!(wm
+            .dispatch(Action::Resize {
+                axis: ResizeAxis::Height,
+                delta: 64,
+            })
+            .layout_changed);
+        assert!(wm
+            .dispatch(Action::Resize {
+                axis: ResizeAxis::Height,
+                delta: -10_000,
+            })
+            .layout_changed);
+        let resized = wm.snapshot().placement_of(id).expect("floating placement").rect;
+        assert_eq!(resized.h, 100);
+        assert!(resized.y >= viewport.y);
+        assert!(resized.bottom() <= viewport.bottom());
+    }
+
+    #[test]
+    fn resize_action_does_not_change_a_tiled_window() {
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow::default());
+        let original = wm.snapshot().placement_of(id).expect("tiled placement").rect;
+        assert!(!wm
+            .dispatch(Action::Resize {
+                axis: ResizeAxis::Width,
+                delta: 32,
+            })
+            .layout_changed);
+        assert_eq!(wm.snapshot().placement_of(id).map(|placement| placement.rect), Some(original));
     }
 
     #[test]

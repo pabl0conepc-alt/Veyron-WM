@@ -115,6 +115,7 @@ Default keybindings (all configurable):
 | `super+left/right/up/down` | focus column / row |
 | `super+shift+left/right/up/down` | move window into a column / swap rows |
 | `super+minus` / `super+equal` | shrink / grow the focused column |
+| `super+alt+arrow` | resize the focused floating window by 32 logical pixels |
 | `super+c` | center the focused column |
 | `super+f` | toggle fullscreen |
 | `super+space` | toggle floating |
@@ -172,6 +173,7 @@ veyronctl focus left
 veyronctl workspace 2
 veyronctl workspace up
 veyronctl move-workspace right
+veyronctl resize width 32
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit
