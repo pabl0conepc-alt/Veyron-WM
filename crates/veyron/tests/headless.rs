@@ -197,6 +197,7 @@ struct ToplevelConfigure {
     width: i32,
     height: i32,
     activated: bool,
+    fullscreen: bool,
 }
 
 #[derive(Debug, Default)]
@@ -309,6 +310,24 @@ impl Client {
             assert!(
                 Instant::now() < deadline,
                 "activation never became {expected}; last configure: {:?}",
+                self.state.last_configure
+            );
+            self.roundtrip();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn wait_for_fullscreen(&mut self, expected: bool) -> ToplevelConfigure {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        loop {
+            if let Some(configure) = self.state.last_configure {
+                if configure.fullscreen == expected {
+                    return configure;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fullscreen state never became {expected}; last configure: {:?}",
                 self.state.last_configure
             );
             self.roundtrip();
@@ -651,6 +670,31 @@ fn layer_shell_exclusive_zone_reduces_tiled_client_height() {
     );
 }
 
+#[test]
+fn xdg_fullscreen_request_updates_client_and_window_model() {
+    let harness = Harness::start("fullscreen-request", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let toplevel = client.create_toplevel("fullscreen");
+
+    toplevel.toplevel.set_fullscreen(Some(&client._output));
+    let fullscreen = client.wait_for_fullscreen(true);
+    assert_eq!((fullscreen.width, fullscreen.height), (1256, 776));
+
+    let state = harness.state();
+    let window = state.windows.first().expect("the window remains managed");
+    assert!(window.fullscreen, "the core model records client fullscreen");
+    assert_eq!(window.rect, [12, 12, 1256, 776]);
+
+    toplevel.toplevel.unset_fullscreen();
+    let restored = client.wait_for_fullscreen(false);
+    assert_eq!((restored.width, restored.height), (620, 776));
+    let state = harness.state();
+    assert!(
+        !state.windows[0].fullscreen,
+        "the unfullscreen request clears the model state"
+    );
+}
+
 impl Dispatch<WlSeat, ()> for ClientState {
     fn event(
         _state: &mut Self,
@@ -742,11 +786,19 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
                     Ok(xdg_toplevel::State::Activated)
                 )
             });
+            let fullscreen = states.chunks_exact(4).any(|chunk| {
+                let value = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                matches!(
+                    xdg_toplevel::State::try_from(value),
+                    Ok(xdg_toplevel::State::Fullscreen)
+                )
+            });
 
             state.last_configure = Some(ToplevelConfigure {
                 width,
                 height,
                 activated,
+                fullscreen,
             });
             state.configure_count += 1;
         }
