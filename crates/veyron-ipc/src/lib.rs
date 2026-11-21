@@ -372,7 +372,17 @@ fn handle_connection(
                 // In flight until the response is on the wire.
                 let _in_flight = activity.enter();
                 let response = handler(request);
-                write_message(&mut stream, &response)?;
+                match write_message(&mut stream, &response) {
+                    // Reports grow with client-chosen titles; an answer that
+                    // does not fit is replaced by an error the client can read.
+                    Err(IpcError::MessageTooLarge) => {
+                        let error = Response::Error {
+                            message: IpcError::MessageTooLarge.to_string(),
+                        };
+                        write_message(&mut stream, &error)?;
+                    }
+                    result => result?,
+                }
             }
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -583,6 +593,38 @@ mod tests {
         ));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_oversized_response_is_reported_instead_of_dropping_the_connection() {
+        // A state report grows with client-chosen window titles, so it can
+        // exceed the line limit; the client must still get an answer.
+        let (mut client, server) = UnixStream::pair().expect("socket pair");
+        let server = std::thread::spawn(move || {
+            handle_connection(
+                server,
+                &|_request| Response::Error {
+                    message: "x".repeat(MAX_LINE_BYTES),
+                },
+                &Activity::new(),
+            )
+        });
+
+        write_message(&mut client, &Request::State).expect("request is sent");
+        let mut reader = BufReader::new(client.try_clone().expect("clone the stream"));
+        let response: Option<Response> = read_message(&mut reader).expect("a response line");
+        match response {
+            Some(Response::Error { message }) => {
+                assert!(message.contains("limit"), "{message}");
+            }
+            other => panic!("expected an error response, got {other:?}"),
+        }
+        drop(client);
+        drop(reader);
+        server
+            .join()
+            .expect("the server thread did not panic")
+            .expect("the connection stays healthy");
     }
 
     #[test]
