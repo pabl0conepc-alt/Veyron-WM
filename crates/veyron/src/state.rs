@@ -33,10 +33,13 @@ use smithay::{
         Seat, SeatHandler, SeatState,
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    reexports::wayland_server::{
-        backend::{ClientData, ClientId, DisconnectReason},
-        protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
-        Client, DisplayHandle,
+    reexports::{
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_server::{
+            backend::{ClientData, ClientId, DisconnectReason},
+            protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
+            Client, DisplayHandle,
+        },
     },
     utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
     wayland::{
@@ -130,6 +133,8 @@ pub struct Veyron {
     mapped: HashMap<WindowId, (i32, i32)>,
     /// Last size sent to each client, so configures are not flooded.
     configured: HashMap<WindowId, (i32, i32)>,
+    /// Last fullscreen state sent to each client.
+    configured_fullscreen: HashMap<WindowId, bool>,
     /// In-flight window rectangles; the scene graph draws `current()`.
     animations: HashMap<WindowId, RectAnimator>,
     last_animation_frame: Instant,
@@ -247,6 +252,7 @@ impl Veyron {
             windows: HashMap::new(),
             mapped: HashMap::new(),
             configured: HashMap::new(),
+            configured_fullscreen: HashMap::new(),
             animations: HashMap::new(),
             last_animation_frame: Instant::now(),
             last_workspace_position: WorkspacePosition::default(),
@@ -761,24 +767,36 @@ impl Veyron {
                 self.space.map_element(window.clone(), location, false);
                 self.mapped.insert(placement.window, location);
             }
-            // Floating windows keep the size their client chose.
-            if placement.floating {
-                continue;
-            }
-
             let target_size = (target.w, target.h);
-            if self.configured.get(&placement.window) == Some(&target_size) {
+            let previous_fullscreen = self.configured_fullscreen.get(&placement.window);
+            let fullscreen_changed = previous_fullscreen != Some(&placement.fullscreen);
+            // Floating windows keep their client-chosen size except while
+            // entering or leaving fullscreen, when they need the target size.
+            let should_configure_size = !placement.floating
+                || placement.fullscreen
+                || previous_fullscreen == Some(&true);
+            let size_changed = should_configure_size
+                && self.configured.get(&placement.window) != Some(&target_size);
+            if !fullscreen_changed && !size_changed {
                 continue;
             }
             if let Some(toplevel) = window.toplevel() {
-                // Only the size is set here: activation is applied uniformly
-                // by `Window::set_activated` in `sync_focus`, so a configure
-                // can never mark every tiled window as active.
                 toplevel.with_pending_state(|state| {
-                    state.size = Some((target_size.0, target_size.1).into());
+                    if size_changed {
+                        state.size = Some((target_size.0, target_size.1).into());
+                    }
+                    if placement.fullscreen {
+                        state.states.set(xdg_toplevel::State::Fullscreen);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Fullscreen);
+                    }
                 });
                 toplevel.send_configure();
-                self.configured.insert(placement.window, target_size);
+                if size_changed {
+                    self.configured.insert(placement.window, target_size);
+                }
+                self.configured_fullscreen
+                    .insert(placement.window, placement.fullscreen);
             }
         }
 
@@ -798,6 +816,29 @@ impl Veyron {
                 self.space.unmap_elem(window);
             }
             self.mapped.remove(&id);
+        }
+    }
+
+    fn handle_fullscreen_request(&mut self, surface: ToplevelSurface, fullscreen: bool) {
+        let id = self
+            .windows
+            .iter()
+            .find(|(_, window)| window.toplevel() == Some(&surface))
+            .map(|(id, _)| *id);
+
+        let Some(id) = id else {
+            surface.send_configure();
+            return;
+        };
+
+        if self.wm.set_window_fullscreen(id, fullscreen) {
+            self.sync_layout();
+            self.sync_focus();
+            self.needs_redraw = true;
+        } else {
+            // A repeated request may leave the model unchanged. Reply with its
+            // current state so the client still receives a configure.
+            surface.send_configure();
         }
     }
 
@@ -1091,6 +1132,7 @@ impl XdgShellHandler for Veyron {
             }
             self.mapped.remove(&id);
             self.configured.remove(&id);
+            self.configured_fullscreen.remove(&id);
             self.animations.remove(&id);
             self.wm.remove_window(id);
             self.sync_layout();
@@ -1110,12 +1152,12 @@ impl XdgShellHandler for Veyron {
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
-        // Fullscreen is compositor policy in Veyron: acknowledge the request
-        // without changing the layout.
-        surface.send_configure();
+        self.handle_fullscreen_request(surface, true);
     }
 
-    fn unfullscreen_request(&mut self, _surface: ToplevelSurface) {}
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.handle_fullscreen_request(surface, false);
+    }
 }
 
 impl WlrLayerShellHandler for Veyron {
