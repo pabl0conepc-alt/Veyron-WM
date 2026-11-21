@@ -25,8 +25,9 @@
 - Snap zones, picture-in-picture, window groups and smart focus are implemented
   and tested in the core, and reach the compositor through the snapshot, but
   they have not been exercised in a nested session.
-- Touchpad gestures and an exposé-style workspace overview are not implemented:
-  the input layer forwards no swipe/hold events and there is no overview grid.
+- Touchpad/touch gestures and a rendered workspace overview are not implemented.
+  `Wm::overview` and `veyronctl overview` expose geometry/data only; no visual
+  grid is drawn and the input layer has no swipe/hold recognizer.
 - Veyron Profiles are parsed, validated and applied by the core and accepted by
   the action/IPC grammar; `super+p` cycles them with `profile next`. The
   renderer still ignores the motion settings a profile can change.
@@ -35,18 +36,20 @@
   not use D-Bus activation, so applications relying on either need an explicit
   `spawn` binding.
 - `zwlr_layer_shell_v1` surfaces render with their exclusive zones and receive
-  frame callbacks, but pointer input is still routed to toplevels only: a panel,
-  OSD or notification cannot be clicked yet. Keyboard interactivity on layer
-  surfaces is not implemented either.
+  frame callbacks, but their exclusive zones do not reduce the core tiled
+  viewport. Pointer input is routed to toplevel roots only: panels, popups,
+  subsurfaces, OSDs and notifications cannot receive normal pointer targeting.
+  Keyboard interactivity on layer surfaces is not implemented.
 - The workspace overview is geometry plus IPC (`veyronctl overview`); the
   compositor does not draw an overview surface, and no gesture input is wired.
 - Smart workspace placement is off by default (`behavior.smart_workspace`). It
   learns from windows the core itself places and focuses, keeps one entry per
   app id (no title granularity), and never overrides a rule that pins a
   workspace.
-- `canvas <dx> <dy>` only moves floating windows of the active workspace; tiled
-  windows are untouched and each window stops at the output edge, so a canvas
-  with windows already against both edges does not move.
+- `canvas <dx> <dy>` is an action, not a physical gesture. It only moves floating
+  windows of the active workspace; tiled windows are untouched and each window
+  stops at the output edge, so a canvas with windows already against both edges
+  does not move.
 - Veyron Recall saves and restores validated TOML through `veyronctl session
   save|restore`. Restore recreates policy state in the core; it does not launch
   applications or reconnect restored records to future client surfaces.
@@ -57,11 +60,17 @@
   but the nested backend still creates a single output, so real hotplug and
   per-monitor rendering are untested.
 - XWayland, portal services, a stable external shell API, plugin isolation,
-  direct DRM/KMS, session management and backend multi-output hotplug are not
-  supported.
+  direct DRM/KMS, automatic session recovery and backend multi-output hotplug
+  are not supported.
 - No target-machine runtime baseline for RAM, CPU, frame pacing, startup or
   input latency has been measured. Do not make performance claims.
-- IPC is local to the user's runtime directory and has message bounds and
-  versioning, and its control socket is restricted to the current user.
-  External plugins are not implemented; spawned commands intentionally execute
-  with the user's own privileges.
+- IPC is local to the user's runtime directory, has message bounds, and its
+  control socket is restricted to the current user. `PROTOCOL_VERSION` is not
+  transmitted on the wire, reload can return success when config reload failed,
+  and the server has no accepted-connection cap. External plugins are not
+  implemented; spawned commands intentionally execute with the user's own
+  privileges.
+- Nix library lookup, unique SHM paths, and binary installation were fixed in
+  `253a901`, `bf79323`, and `f9f2105`. Run `44932470919` passed standard CI and
+  the reproducible Nix package build/tests. A target-machine installed runtime
+  smoke test remains outstanding.

@@ -1,85 +1,74 @@
-# Project status
+# Veyron WM project status
 
-Last reviewed: 2026-11-21.
+Last reviewed: 2026-11-21 against updated `origin/main` commit `ed18b75` and
+active branch `codex/current-main-audit` (latest pushed commit `f9f2105`).
 
-## Current state
+## Current repository state
 
-- Current base: `feat/headless-calloop-loop` at `c91d39e`; GitHub Actions passed
-  format, Clippy, build and tests for this exact revision.
-- Current work branch: `codex/finish-roadmap`.
-- Phase 0 is `VERIFIED`; Phase 1 and 2 are `TESTING`; Phase 3 is `TESTING`
-  pending nested runtime validation; Phase 4 is `IMPLEMENTING`; Phase 5 and 6
-  are `TESTING` and `IMPLEMENTING` respectively.
-- A headless compositor and real Wayland client integration tests exist. A
-  visible nested GLES smoke test on the target desktop has not been recorded.
-- The current branch adds sparse two-dimensional workspaces, four-way
-  navigation, window transfer, state IPC coordinates and a nested title
-  indicator. CI run [44649598532](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44649598532)
-  passed for `1fcd322`; nested runtime behavior still needs validation.
-- Floating-window keyboard/IPC resize with minimum-size and viewport bounds
-  also passes full CI on `e632b52` (run `44650727970`). Pointer drag, popups and
-  nested runtime interaction still need validation.
-- Floating-window movement by keyboard/IPC, size-preserving and viewport
-  bounded, passes all checks on `5ce2aa4` (run `44651966135`).
-- The IPC control socket now enforces owner-only `0600` permissions; CI run
-  [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
-  passed all checks for `17d8562`.
-- Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
-  layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
-  core, multi-output policy, named layout/motion profiles with `profile
-  next|prev` cycling, and window identity wiring are implemented and tested (125
-  core tests plus smart-placement, window-feature, multi-output, profile,
-  launcher and headless integration tests) with control-protocol version 3. The compositor forwards the app id and
-  title a client announces on its first commit, so rules and `veyronctl state`
-  use real metadata. The nested loop advances window transitions and bounds its
-  sleep to one frame while they run, per-window `animation = false` rules opt an
-  application out, and a workspace switch slides in from the direction of
-  travel, with motion off by default and client sizes still configured at their
-  target. `[[workspaces]]` predefines named workspaces, `workspace special`
-  toggles a scratch workspace, `veyronctl launch` resolves XDG desktop entries,
-  `Wm::overview` lays every workspace on the sparse grid for `veyronctl
-  overview`, smart workspace placement (`behavior.smart_workspace`) reuses the
-  learned output/workspace of each app, `canvas <dx> <dy>` pans every floating
-  window at once, and `zwlr_layer_shell_v1` clients (bars, notifications,
-  wallpapers, OSDs) are mapped with their exclusive zones and frame callbacks. Pointer input
-  still reaches toplevels only, so layer surfaces cannot be clicked yet. The
-  renderer still ignores opacity/blur, the backend still creates one output, and
-  no nested runtime visual check exists. Gesture and
-  overview policy modules were removed before any consumer existed. See
-  [ROADMAP.md](ROADMAP.md).
-- `cargo test --workspace` now runs in this environment, including the 7 headless
-tests that drive the real compositor with genuine Wayland clients, using Wayland
-and XKB runtime libraries extracted to a local prefix (no system packages were
-installed). That is protocol-level evidence only: no GPU presentation, nested
-GLES session or target-hardware measurement was performed.
-- Phase 6 Nix packaging is currently uncommitted: `flake.nix`, `flake.lock`, a
-  README usage section and a GitHub Actions package job are in the worktree.
-  Local flake evaluation returned `veyron-wm-0.1.0`; no complete local build
-  was run due to the 4 GiB limit, and the first package CI build is pending.
+- Current project is a three-crate Rust workspace: `veyron-core`, `veyron-ipc`,
+  and `veyron`. It uses Smithay 0.7 and calloop; it is not the older flat
+  prototype on `codex/engineering-audit`.
+- `VEYRON_AUDIT.md`, `VEYRON_FEATURE_MATRIX.md`,
+  `VEYRON_IMPLEMENTATION_PLAN.md`, and `VEYRON_PROGRESS.md` are the detailed
+  current audit/implementation handoff.
+- Core supports scroll/column layouts, master-stack/dwindle/auto, floating,
+  rules, scratchpad, window groups, snapping/PiP, workspace navigation/transfers,
+  output policy, profiles, motion state, launcher parsing, overview geometry,
+  app affinity, and session-record capture/restore.
+- The compositor runs nested Winit/GLES or headless Wayland protocol mode.
+  Headless tests use real clients but do not validate visible GPU presentation.
+- Current high-priority defects: layer-shell exclusive zones do not reduce
+  tiling area;
+  pointer hit testing misses subsurface/popup/layer surfaces; popup operations
+  and client fullscreen behavior are incomplete; Recall does not reconcile
+  restored records with future client surfaces; IPC reload can report false
+  success, its version is not on-wire, and concurrent IPC peers are uncapped.
 
-## Target environment and constraints
+## Phase gates
 
-- NixOS 26.11, Linux 6.18.63, x86_64; KDE Plasma Wayland session.
-- Intel Core i3-2370M (2 cores / 4 threads), 4 GiB RAM; display PCI ID `8086:0116`
-  suggests Intel HD Graphics 3000, but Mesa/EGL capabilities have not yet been
-  directly queried.
-- Keep local builds serial. Previous full Smithay builds in the older prototype
-  caused memory pressure. The current branch's full CI build/test succeeded on a
-  GitHub-hosted runner; the local compositor still requires a guarded runtime
-  validation.
+- Phase 0 — environment/research: VERIFIED per `docs/PHASE0_RESEARCH.md` and
+  ADR 0001.
+- Phase 1 — foundation: TESTING; real headless Wayland clients and CI pass at
+  base `ed18b75`, but visible nested GLES runtime is unverified.
+- Phase 2 — window management: TESTING; policy and headless configure/actions
+  exist, but real nested move/resize/popup/fullscreen interaction remains open.
+- Phase 3 — workspaces: TESTING; sparse 2D policy and real-client navigation
+  coverage exist; visible nested validation remains open.
+- Phase 4 — rendering/motion: IMPLEMENTING; damage/event-driven rendering and
+  position/workspace transitions exist, but no target visual/performance data.
+- Phase 5 — configuration/ecosystem: TESTING; strict TOML, IPC, CLI launcher,
+  layer-shell and overview reporting exist. XWayland, portal boundaries,
+  external shell API and native UI remain open.
+- Phase 6 — stabilization: IMPLEMENTING; standard and reproducible Nix CI pass
+  at `f9f2105`, but target runtime, performance/security review and installed
+  hardware evidence remain open.
+- Phase 7 — window-management depth: IMPLEMENTING; core policy exists and is
+  tested, but compositor/runtime validation and visual effects remain open.
 
-## Evidence and next work
+## Build/test evidence
 
-- CI run [44437184079](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44437184079)
-  succeeded for `c91d39e`, including `cargo build --workspace --locked`,
-  `cargo test --workspace --locked`, Clippy and rustfmt.
-- The headless suite uses genuine Wayland clients and checks configure sizes,
-  activation, mapping, workspace scrolling and clean shutdown.
-- Latest feature CI run [44651444722](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651444722)
-  passed format, Clippy, build and tests for IPC socket hardening at `17d8562`;
-  the latest interaction run [44651966135](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44651966135)
-  also passed these checks for floating-window movement at `5ce2aa4`. Do not
-  mark a phase verified without its stated runtime evidence.
+- At `ed18b75`, Actions run [44912416024](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44912416024)
+  passed the normal format, Clippy, build, and test job. The Nix package job
+  failed because six headless client tests could not dynamically load Wayland.
+- Smart workspace affinity after manual/workspace/output moves and late identity
+  routing is fixed in `1c203fa`. Standard CI passed format, Clippy, build and
+  all tests at `de011c3` (run `44926751159`). Nix library discovery was fixed in
+  `253a901`; run `44926821591` passed standard CI and reached headless tests in
+  Nix, where one test exposed a shared-memory filename collision. The test-only
+  commit `0eaa47d` failed the expected regression test; `bf79323` adds an atomic
+  unique suffix and passed standard CI. Run `44931933845` then failed at the
+  custom install phase because `target/release/veyron` was absent. Commit
+  `f9f2105` uses the standard Cargo install hook; run `44932470919` passed both
+  standard CI and the Nix package build/test job.
+- The netbook shell has Nix but no `cargo`/`rustc` on PATH. A prior compiler
+  closure estimate was too large for the 4 GiB machine; continue using CI for
+  full workspace validation and avoid concurrent local builds.
+- No nested visual run or target CPU/RAM/frame/input measurement is recorded.
 
-See [ROADMAP.md](ROADMAP.md), [architecture](docs/ARCHITECTURE.md), and
-[known issues](KNOWN_ISSUES.md).
+## Target hardware and limits
+
+Project notes identify NixOS 26.11, x86_64, Linux 6.18.63, KDE Plasma Wayland,
+Intel Core i3-2370M, 4 GiB RAM, likely Intel HD Graphics 3000. GPU/EGL capability
+has not been queried directly. The nested backend creates one output; multi-
+output policy in `veyron-core` is not proof of backend hotplug or independent
+physical monitors.

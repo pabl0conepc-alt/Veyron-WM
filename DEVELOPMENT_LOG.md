@@ -1,6 +1,51 @@
 # Development log
 
-## 2026-11-21 — Smart workspace and the canvas gesture
+## 2026-11-21 — Nix headless test runtime and SHM collision
+
+- Added `runtimeLibs` to the Nix check environment and wrapped installed
+  binaries with the Nix Wayland runtime library path in `253a901`. The Nix job
+  then reached all headless integration tests instead of failing with
+  `NoWaylandLib`.
+- Run `44926821591` found one parallel test collision: SHM files were named
+  using process ID plus a wall-clock timestamp, which is not guaranteed unique
+  across threads. Six of seven headless tests passed in the Nix job.
+- Added a deterministic regression with a repeated clock value in `0eaa47d`;
+  its standard test step failed as expected. `bf79323` adds a process-wide
+  atomic suffix to each name. Run `44931933845` passed Format, Clippy, Build,
+  and all standard tests; its Nix package tests passed but installation failed
+  because `target/release/veyron` was absent.
+- `f9f2105` replaces the hard-coded binary copy with Cargo's standard install
+  hook, retaining the runtime library wrappers. Nix parsing and local diff
+  checks pass; Actions run `44932470919` passed standard CI and the reproducible
+  Nix package build/tests. Installed runtime behavior on target hardware remains
+  unverified.
+- No Cargo toolchain is installed on the 4 GiB netbook, so this iteration uses
+  GitHub Actions instead of downloading a large local compiler closure.
+
+## 2026-11-21 — Re-audit of updated repository and smart-placement fix
+
+- Fetched the repository update on `origin/main` through `ed18b75` and moved
+  active work to branch `codex/current-main-audit`, based on the current
+  three-crate workspace. The old flat-prototype checkout remains preserved.
+- Added the four prompt-required audit/continuation artifacts: architecture
+  audit, 187-row feature matrix, dependency-ordered implementation plan, and
+  progress checkpoint. Updated `PROJECT_STATUS.md` and `CONTINUATION.md` for
+  the active tree. Individual matrix entries still need review for file/test
+  specificity.
+- Added smart-placement regression tests for manual workspace/output moves and
+  late client identity. CI confirmed stale placement after workspace move and
+  late identity. `Wm` now refreshes app affinity after those operations and
+  output/workspace migration.
+- Verified standard CI passed format, Clippy, build and all workspace tests on
+  `de011c3` (run `44926751159`). The 4 GiB netbook shell has no Cargo/rustc, so
+  this implementation was not built locally.
+- Investigated the Nix package failure: headless client tests reported
+  `NoWaylandLib` because `wayland-client` uses `dlopen` and the Nix check/runtime
+  path did not expose the library. `253a901` sets `LD_LIBRARY_PATH` in checks
+  and wraps installed binaries; run `44926821591` must confirm the Nix job.
+- No nested visual runtime or hardware-performance measurements were made.
+
+## 2026-11-21 — Smart workspace and the Canvas action
 
 - `veyron_core::smart::Affinities` learns `app id -> output/workspace` from the
   windows the core places and focuses. With `behavior.smart_workspace` enabled a
@@ -11,7 +56,7 @@
   history.
 - Affinity entries are pruned when an output goes away, so a removed workspace
   cannot keep attracting windows.
-- `canvas <dx> <dy>` (the "Veyron Canvas" gesture) moves every floating window of
+- `canvas <dx> <dy>` (the "Veyron Canvas" action) moves every floating window of
   the active workspace together, clamping each window to the output. Window
   memory follows the move so the next window of the app does not jump back.
 - Verified with `cargo fmt --all --check`, `cargo clippy --workspace
