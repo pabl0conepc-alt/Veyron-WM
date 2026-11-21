@@ -2175,25 +2175,34 @@ impl Wm {
             return false;
         }
 
-        let mut rect = window.floating_rect();
-        let viewport = self.viewport();
+        let rect = window.floating_rect();
         let (dx, dy) = match direction {
             crate::action::Direction::Left => (-delta, 0),
             crate::action::Direction::Right => (delta, 0),
             crate::action::Direction::Up => (0, -delta),
             crate::action::Direction::Down => (0, delta),
         };
+        self.move_floating_to(id, rect.x.saturating_add(dx), rect.y.saturating_add(dy))
+    }
+
+    /// Place a floating window's top-left corner at `(x, y)`, keeping its size
+    /// and clamping it inside the active viewport. Shared by keyboard/IPC moves
+    /// and pointer drags in the compositor. Returns whether the window moved.
+    pub fn move_floating_to(&mut self, id: WindowId, x: i32, y: i32) -> bool {
+        let viewport = self.viewport();
+        let Some(window) = self.windows.get_mut(&id) else {
+            return false;
+        };
+        if !window.is_floating() {
+            return false;
+        }
+        let mut rect = window.floating_rect();
         let max_x = (viewport.right() - rect.w).max(viewport.x);
         let max_y = (viewport.bottom() - rect.h).max(viewport.y);
-        rect.x = rect.x.saturating_add(dx).clamp(viewport.x, max_x);
-        rect.y = rect.y.saturating_add(dy).clamp(viewport.y, max_y);
-        let changed = if let Some(window) = self.windows.get_mut(&id) {
-            let changed = window.floating_rect() != rect;
-            window.set_floating_rect(rect);
-            changed
-        } else {
-            false
-        };
+        rect.x = x.clamp(viewport.x, max_x);
+        rect.y = y.clamp(viewport.y, max_y);
+        let changed = window.floating_rect() != rect;
+        window.set_floating_rect(rect);
         if changed {
             self.remember_geometry(id);
         }
@@ -2582,6 +2591,34 @@ mod tests {
                 .map(|placement| placement.rect),
             Some(original)
         );
+    }
+
+    #[test]
+    fn move_floating_to_clamps_and_ignores_tiled_windows() {
+        let mut wm = wm();
+        let tiled = wm.create_window(NewWindow::default());
+        assert!(!wm.move_floating_to(tiled, 10, 10));
+
+        let id = wm.create_window(NewWindow::default());
+        wm.dispatch(Action::ToggleFloating);
+        let viewport = wm.snapshot().viewport;
+        let size = wm
+            .snapshot()
+            .placement_of(id)
+            .expect("placement")
+            .rect
+            .size();
+
+        assert!(wm.move_floating_to(id, viewport.x + 5, viewport.y));
+        let rect = wm.snapshot().placement_of(id).expect("placement").rect;
+        assert_eq!((rect.x, rect.y), (viewport.x + 5, viewport.y));
+        assert_eq!(rect.size(), size);
+        assert!(!wm.move_floating_to(id, viewport.x + 5, viewport.y));
+
+        wm.move_floating_to(id, i32::MIN, i32::MAX);
+        let rect = wm.snapshot().placement_of(id).expect("placement").rect;
+        assert_eq!(rect.x, viewport.x);
+        assert!(rect.bottom() <= viewport.bottom());
     }
 
     #[test]

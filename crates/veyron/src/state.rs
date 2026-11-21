@@ -19,7 +19,10 @@ use smithay::{
             PointerAxisEvent, PointerButtonEvent,
         },
         renderer::{
-            damage::OutputDamageTracker, gles::GlesRenderer, utils::on_commit_buffer_handler,
+            damage::OutputDamageTracker,
+            element::{surface::WaylandSurfaceRenderElement, AsRenderElements},
+            gles::GlesRenderer,
+            utils::on_commit_buffer_handler,
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
     },
@@ -38,7 +41,7 @@ use smithay::{
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
         Client, DisplayHandle,
     },
-    utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
+    utils::{Logical, Point, Scale, Serial, Transform, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{
@@ -66,7 +69,7 @@ use smithay::{
 };
 use veyron_core::{
     workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session,
-    Size as VSize, WindowId, Wm, WorkspacePosition,
+    Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
 };
 use veyron_ipc::{
     OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, WindowReport,
@@ -137,6 +140,9 @@ pub struct Veyron {
     last_workspace_position: WorkspacePosition,
 
     pointer_location: Point<f64, Logical>,
+    /// Floating window being dragged with `super` + left button, and the
+    /// pointer's offset from its top-left corner when the drag started.
+    drag: Option<(WindowId, Point<f64, Logical>)>,
     needs_redraw: bool,
     /// Set when the compositor should exit.
     pub exit: bool,
@@ -251,6 +257,7 @@ impl Veyron {
             last_animation_frame: Instant::now(),
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
+            drag: None,
             needs_redraw: true,
             exit: false,
         };
@@ -374,6 +381,19 @@ impl Veyron {
             Point::from((surface_position.x / scale, surface_position.y / scale));
         self.pointer_location = location;
 
+        if let Some((id, offset)) = self.drag {
+            let corner = location - offset;
+            if self
+                .wm
+                .move_floating_to(id, corner.x.round() as i32, corner.y.round() as i32)
+            {
+                self.sync_layout();
+                self.needs_redraw = true;
+            }
+            // The dragged client does not see pointer motion during the grab.
+            return;
+        }
+
         let target = self.surface_under(location);
         let serial = SERIAL_COUNTER.next_serial();
         // The handle is cloned so the immutable borrow of the field does not
@@ -395,7 +415,15 @@ impl Veyron {
     where
         E: PointerButtonEvent<WinitInput>,
     {
+        if event.state() == ButtonState::Released && self.drag.take().is_some() {
+            // The press that started the drag was never sent to the client.
+            return;
+        }
         if event.state() == ButtonState::Pressed {
+            if let Some(drag) = self.begin_drag(event.button_code()) {
+                self.drag = Some(drag);
+                return;
+            }
             let window = self
                 .space
                 .element_under(self.pointer_location)
@@ -425,6 +453,29 @@ impl Veyron {
             },
         );
         pointer.frame(self);
+    }
+
+    /// Start dragging the floating window under the pointer when the left
+    /// button is pressed with `super` held. Tiled windows are left to the
+    /// layout, so the press is forwarded to them as usual.
+    fn begin_drag(&mut self, button: u32) -> Option<(WindowId, Point<f64, Logical>)> {
+        const BTN_LEFT: u32 = 0x110;
+        if button != BTN_LEFT || !self.keyboard.modifier_state().logo {
+            return None;
+        }
+        let (window, _) = self.space.element_under(self.pointer_location)?;
+        let window = window.clone();
+        let id = self.window_id(&window)?;
+        if !self.wm.snapshot().is_floating(id) {
+            return None;
+        }
+        let corner = self.space.element_location(&window)?;
+        if self.wm.focus_window(id) {
+            self.sync_focus();
+        }
+        self.space.raise_element(&window, false);
+        self.needs_redraw = true;
+        Some((id, self.pointer_location - corner.to_f64()))
     }
 
     fn on_pointer_axis<E>(&mut self, event: &E)
@@ -826,12 +877,38 @@ impl Veyron {
         &self,
         location: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let (window, _) = self.space.element_under(location)?;
-        let origin = self.space.element_location(window)?;
-        let toplevel = window.toplevel()?;
-        let surface_location =
-            Point::from((location.x - origin.x as f64, location.y - origin.y as f64));
-        Some((toplevel.wl_surface().clone(), surface_location))
+        // Panels, OSDs and notifications above windows take the pointer first;
+        // wallpapers and desktop layers below only receive it where no window is.
+        if let Some(hit) = self.layer_surface_under(location, &[Layer::Overlay, Layer::Top]) {
+            return Some(hit);
+        }
+        let Some((window, _)) = self.space.element_under(location) else {
+            return self.layer_surface_under(location, &[Layer::Bottom, Layer::Background]);
+        };
+        // Smithay expects the focused surface's origin in global coordinates and
+        // derives surface-local positions from it; subsurfaces and popups are
+        // resolved so they receive their own events.
+        let origin = self.space.element_location(window)? - window.geometry().loc;
+        window
+            .surface_under(location - origin.to_f64(), WindowSurfaceType::ALL)
+            .map(|(surface, offset)| (surface, (origin + offset).to_f64()))
+    }
+
+    /// The layer-shell surface (or one of its subsurfaces) under `location`,
+    /// searching `layers` in order, with that surface's global origin.
+    fn layer_surface_under(
+        &self,
+        location: Point<f64, Logical>,
+        layers: &[Layer],
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let map = layer_map_for_output(&self.output);
+        layers.iter().find_map(|layer| {
+            let surface = map.layer_under(*layer, location)?;
+            let origin = map.layer_geometry(surface)?.loc;
+            surface
+                .surface_under(location - origin.to_f64(), WindowSurfaceType::ALL)
+                .map(|(wl_surface, offset)| (wl_surface, (origin + offset).to_f64()))
+        })
     }
 
     fn window_id(&self, window: &Window) -> Option<WindowId> {
@@ -850,11 +927,16 @@ impl Veyron {
         // A missing or unavailable age forces a correct full redraw in Smithay.
         let age = backend.buffer_age().unwrap_or(0);
         let background = self.wm.config().appearance.background_rgba();
+        let snapshot = self.wm.snapshot();
         let damage = {
             let (renderer, mut framebuffer) = backend.bind()?;
-            let elements = self
-                .space
-                .render_elements_for_output(renderer, &self.output, 1.0)?;
+            let elements = scene_elements(
+                renderer,
+                &self.space,
+                &self.output,
+                &self.windows,
+                &snapshot,
+            );
             let rendered = self.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
@@ -887,6 +969,57 @@ impl Veyron {
             send_frames_surface_tree(layer.wl_surface(), time);
         }
     }
+}
+
+/// Build the frame's render elements front to back: overlay and top layer
+/// surfaces, then windows from the top of the stack down, each drawn with the
+/// opacity its rules request, then bottom and background layer surfaces.
+///
+/// The output is unscaled (scale 1.0), so logical and physical coordinates
+/// coincide.
+fn scene_elements(
+    renderer: &mut GlesRenderer,
+    space: &Space<Window>,
+    output: &Output,
+    windows: &HashMap<WindowId, Window>,
+    snapshot: &Snapshot,
+) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+    let scale = Scale::from(1.0);
+    let mut elements = Vec::new();
+    let map = layer_map_for_output(output);
+    let push_layers = |elements: &mut Vec<_>, layer: Layer, renderer: &mut GlesRenderer| {
+        for surface in map.layers_on(layer).rev() {
+            if let Some(geometry) = map.layer_geometry(surface) {
+                elements.extend(surface.render_elements(
+                    renderer,
+                    geometry.loc.to_physical_precise_round(1.0),
+                    scale,
+                    1.0,
+                ));
+            }
+        }
+    };
+    push_layers(&mut elements, Layer::Overlay, renderer);
+    push_layers(&mut elements, Layer::Top, renderer);
+
+    // `Space::elements` yields bottom to top; elements are drawn front first.
+    let stacked: Vec<&Window> = space.elements().collect();
+    for window in stacked.into_iter().rev() {
+        let Some(location) = space.element_location(window) else {
+            continue;
+        };
+        let alpha = windows
+            .iter()
+            .find(|(_, candidate)| *candidate == window)
+            .and_then(|(id, _)| snapshot.placement_of(*id))
+            .map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
+        let origin = (location - window.geometry().loc).to_physical_precise_round(1.0);
+        elements.extend(window.render_elements(renderer, origin, scale, alpha));
+    }
+
+    push_layers(&mut elements, Layer::Bottom, renderer);
+    push_layers(&mut elements, Layer::Background, renderer);
+    elements
 }
 
 fn keysym_name(handle: &KeysymHandle<'_>) -> String {

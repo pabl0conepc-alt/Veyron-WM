@@ -6,8 +6,11 @@
 - Sparse 2D workspace navigation, transfer and state coordinates now have
   passing CI coverage. The visible nested title indicator and navigation still
   need validation in the target Plasma session.
-- Floating windows can be resized by keyboard or IPC; pointer-driven move/resize,
-  popup grabs and drag-and-drop are not wired or runtime-tested yet.
+- Floating windows can be moved and resized by keyboard or IPC, and moved with
+  `super` + left-button drag (clamped to the viewport, sharing
+  `Wm::move_floating_to` with the keyboard path). Pointer resize, client-
+  initiated `xdg_toplevel.move/resize`, popup grabs and drag-and-drop are not
+  wired; the drag has not been runtime-tested in a nested session.
 - Rendering now uses Smithay's output damage tracker and buffer age when
   available. The nested implementation has not yet been runtime-checked on the
   target EGL driver, and must fall back to full redraw if age is unavailable.
@@ -20,8 +23,11 @@
   `animation = false` opt-out. Client sizes still configure at their target,
   opening and closing are not animated, and no visible nested-session check has
   been performed.
-- Per-window opacity and blur reach the snapshot; the renderer still draws every
-  window opaque and unblurred. Rounded corners and shadows are absent.
+- The renderer draws each window with the opacity its rules request (scene
+  elements are built per window instead of with one space-wide alpha). Blur
+  reaches the snapshot but is not drawn; rounded corners and shadows are
+  absent. Opacity has compiled and passed headless tests only, with no visual
+  check on the target GPU.
 - Snap zones, picture-in-picture, window groups and smart focus are implemented
   and tested in the core, and reach the compositor through the snapshot, but
   they have not been exercised in a nested session.
@@ -35,9 +41,12 @@
   not use D-Bus activation, so applications relying on either need an explicit
   `spawn` binding.
 - `zwlr_layer_shell_v1` surfaces render with their exclusive zones and receive
-  frame callbacks, but pointer input is still routed to toplevels only: a panel,
-  OSD or notification cannot be clicked yet. Keyboard interactivity on layer
-  surfaces is not implemented either.
+  frame callbacks, and now receive pointer input: overlay/top layers above
+  windows, bottom/background layers where no window is. Keyboard
+  interactivity on layer surfaces is not implemented yet.
+- Pointer focus previously passed a surface-relative point where Smithay
+  expects the surface's global origin, so clients saw wrong local coordinates;
+  this is fixed and subsurfaces/popups under the pointer are now resolved.
 - The workspace overview is geometry plus IPC (`veyronctl overview`); the
   compositor does not draw an overview surface, and no gesture input is wired.
 - Smart workspace placement is off by default (`behavior.smart_workspace`). It
