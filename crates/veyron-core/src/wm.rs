@@ -29,6 +29,11 @@ use crate::{
 /// How many windows smart focus remembers for `focus previous`.
 const FOCUS_HISTORY_LIMIT: usize = 32;
 
+/// Highest workspace index (0-based) that `workspace <n>` and
+/// `move-to-workspace <n>` create on demand. Every workspace up to the index is
+/// created, so an unbounded index from IPC or a binding would exhaust memory.
+const MAX_INDEXED_WORKSPACES: usize = 1024;
+
 /// A workspace is one scrollable strip plus its floating layer.
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -1730,8 +1735,13 @@ impl Wm {
 
     fn switch_workspace(&mut self, index: usize) -> bool {
         let output_index = self.active_output;
-        // Workspaces are created on demand: the strip is conceptually endless,
-        // so there is no fixed maximum.
+        if index >= MAX_INDEXED_WORKSPACES
+            && index >= self.outputs[output_index].workspaces.len()
+        {
+            return false;
+        }
+        // Workspaces are created on demand up to the index (bounded above so a
+        // typo or hostile request cannot allocate millions of them).
         while self.outputs[output_index].workspaces.len() <= index {
             let position = self.next_linear_position(output_index);
             self.append_workspace(output_index, position);
@@ -2016,6 +2026,11 @@ impl Wm {
             return false;
         }
         let output_index = self.active_output;
+        if index >= MAX_INDEXED_WORKSPACES
+            && index >= self.outputs[output_index].workspaces.len()
+        {
+            return false;
+        }
         while self.outputs[output_index].workspaces.len() <= index {
             let position = self.next_linear_position(output_index);
             self.append_workspace(output_index, position);
@@ -2787,6 +2802,27 @@ mod tests {
         );
         wm.dispatch(Action::Workspace { index: 1 });
         assert!(wm.snapshot().placement_of(id).is_none());
+    }
+
+    #[test]
+    fn huge_workspace_indexes_are_refused_without_creating_workspaces() {
+        // `veyronctl workspace 99999999` used to create every workspace up to
+        // the index (quadratically), hanging the compositor until it ran out
+        // of memory.
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow::default());
+        for index in [1_000_000, usize::MAX] {
+            assert!(!wm.dispatch(Action::Workspace { index }).workspace_changed);
+            assert!(
+                !wm.dispatch(Action::MoveToWorkspaceIndex { index })
+                    .workspace_changed
+            );
+        }
+        assert_eq!(wm.workspace_count(), 1);
+        assert_eq!(wm.focused_window(), Some(id));
+        // Ordinary indexes keep working.
+        assert!(wm.dispatch(Action::Workspace { index: 9 }).workspace_changed);
+        assert_eq!(wm.workspace_count(), 9);
     }
 
     #[test]
