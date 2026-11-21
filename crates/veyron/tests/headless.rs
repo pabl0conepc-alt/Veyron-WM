@@ -44,6 +44,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for a protocol round trip to produce an expected event.
 const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 
+fn shm_buffer_path(timestamp_nanos: u128) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "veyron-buffer-{}-{timestamp_nanos}.shm",
+        std::process::id()
+    ))
+}
+
 /// A running `veyron --headless` process plus its runtime directory.
 struct Harness {
     child: Child,
@@ -338,14 +345,11 @@ impl Client {
 
         let stride = configure.width * 4;
         let length = (stride as usize) * (configure.height as usize);
-        let path = std::env::temp_dir().join(format!(
-            "veyron-buffer-{}-{}.shm",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
-        ));
+        let timestamp_nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let path = shm_buffer_path(timestamp_nanos);
         // The compositor mmaps the pool, so the fd must be readable *and*
         // writable: a write-only fd makes wl_shm fail with an invalid-fd error.
         let file = OpenOptions::new()
@@ -476,6 +480,13 @@ impl Dispatch<wl_buffer::WlBuffer, ()> for ClientState {
             state.buffer_releases += 1;
         }
     }
+}
+
+#[test]
+fn shm_buffer_paths_are_unique_when_the_clock_value_repeats() {
+    let timestamp = 123_456_789;
+
+    assert_ne!(shm_buffer_path(timestamp), shm_buffer_path(timestamp));
 }
 
 impl Dispatch<WlSeat, ()> for ClientState {
