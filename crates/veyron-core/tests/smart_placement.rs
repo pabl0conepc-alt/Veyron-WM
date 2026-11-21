@@ -1,7 +1,7 @@
 //! Smart workspace placement and the canvas gesture, exercised through the
 //! public core API only.
 
-use veyron_core::{Action, Config, NewWindow, Size, WindowId, Wm};
+use veyron_core::{Action, Config, NewWindow, Rect, Size, WindowId, Wm};
 
 const OUTPUT: &str = "VEYRON-TEST";
 
@@ -118,6 +118,33 @@ fn smart_workspace_learns_a_late_client_identity() {
         workspace_of(&wm, 2, second).as_deref(),
         Some("1"),
         "identity announced after toplevel creation should seed app placement"
+    );
+}
+
+#[test]
+fn smart_workspace_follows_a_window_moved_to_another_output() {
+    let mut wm = wm_with(true);
+    let first = open(&mut wm, "firefox");
+    wm.add_output("HDMI-A-1", Rect::new(1280, 0, 1280, 800))
+        .expect("add output");
+
+    assert!(wm.move_focused_to_output(1));
+    assert!(
+        wm.output_snapshot(1)
+            .expect("secondary output")
+            .placement_of(first)
+            .is_some()
+    );
+    assert!(wm.focus_output(0));
+
+    let second = open(&mut wm, "firefox");
+
+    assert!(
+        wm.output_snapshot(1)
+            .expect("secondary output")
+            .placement_of(second)
+            .is_some(),
+        "new windows should follow the app's latest output"
     );
 }
 
