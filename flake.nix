@@ -7,6 +7,7 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      runtimeLibs = [ pkgs.libffi pkgs.libxkbcommon pkgs.wayland ];
       veyron = pkgs.rustPlatform.buildRustPackage {
         pname = "veyron-wm";
         version = "0.1.0";
@@ -16,13 +17,23 @@
         cargoBuildFlags = [ "--workspace" "--locked" ];
         cargoTestFlags = [ "--workspace" "--locked" ];
 
-        nativeBuildInputs = [ pkgs.pkg-config ];
-        buildInputs = [ pkgs.libffi pkgs.libxkbcommon pkgs.wayland ];
+        nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];
+        buildInputs = runtimeLibs;
+
+        # wayland-client uses dlopen, so Nix's ELF RPATH patching alone is not
+        # enough for the headless integration tests to find libwayland-client.
+        preCheck = ''
+          export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        '';
 
         installPhase = ''
           runHook preInstall
           install -Dm755 target/release/veyron "$out/bin/veyron"
           install -Dm755 target/release/veyronctl "$out/bin/veyronctl"
+          wrapProgram "$out/bin/veyron" \
+            --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}"
+          wrapProgram "$out/bin/veyronctl" \
+            --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}"
           runHook postInstall
         '';
 
