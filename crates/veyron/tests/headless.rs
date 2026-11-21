@@ -346,9 +346,9 @@ impl Client {
         );
         layer_surface.set_size(0, 24);
         layer_surface.set_anchor(
-            zwlr_layer_surface_v1::Anchor::TOP
-                | zwlr_layer_surface_v1::Anchor::LEFT
-                | zwlr_layer_surface_v1::Anchor::RIGHT,
+            zwlr_layer_surface_v1::Anchor::Top
+                | zwlr_layer_surface_v1::Anchor::Left
+                | zwlr_layer_surface_v1::Anchor::Right,
         );
         layer_surface.set_exclusive_zone(exclusive_zone);
         surface.commit();
