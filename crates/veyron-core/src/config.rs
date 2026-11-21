@@ -218,7 +218,7 @@ pub struct Config {
 /// Default chords. Kept in one place so the documentation, the default config
 /// and the tests cannot disagree.
 const DEFAULT_BINDINGS: &[(&str, &str)] = &[
-    ("super+return", "spawn alacritty"),
+    ("super+return", "terminal"),
     ("super+q", "close"),
     ("super+left", "focus left"),
     ("super+right", "focus right"),

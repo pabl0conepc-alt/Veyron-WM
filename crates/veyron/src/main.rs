@@ -10,7 +10,8 @@ use std::{
 use calloop::{
     channel::{channel, Event, Sender},
     generic::Generic,
-    EventLoop, Interest, Mode, PostAction,
+    timer::{TimeoutAction, Timer},
+    EventLoop, Interest, LoopHandle, Mode, PostAction,
 };
 use smithay::{
     backend::{renderer::gles::GlesRenderer, winit},
@@ -36,6 +37,7 @@ Options:
   -c, --config <PATH>   Configuration file (default: $XDG_CONFIG_HOME/veyron/veyron.toml)
   -s, --socket <PATH>   Control socket (default: $XDG_RUNTIME_DIR/veyron.sock)
       --print-config    Print the default configuration and exit
+      --check-config    Validate the configuration file and exit
       --headless        Run without a display, GPU or DRM device (for tests/CI)
       --wayland-display <NAME>
                         Wayland socket name (default: wayland-veyron headless,
@@ -60,10 +62,15 @@ const HEADLESS_WAIT: Duration = Duration::from_millis(50);
 /// How long shutdown waits for an in-flight control reply before giving up.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
+/// How often the configuration file is checked for changes. A stat call every
+/// two seconds costs nothing measurable and needs no inotify dependency.
+const CONFIG_POLL: Duration = Duration::from_secs(2);
+
 struct Args {
     config: PathBuf,
     socket: PathBuf,
     print_config: bool,
+    check_config: bool,
     headless: bool,
     wayland_display: Option<String>,
     /// `None` keeps the mode default (1920x1080 headless, 1280x800 nested).
@@ -82,6 +89,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     if args.print_config {
         print!("{}", Config::default().to_toml_string()?);
         return Ok(());
+    }
+    if args.check_config {
+        return check_config(&args.config);
     }
 
     init_tracing();
@@ -149,6 +159,7 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
                 state.handle_ipc(job);
             }
         })?;
+    watch_config(&event_loop.handle())?;
     let ipc_activity = spawn_ipc_server(&args.socket, ipc_tx)?;
 
     tracing::info!(
@@ -275,6 +286,7 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
                 state.handle_ipc(job);
             }
         })?;
+    watch_config(&event_loop.handle())?;
 
     let ipc_activity = spawn_ipc_server(&args.socket, ipc_tx)?;
 
@@ -304,6 +316,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut config = Config::default_path();
     let mut socket = veyron_ipc::default_socket_path();
     let mut print_config = false;
+    let mut check_config = false;
     let mut headless = false;
     let mut wayland_display = None;
     let mut output_size = None;
@@ -320,6 +333,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 socket = PathBuf::from(path);
             }
             "--print-config" => print_config = true,
+            "--check-config" => check_config = true,
             "--headless" => headless = true,
             "--wayland-display" => {
                 wayland_display = Some(args.next().ok_or("--wayland-display needs a name")?);
@@ -344,6 +358,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         config,
         socket,
         print_config,
+        check_config,
         headless,
         wayland_display,
         output_size,
@@ -365,4 +380,45 @@ fn parse_size(value: &str) -> Result<VSize, Box<dyn Error>> {
         return Err(format!("invalid size '{value}', dimensions must be positive").into());
     }
     Ok(VSize::new(width, height))
+}
+
+/// Reload the configuration whenever its file changes on disk, so edits apply
+/// without a `reload` binding. An invalid file is reported and ignored, and the
+/// running configuration stays in effect.
+fn watch_config(handle: &LoopHandle<'_, Veyron>) -> Result<(), Box<dyn Error>> {
+    handle
+        .insert_source(Timer::from_duration(CONFIG_POLL), |_, _, state| {
+            state.reload_config_if_changed();
+            TimeoutAction::ToDuration(CONFIG_POLL)
+        })
+        .map_err(|error| format!("could not watch the configuration file: {error}"))?;
+    Ok(())
+}
+
+/// `veyron --check-config`: validate the configuration without starting the
+/// compositor, and summarise what it sets.
+fn check_config(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    if !path.exists() {
+        println!(
+            "{}: no configuration file; the built-in defaults apply \
+             (create one with `veyron --print-config > {}`)",
+            path.display(),
+            path.display()
+        );
+        return Ok(());
+    }
+    let config = Config::load(path)?;
+    let design = &config.theme.design;
+    println!(
+        "{}: ok — {} bindings, {} rules, {} profiles, {} workspaces, theme {} ({}, {} design)",
+        path.display(),
+        config.bindings.len(),
+        config.rules.rules().len(),
+        config.profiles.as_slice().len(),
+        config.workspaces.len(),
+        config.theme.seed,
+        config.theme.mode.as_str(),
+        design
+    );
+    Ok(())
 }

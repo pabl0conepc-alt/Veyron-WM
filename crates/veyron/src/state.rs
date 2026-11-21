@@ -114,6 +114,9 @@ impl ClientData for ClientState {
 pub struct Veyron {
     start: Instant,
     config_path: PathBuf,
+    /// Modification time of the configuration file when it was last read, so
+    /// edits are picked up automatically.
+    config_stamp: Option<std::time::SystemTime>,
 
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
@@ -255,6 +258,7 @@ impl Veyron {
         let palette = wm.config().theme.palette();
         let mut state = Self {
             start: Instant::now(),
+            config_stamp: config_modified(&config_path),
             config_path,
             compositor_state,
             xdg_shell_state,
@@ -554,6 +558,18 @@ impl Veyron {
             spawn(command);
         }
 
+        if effects.spawn_terminal {
+            let preferred = std::env::var("TERMINAL").ok();
+            match veyron_core::pick_terminal(preferred.as_deref(), on_path) {
+                Some(terminal) => {
+                    spawn(&terminal);
+                }
+                None => tracing::warn!(
+                    "no terminal found: set $TERMINAL or install foot, kitty or alacritty"
+                ),
+            }
+        }
+
         if effects.reload_config {
             self.reload_config();
         }
@@ -782,6 +798,17 @@ impl Veyron {
                 .filter(|_| theme.export)
                 .map(|dir| dir.display().to_string()),
         })
+    }
+
+    /// Reload when the configuration file changed since it was last read.
+    /// Called periodically by the event loop.
+    pub fn reload_config_if_changed(&mut self) {
+        let stamp = config_modified(&self.config_path);
+        if stamp != self.config_stamp {
+            self.config_stamp = stamp;
+            tracing::info!(path = %self.config_path.display(), "configuration file changed");
+            self.reload_config();
+        }
     }
 
     fn reload_config(&mut self) {
@@ -1356,6 +1383,13 @@ fn binding_for(
 }
 
 /// Lowercase keysym name, the form binding chords are stored in.
+/// Modification time of the configuration file, `None` when it is absent.
+fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
 fn keysym_name(sym: xkb::Keysym) -> String {
     xkb::keysym_get_name(sym).to_ascii_lowercase()
 }
@@ -1390,6 +1424,19 @@ pub(crate) fn reap(mut child: std::process::Child) {
 }
 
 /// Run a shell command, returning the child's process id.
+/// Whether `program` is an executable file in a `PATH` directory.
+fn on_path(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        std::fs::metadata(dir.join(program))
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    })
+}
+
 fn spawn(command: &str) -> Option<u32> {
     match std::process::Command::new("sh")
         .arg("-c")

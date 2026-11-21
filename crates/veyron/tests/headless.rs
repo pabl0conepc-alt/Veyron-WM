@@ -1039,3 +1039,35 @@ fn floating_geometry_changes_reach_the_client() {
     );
     assert_eq!(configure.width, width + 32);
 }
+
+#[test]
+fn editing_the_configuration_file_reloads_it_automatically() {
+    let mut harness = Harness::start_with_config("config-watch", 800, 600, "[layout]\ngap = 8\n");
+    let gap =
+        |harness: &Harness| match veyron_ipc::request(&harness.control_socket, &Request::State) {
+            Ok(Response::State(report)) => report.gap,
+            other => panic!("state request failed: {other:?}"),
+        };
+    let path = harness.dir.join("veyron.toml");
+
+    // An invalid edit is reported and ignored: the running config stays.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    fs::write(&path, "[layout]\ngap = \"wide\"\n").expect("write an invalid config");
+    std::thread::sleep(std::time::Duration::from_millis(2600));
+    assert!(matches!(
+        veyron_ipc::request(&harness.control_socket, &Request::Ping),
+        Ok(Response::Pong)
+    ));
+
+    fs::write(&path, "[layout]\ngap = 20\nsmart_gaps = false\n").expect("rewrite the config");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    while gap(&harness) != 20 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the edited gap was never applied"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    harness.shutdown();
+}

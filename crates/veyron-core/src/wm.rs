@@ -186,6 +186,8 @@ pub struct Effects {
     pub spawn: Vec<String>,
     /// The theme changed: borders must be recoloured and colours re-exported.
     pub theme_changed: bool,
+    /// Open the preferred terminal emulator.
+    pub spawn_terminal: bool,
 }
 
 impl Effects {
@@ -1178,6 +1180,7 @@ impl Wm {
             Action::Quit => effects.quit = true,
             Action::ReloadConfig => effects.reload_config = true,
             Action::Spawn { command } => effects.spawn.push(command),
+            Action::Terminal => effects.spawn_terminal = true,
             Action::Focus { direction } => {
                 let workspace = self.active_workspace_mut();
                 workspace.focused_floating = None;

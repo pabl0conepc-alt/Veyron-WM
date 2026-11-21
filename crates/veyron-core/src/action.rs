@@ -258,6 +258,8 @@ pub enum Action {
     Opacity { delta: i32 },
     /// Change the Material You theme at runtime.
     Theme { op: ThemeOp },
+    /// Open the preferred terminal: `$TERMINAL`, or the first one installed.
+    Terminal,
     /// Run a shell command.
     Spawn { command: String },
     /// Reload the configuration file.
@@ -498,6 +500,7 @@ impl Action {
             "theme" => Ok(Action::Theme {
                 op: ThemeOp::parse(rest)?,
             }),
+            "terminal" | "spawn-terminal" => without_argument(rest, Action::Terminal),
             "spawn" | "exec" => {
                 if rest.is_empty() {
                     return Err(ActionParseError::new("spawn needs a command"));
@@ -576,6 +579,7 @@ impl fmt::Display for Action {
             Action::Gaps { delta } => write!(f, "gaps {delta}"),
             Action::Opacity { delta } => write!(f, "opacity {delta}"),
             Action::Theme { op } => write!(f, "theme {op}"),
+            Action::Terminal => f.write_str("terminal"),
             Action::Spawn { command } => write!(f, "spawn {command}"),
             Action::ReloadConfig => f.write_str("reload"),
             Action::Quit => f.write_str("quit"),
@@ -702,6 +706,7 @@ mod tests {
             Action::Theme {
                 op: ThemeOp::NextDesign,
             },
+            Action::Terminal,
             Action::Spawn {
                 command: "alacritty --class veyron".into(),
             },

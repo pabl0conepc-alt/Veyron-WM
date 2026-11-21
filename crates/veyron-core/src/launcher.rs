@@ -302,3 +302,63 @@ Icon=editor
         assert!(best_match(&entries, "   ").is_none());
     }
 }
+
+/// Terminal emulators tried, in order, when `$TERMINAL` is unset or missing.
+pub const TERMINALS: &[&str] = &[
+    "foot",
+    "kitty",
+    "alacritty",
+    "wezterm",
+    "ghostty",
+    "konsole",
+    "gnome-terminal",
+    "xfce4-terminal",
+    "xterm",
+];
+
+/// Pick the terminal for the `terminal` action: `$TERMINAL` when it names an
+/// installed program (its first word, so `$TERMINAL="foot -e"` works), else the
+/// first installed entry of [`TERMINALS`]. `installed` answers whether a
+/// program name is on `PATH`.
+pub fn pick_terminal(
+    env_terminal: Option<&str>,
+    installed: impl Fn(&str) -> bool,
+) -> Option<String> {
+    if let Some(preferred) = env_terminal
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let program = preferred.split_whitespace().next().unwrap_or(preferred);
+        if installed(program) {
+            return Some(preferred.to_string());
+        }
+    }
+    TERMINALS
+        .iter()
+        .find(|name| installed(name))
+        .map(|name| (*name).to_string())
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_env_wins_when_installed_and_falls_back_otherwise() {
+        let installed = |name: &str| matches!(name, "kitty" | "foot");
+        assert_eq!(
+            pick_terminal(Some("kitty -1"), installed).as_deref(),
+            Some("kitty -1")
+        );
+        assert_eq!(
+            pick_terminal(Some("st"), installed).as_deref(),
+            Some("foot")
+        );
+        assert_eq!(pick_terminal(None, installed).as_deref(), Some("foot"));
+        assert_eq!(
+            pick_terminal(Some("  "), |name| name == "xterm").as_deref(),
+            Some("xterm")
+        );
+        assert_eq!(pick_terminal(None, |_| false), None);
+    }
+}

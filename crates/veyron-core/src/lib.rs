@@ -41,7 +41,7 @@ pub use action::{Action, ActionParseError, Direction, ResizeAxis, ThemeOp};
 pub use config::{Behavior, Binding, Config, ConfigError, Modifiers, WorkspacePreset};
 pub use geometry::{Point, Rect, Size};
 pub use groups::{GroupId, GroupSet, WindowGroup};
-pub use launcher::{best_match, parse_entry, split_exec, DesktopEntry};
+pub use launcher::{best_match, parse_entry, pick_terminal, split_exec, DesktopEntry};
 pub use layout::{LayoutConfig, Placement, ScrollLayout};
 pub use motion::{
     workspace_slide, Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig,
