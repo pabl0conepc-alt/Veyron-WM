@@ -122,7 +122,10 @@ impl WorkspacePosition {
 #[derive(Debug, Clone)]
 pub struct OutputState {
     name: String,
+    /// Physical output bounds, independent of reserved shell areas.
     rect: Rect,
+    /// Output area left available by layer-shell exclusive zones.
+    work_area: Rect,
     workspaces: Vec<Workspace>,
     workspace_indices: HashMap<WorkspacePosition, usize>,
     /// Named workspaces, including the default numeric names.
@@ -306,6 +309,7 @@ impl Wm {
             outputs: vec![OutputState {
                 name: output_name.into(),
                 rect,
+                work_area: rect,
                 workspaces: vec![workspace],
                 workspace_indices,
                 names: HashMap::from([("1".to_string(), 0)]),
@@ -428,7 +432,7 @@ impl Wm {
     /// Usable area of one output, inside the configured outer margin.
     pub fn viewport_of(&self, output_index: usize) -> Rect {
         match self.outputs.get(output_index) {
-            Some(output) => viewport_for(output.rect, &self.config.layout),
+            Some(output) => viewport_for(output.work_area, &self.config.layout),
             None => Rect::ZERO,
         }
     }
@@ -453,6 +457,7 @@ impl Wm {
         self.outputs.push(OutputState {
             name,
             rect,
+            work_area: rect,
             workspaces: vec![Workspace::new(
                 "1".to_string(),
                 WorkspacePosition::default(),
@@ -1322,7 +1327,32 @@ impl Wm {
         }
         let viewport = viewport_for(rect, &self.config.layout);
         self.outputs[output_index].rect = rect;
+        self.outputs[output_index].work_area = rect;
         for workspace in &mut self.outputs[output_index].workspaces {
+            workspace.layout.set_viewport(viewport);
+        }
+        self.clamp_floating_windows();
+        self.refresh_tiled_rects();
+        true
+    }
+
+    /// Update one output's usable work area without changing its physical
+    /// bounds. Layer-shell exclusive zones use this to keep tiled clients clear
+    /// of panels while rendering and output geometry retain the full mode.
+    pub fn set_output_work_area(&mut self, output_index: usize, work_area: Rect) -> bool {
+        let Some(output) = self.outputs.get_mut(output_index) else {
+            return false;
+        };
+        let work_area = work_area
+            .intersection(output.rect)
+            .unwrap_or_else(|| Rect::new(output.rect.x, output.rect.y, 0, 0));
+        if output.work_area == work_area {
+            return false;
+        }
+
+        output.work_area = work_area;
+        let viewport = viewport_for(work_area, &self.config.layout);
+        for workspace in &mut output.workspaces {
             workspace.layout.set_viewport(viewport);
         }
         self.clamp_floating_windows();
@@ -1367,7 +1397,7 @@ impl Wm {
     fn build_snapshot(&self, output_index: usize, workspace_index: usize) -> Snapshot {
         let output = &self.outputs[output_index];
         let workspace = &output.workspaces[workspace_index];
-        let viewport = viewport_for(output.rect, &self.config.layout);
+        let viewport = viewport_for(output.work_area, &self.config.layout);
         let layout = workspace.effective_layout();
         let gap = smart_gap(&self.config.layout, workspace.layout.window_count());
 
@@ -1805,7 +1835,7 @@ impl Wm {
     ) -> usize {
         let output = &mut self.outputs[output_index];
         let index = output.workspaces.len();
-        let viewport = viewport_for(output.rect, &self.config.layout);
+        let viewport = viewport_for(output.work_area, &self.config.layout);
         output.workspaces.push(Workspace::new(
             name.clone(),
             position,
@@ -2677,6 +2707,33 @@ mod tests {
             "moved window is stacked under the previous one"
         );
         assert_eq!(moved.bottom(), snapshot.viewport.bottom());
+    }
+
+    #[test]
+    fn output_work_area_reflows_windows_without_changing_physical_bounds() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 2);
+        let before = wm.snapshot();
+        let work_area = Rect::new(0, 24, before.output.w, before.output.h - 24);
+
+        assert!(wm.set_output_work_area(0, work_area));
+
+        let after = wm.snapshot();
+        assert_eq!(after.output, before.output);
+        assert_eq!(
+            after.viewport,
+            Rect::new(
+                before.viewport.x,
+                before.viewport.y + 24,
+                before.viewport.w,
+                before.viewport.h - 24,
+            )
+        );
+        for id in ids {
+            let placement = after.placement_of(id).expect("window placement");
+            assert!(placement.rect.y >= after.viewport.y);
+            assert!(placement.rect.bottom() <= after.viewport.bottom());
+        }
     }
 
     #[test]

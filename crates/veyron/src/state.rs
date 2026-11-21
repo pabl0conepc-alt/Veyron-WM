@@ -698,6 +698,20 @@ impl Veyron {
         for layer in layers {
             layer.layer_surface().send_pending_configure();
         }
+        self.sync_layer_work_area();
+    }
+
+    /// Mirror Smithay's current layer-shell reservation into the window model.
+    /// The physical output rectangle remains unchanged for rendering.
+    fn sync_layer_work_area(&mut self) {
+        let area = {
+            let zone = layer_map_for_output(&self.output).non_exclusive_zone();
+            Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h)
+        };
+        if self.wm.set_output_work_area(0, area) {
+            self.sync_layout();
+            self.needs_redraw = true;
+        }
     }
 
     /// Match the scene graph to the layout snapshot and configure clients.
@@ -955,6 +969,7 @@ impl CompositorHandler for Veyron {
                     layer.layer_surface().send_pending_configure();
                 }
             }
+            self.sync_layer_work_area();
             self.needs_redraw = true;
             return;
         }
@@ -1132,6 +1147,7 @@ impl WlrLayerShellHandler for Veyron {
         }
         // Mapping arranged the surface, so this is its initial configure.
         layer_surface.layer_surface().send_configure();
+        self.sync_layer_work_area();
         self.needs_redraw = true;
     }
 
@@ -1142,6 +1158,7 @@ impl WlrLayerShellHandler for Veyron {
             .cloned();
         if let Some(layer) = doomed {
             layer_map_for_output(&self.output).unmap_layer(&layer);
+            self.sync_layer_work_area();
             self.needs_redraw = true;
         }
     }
