@@ -17,6 +17,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -44,10 +45,13 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for a protocol round trip to produce an expected event.
 const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 
+static NEXT_SHM_BUFFER_ID: AtomicU64 = AtomicU64::new(0);
+
 fn shm_buffer_path(timestamp_nanos: u128) -> PathBuf {
+    let unique_id = NEXT_SHM_BUFFER_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "veyron-buffer-{}-{timestamp_nanos}.shm",
-        std::process::id()
+        "veyron-buffer-{}-{timestamp_nanos}-{unique_id}.shm",
+        std::process::id(),
     ))
 }
 
