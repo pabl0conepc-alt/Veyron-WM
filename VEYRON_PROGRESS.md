@@ -11,7 +11,7 @@ the prior flat prototype as the active implementation.
 
 - Active worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-current-main`
 - Branch: `codex/current-main-audit`, based on `origin/main` at `ed18b75`.
-- Latest pushed commit: `f9f2105 fix: use cargo install hook for Nix package`.
+- Latest pushed commit: `70bc7d1 test: use generated layer anchor names`.
 - Draft PR: none yet; create after implementation and checks are reviewed/green.
 - User instruction: **no agents**. Continue solo, only on Veyron-WM, and do not merge a PR.
 - Old checkouts remain preserved: `outputs/Veyron-WM` on `codex/engineering-audit`
@@ -48,6 +48,11 @@ and no target visual/performance evidence. See audit and matrix for details.
   with the standard Cargo install hook (`f9f2105`), after CI could not find the
   expected executable at that path. The Wayland runtime wrappers remain in
   `postInstall`.
+- Added `wayland-protocols-wlr` as a test dependency and a real Wayland-client
+  regression for a top layer surface with a 24 px exclusive zone. The client
+  test creates a panel, maps a toplevel, and compares the configured height.
+  Test scaffolding is committed in `e46bc78`/`70bc7d1`; no compositor or core
+  implementation change has been made for this behavior yet.
 - Created current-tree audit, 187-row matrix, implementation plan, and progress
   checkpoint. Some matrix rows are generated from category-level evidence;
   refine per-feature module/test/next-action specificity before treating the
@@ -76,6 +81,11 @@ and no target visual/performance evidence. See audit and matrix for details.
   the custom install phase could not find `target/release/veyron`.
 - Commit `f9f2105` passed both jobs in run `44932470919`: standard format,
   Clippy, build and tests, plus the reproducible Nix package build and tests.
+- Layer-shell regression currently supplies red evidence: Actions run
+  `44936140199` passed format, Clippy, and build, then failed the headless test
+  in both standard and Nix jobs. The measured configured-height difference is
+  0 px instead of the expected 24 px. This confirms that layer exclusive zones
+  are not reaching the core layout viewport.
 - The shell has Nix but no `cargo`/`rustc` on PATH. Do not fetch a large compiler
   closure onto the 4 GiB netbook; use GitHub Actions for full build/test/Clippy.
 - No nested visual session or target GPU/performance measurements were run.
@@ -83,8 +93,11 @@ and no target visual/performance evidence. See audit and matrix for details.
 ## Exact next work
 
 1. Review/refine all 187 matrix entries against the latest source and tests.
-2. Add a real-client test and implement layer-shell exclusive-zone viewport
-   geometry, then pointer routing/popup grabs/client fullscreen in small steps.
+2. Implement a core output work-area API and synchronize Smithay's
+   `LayerMap::non_exclusive_zone()` after layer commits, creation/destruction,
+   and output resize. Keep the physical output rectangle separate. Make the
+   real-client test in run `44936140199` green before proceeding to pointer
+   routing/popup grabs/client fullscreen in separate steps.
 3. Fix IPC reload error reporting, wire-level version negotiation and per-peer
    resource limits; add regression tests.
 4. Reconcile Recall restore state with later Wayland client surfaces; test actual

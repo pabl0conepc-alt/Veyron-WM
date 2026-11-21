@@ -1,7 +1,7 @@
 # Veyron WM project status
 
 Last reviewed: 2026-11-21 against updated `origin/main` commit `ed18b75` and
-active branch `codex/current-main-audit` (latest pushed commit `f9f2105`).
+active branch `codex/current-main-audit` (latest pushed commit `70bc7d1`).
 
 ## Current repository state
 
@@ -59,7 +59,9 @@ active branch `codex/current-main-audit` (latest pushed commit `f9f2105`).
   unique suffix and passed standard CI. Run `44931933845` then failed at the
   custom install phase because `target/release/veyron` was absent. Commit
   `f9f2105` uses the standard Cargo install hook; run `44932470919` passed both
-  standard CI and the Nix package build/test job.
+  standard CI and the Nix package build/test job. Layer-shell regression run
+  `44936140199` currently fails both test jobs: 24 px exclusive zone yields
+  0 px client height reduction; implementation remains pending.
 - The netbook shell has Nix but no `cargo`/`rustc` on PATH. A prior compiler
   closure estimate was too large for the 4 GiB machine; continue using CI for
   full workspace validation and avoid concurrent local builds.

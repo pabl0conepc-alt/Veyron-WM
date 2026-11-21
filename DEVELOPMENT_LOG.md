@@ -1,5 +1,19 @@
 # Development log
 
+## 2026-11-21 — Layer-shell exclusive-zone regression
+
+- Added `wayland-protocols-wlr` to the `veyron` integration-test dependencies
+  and a real Wayland client that creates a top panel with a 24 px exclusive
+  zone, then maps a tiled toplevel.
+- Actions run `44936140199` confirms the current defect in both standard and
+  Nix test jobs: configured client height changes by 0 px instead of 24 px.
+  Format, Clippy, and Build pass. The red test is committed in `e46bc78` and
+  protocol naming correction in `70bc7d1`.
+- No compositor/core behavior has been changed yet. Next implement output
+  work-area state separately from physical output bounds, synchronize it from
+  Smithay `LayerMap::non_exclusive_zone()` on layer lifecycle/commits and
+  resize, and make this real-client test green.
+
 ## 2026-11-21 — Nix headless test runtime and SHM collision
 
 - Added `runtimeLibs` to the Nix check environment and wrapped installed

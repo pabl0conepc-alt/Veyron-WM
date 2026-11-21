@@ -31,8 +31,8 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
 
 ## Branch and CI
 
-- Current active branch's latest pushed commit: `f9f2105`, which uses Cargo's
-  standard install hook in the Nix package.
+- Current active branch's latest pushed commit: `70bc7d1`, which corrects
+  generated layer-shell anchor names in the integration test.
 - Nix runtime library lookup was fixed in `253a901`. Its package tests then
   reached all headless clients, where a parallel filename collision occurred.
 - Test-only commit `0eaa47d` added a deterministic repeated-clock regression;
@@ -40,9 +40,13 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
   process-unique suffix. Run `44931933845` passed the full standard CI job; Nix
   passed headless tests but failed at the custom `target/release/veyron` install
   path. Commit `f9f2105` switches to Cargo's install hook; run `44932470919`
-  is verifying both jobs.
-- No PR for `codex/current-main-audit` has been created yet. Once implementation
-  and checks are reviewed/green, create a draft PR and leave it unmerged.
+  passed both standard CI and the Nix package job.
+- Layer-shell test scaffolding is in `e46bc78` and `70bc7d1`. Run
+  `44936140199` passes Format, Clippy, and Build, but both standard and Nix test
+  jobs fail the new real-client test: a 24 px top exclusive zone changes the
+  toplevel height by 0 px. No compositor/core implementation change has been
+  made yet. The next step is a core output work-area API synchronized from
+  Smithay `LayerMap::non_exclusive_zone()` on layer commit/map/unmap and resize.
 - No PR for `codex/current-main-audit` has been created yet. Once implementation
   and checks are reviewed/green, create a draft PR and leave it unmerged.
 
@@ -75,13 +79,12 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
 
 ## Exact next steps
 
-1. Inspect Actions run `44932470919`; confirm standard tests, formatting,
-   Clippy/build and Nix package install pass with process-unique SHM paths.
-2. If CI is green, record that result in `VEYRON_PROGRESS.md`,
-   `PROJECT_STATUS.md` and `DEVELOPMENT_LOG.md`; otherwise fix the actual cause.
-3. Review all 187 feature rows against actual source and tests; refine generic
+1. Implement the layer-shell output work-area bridge described above. Keep the
+   physical output bounds intact and reflow tiled clients inside the usable
+   rectangle. Make the failing real-client regression pass in full CI.
+2. Review all 187 feature rows against actual source and tests; refine generic
    file/test/next-action columns before committing the matrix.
-4. Continue phases in `VEYRON_IMPLEMENTATION_PLAN.md`; do not call project
+3. Continue phases in `VEYRON_IMPLEMENTATION_PLAN.md`; do not call project
    complete while runtime, performance, or listed integration work is open.
-5. Commit/push coherent increments on `codex/current-main-audit`; prepare a
+4. Commit/push coherent increments on `codex/current-main-audit`; prepare a
    draft PR after CI is green. Never merge without explicit request.

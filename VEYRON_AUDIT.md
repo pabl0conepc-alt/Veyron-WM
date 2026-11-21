@@ -1,7 +1,7 @@
 # Veyron WM engineering audit
 
 Audit started at `ed18b75` on 2026-11-21 and was refreshed on branch
-`codex/current-main-audit` through `f9f2105`. The repository had advanced well
+`codex/current-main-audit` through `70bc7d1`. The repository had advanced well
 beyond the earlier flat prototype: the current source is a three-crate Rust
 workspace. This document records code-backed behavior, not feature names or
 README claims.
@@ -89,10 +89,13 @@ README claims.
   failed creating a duplicate SHM path under parallel execution. Commit
   `0eaa47d` added a deterministic repeated-clock regression test; its standard
   test job failed as expected. Commit `bf79323` adds an atomic per-process
-  suffix; run `44931933845` passed the standard job and its Nix job reached
-  installation before failing on the custom `target/release/veyron` path.
-  Commit `f9f2105` replaces that install phase with the Cargo install hook;
-  run `44932470919` passed both standard and Nix jobs.
+   suffix; run `44931933845` passed the standard job and its Nix job reached
+   installation before failing on the custom `target/release/veyron` path.
+   Commit `f9f2105` replaces that install phase with the Cargo install hook;
+   run `44932470919` passed both standard and Nix jobs.
+- A real-client top-panel regression in `e46bc78`/`70bc7d1` fails in both CI
+  jobs at `44936140199`: a 24 px exclusive zone changes client height by 0 px.
+  This is the current red test; the core usable-area bridge is not implemented.
 
 ## Audit conclusion
 

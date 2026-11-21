@@ -1,7 +1,7 @@
 # Veyron WM implementation plan
 
 Plan target: updated repository baseline `ed18b75` and active work branch
-`codex/current-main-audit` through `f9f2105`. This worktree is based on the updated three-crate
+`codex/current-main-audit` through `70bc7d1`. This worktree is based on the updated three-crate
 workspace. The older flat-prototype branch is preserved separately and is not
 the implementation base.
 
@@ -14,7 +14,7 @@ evidence.
 |---|---|---|---|---|
 | 0 | Repository discovery and feature audit | Three crates, Smithay 0.7/calloop, docs and tests inventoried. | Keep audit, 187-row matrix, plan and progress aligned with updated `origin/main`; distinguish policy, protocol, visual and hardware evidence. | Active |
 | 1 | Core architecture | Protocol-free Wm/config/action/session plus compositor adapter exist. | Smart affinity now updates after manual workspace/output moves and late identity; standard CI passes. Still bound overview arithmetic and add edge tests; keep single source of truth for window/output state. | In progress |
-| 2 | Wayland protocol infrastructure | xdg-shell, SHM, seat, output globals, layer shell, data device, headless real clients. | Apply layer exclusive zones to usable output geometry; route input to child/popup/layer surfaces; implement popup grabs/reposition and client fullscreen; test output resize/layer/popup behavior with real clients. | Highest integration priority |
+| 2 | Wayland protocol infrastructure | xdg-shell, SHM, seat, output globals, layer shell, data device, headless real clients. A top-panel test now fails with 0 px reserved for its 24 px exclusive zone. | Add core work-area state and sync Smithay `non_exclusive_zone` on commits, layer lifecycle, and output resize; then route input to child/popup/layer surfaces and implement popup grabs/reposition and client fullscreen. | Highest integration priority |
 | 3 | Rendering infrastructure | Nested GLES scene graph, damage tracking, buffer-age fallback, event-driven redraw. | Verify resize/damage scheduling and idle wakeups; expose runtime evidence; apply alpha/opacity policy; only add GPU effects after a tested path. Keep headless renderer explicitly separate. | High |
 | 4 | Window management | Core supports strip, layouts, floating, rules, snap/PiP, groups, scratchpad, focus history; adapter configures snapshots. | Add client-level tests for more policies, client fullscreen/modal behavior, and input-driven move/resize; preserve constraints and focus invariants. | High |
 | 5 | Workspace management | Named and sparse 2D workspaces, transfer, output policy, overview geometry and CLI report. | Test named/persistent workspace lifecycle and resize; define visible overview interaction; verify output migration against backend events. | High |
