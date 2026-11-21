@@ -106,6 +106,22 @@ fn smart_workspace_follows_a_window_moved_manually() {
 }
 
 #[test]
+fn smart_workspace_learns_a_late_client_identity() {
+    let mut wm = wm_with(true);
+    let first = wm.create_window(NewWindow::default());
+    wm.set_window_identity(first, "firefox", "Start Page");
+
+    wm.dispatch(Action::Workspace { index: 2 });
+    let second = open(&mut wm, "firefox");
+
+    assert_eq!(
+        workspace_of(&wm, 2, second).as_deref(),
+        Some("1"),
+        "identity announced after toplevel creation should seed app placement"
+    );
+}
+
+#[test]
 fn unrelated_apps_are_not_affected_by_the_learning() {
     let mut wm = wm_with(true);
     wm.dispatch(Action::Workspace { index: 2 });
