@@ -354,9 +354,11 @@ impl Client {
         surface.commit();
 
         let deadline = Instant::now() + EVENT_TIMEOUT;
-        let serial = loop {
-            if let Some((serial, _, _)) = self.state.layer_configure {
-                break serial;
+        let (serial, width, height) = loop {
+            if let Some(configure) = self.state.layer_configure {
+                if configure.1 > 0 && configure.2 > 0 {
+                    break configure;
+                }
             }
             assert!(
                 Instant::now() < deadline,
@@ -365,11 +367,47 @@ impl Client {
             self.roundtrip();
         };
         layer_surface.ack_configure(serial);
+        let width = i32::try_from(width).expect("layer width fits in i32");
+        let height = i32::try_from(height).expect("layer height fits in i32");
+        let stride = width * 4;
+        let length = (stride as usize) * (height as usize);
+        let timestamp_nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let path = shm_buffer_path(timestamp_nanos);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create the layer shm file");
+        file.set_len(length as u64)
+            .expect("size the layer shm file");
+        let pool = self
+            .shm
+            .create_pool(file.as_fd(), length as i32, &self.qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width,
+            height,
+            stride,
+            wl_shm::Format::Argb8888,
+            &self.qh,
+            (),
+        );
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, width, height);
+        surface.commit();
         self.roundtrip();
 
         LayerPanel {
             _surface: surface,
             _layer_surface: layer_surface,
+            _pool: pool,
+            _buffer: buffer,
+            _file: file,
+            file_path: path,
         }
     }
 
@@ -456,6 +494,16 @@ struct Toplevel {
 struct LayerPanel {
     _surface: WlSurface,
     _layer_surface: ZwlrLayerSurfaceV1,
+    _pool: WlShmPool,
+    _buffer: wl_buffer::WlBuffer,
+    _file: File,
+    file_path: PathBuf,
+}
+
+impl Drop for LayerPanel {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.file_path);
+    }
 }
 
 impl Toplevel {
