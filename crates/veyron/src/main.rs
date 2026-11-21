@@ -22,6 +22,7 @@ use veyron_core::{Config, Size as VSize};
 use state::{ClientState, Veyron};
 
 mod apps;
+mod decoration;
 mod ipc;
 mod state;
 

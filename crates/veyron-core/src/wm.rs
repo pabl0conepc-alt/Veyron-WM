@@ -2325,6 +2325,14 @@ impl Wm {
                     .map_or(0, |index| (index + 1) % theme::VARIANTS.len());
                 next.variant = theme::VARIANTS[index].to_string();
             }
+            ThemeOp::Design { design } => next.set_design(&design),
+            ThemeOp::NextDesign => {
+                let index = theme::DESIGNS
+                    .iter()
+                    .position(|name| name.eq_ignore_ascii_case(&next.design))
+                    .map_or(0, |index| (index + 1) % theme::DESIGNS.len());
+                next.set_design(theme::DESIGNS[index]);
+            }
         }
         if next == self.config.theme || next.validate().is_err() {
             return false;
@@ -2839,6 +2847,20 @@ mod tests {
             op: ThemeOp::NextVariant,
         });
         assert_eq!(wm.config().theme.variant, crate::theme::VARIANTS[1]);
+
+        wm.dispatch(Action::Theme {
+            op: ThemeOp::NextDesign,
+        });
+        assert_eq!(wm.config().theme.design, crate::theme::DESIGNS[1]);
+        assert!(
+            wm.dispatch(Action::Theme {
+                op: ThemeOp::Design {
+                    design: "neon".into()
+                }
+            })
+            .theme_changed
+        );
+        assert!(wm.config().theme.design().glow);
 
         assert!(
             wm.dispatch(Action::Theme {

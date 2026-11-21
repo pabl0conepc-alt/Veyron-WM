@@ -57,8 +57,20 @@ pub struct ThemeConfig {
     pub variant: String,
     /// Contrast level from -1.0 (reduced) to 1.0 (high); 0.0 is standard.
     pub contrast: f64,
+    /// Window decoration style, one of [`DESIGNS`]. The fields below
+    /// override single values of the chosen style.
+    pub design: String,
     /// Border drawn around windows, in logical pixels. 0 disables borders.
-    pub border_width: i32,
+    pub border_width: Option<i32>,
+    /// Radius of rounded window corners, in logical pixels. 0 keeps corners
+    /// square.
+    pub corner_radius: Option<i32>,
+    /// Blur radius of the drop shadow, in logical pixels. 0 disables shadows.
+    pub shadow_size: Option<i32>,
+    /// Opacity of the drop shadow at the window edge (`0.0..=1.0`).
+    pub shadow_opacity: Option<f32>,
+    /// Opacity applied to unfocused windows (`0.1..=1.0`), on top of rules.
+    pub inactive_opacity: Option<f32>,
     /// Overrides the focused-window border colour (defaults to `primary`).
     pub border_active: Option<String>,
     /// Overrides the unfocused-window border colour (defaults to
@@ -78,7 +90,12 @@ impl Default for ThemeConfig {
             mode: ThemeMode::Dark,
             variant: "tonal-spot".to_string(),
             contrast: 0.0,
-            border_width: 2,
+            design: "material".to_string(),
+            border_width: None,
+            corner_radius: None,
+            shadow_size: None,
+            shadow_opacity: None,
+            inactive_opacity: None,
             border_active: None,
             border_inactive: None,
             use_surface_background: false,
@@ -122,10 +139,29 @@ impl ThemeConfig {
                 self.contrast
             ));
         }
-        if !(0..=32).contains(&self.border_width) {
+        Design::preset(&self.design)?;
+        let ranges = [
+            ("border_width", self.border_width, 0..=32),
+            ("corner_radius", self.corner_radius, 0..=64),
+            ("shadow_size", self.shadow_size, 0..=96),
+        ];
+        for (name, value, range) in ranges {
+            if let Some(value) = value.filter(|value| !range.contains(value)) {
+                return Err(format!(
+                    "theme.{name} must be between {} and {}, got {value}",
+                    range.start(),
+                    range.end()
+                ));
+            }
+        }
+        if let Some(opacity) = self.shadow_opacity.filter(|o| !(0.0..=1.0).contains(o)) {
             return Err(format!(
-                "theme.border_width must be between 0 and 32, got {}",
-                self.border_width
+                "theme.shadow_opacity must be between 0.0 and 1.0, got {opacity}"
+            ));
+        }
+        if let Some(opacity) = self.inactive_opacity.filter(|o| !(0.1..=1.0).contains(o)) {
+            return Err(format!(
+                "theme.inactive_opacity must be between 0.1 and 1.0, got {opacity}"
             ));
         }
         for colour in [&self.border_active, &self.border_inactive]
@@ -151,6 +187,128 @@ impl ThemeConfig {
             Some(self.contrast),
         );
         Palette::from_scheme(&scheme, self)
+    }
+
+    /// Switch to another decoration style at runtime. Per-field overrides are
+    /// dropped so the chosen style is shown as designed.
+    pub fn set_design(&mut self, design: &str) {
+        self.design = design.to_ascii_lowercase();
+        self.border_width = None;
+        self.corner_radius = None;
+        self.shadow_size = None;
+        self.shadow_opacity = None;
+        self.inactive_opacity = None;
+    }
+
+    /// The decoration style with this table's overrides applied. Invalid
+    /// names fall back to `material`.
+    pub fn design(&self) -> Design {
+        let mut design = Design::preset(&self.design).unwrap_or_else(|_| Design::material());
+        if let Some(width) = self.border_width {
+            design.border_width = width;
+        }
+        if let Some(radius) = self.corner_radius {
+            design.corner_radius = radius;
+        }
+        if let Some(size) = self.shadow_size {
+            design.shadow_size = size;
+        }
+        if let Some(opacity) = self.shadow_opacity {
+            design.shadow_opacity = opacity;
+        }
+        if let Some(opacity) = self.inactive_opacity {
+            design.inactive_opacity = opacity;
+        }
+        design
+    }
+}
+
+/// Decoration styles selectable with `design = "<name>"` or `theme design`.
+pub const DESIGNS: &[&str] = &["material", "glass", "flat", "neon", "minimal"];
+
+/// How windows are decorated: borders, corners, shadow and inactive dimming.
+/// Colours always come from the Material palette.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Design {
+    pub border_width: i32,
+    pub corner_radius: i32,
+    pub shadow_size: i32,
+    pub shadow_opacity: f32,
+    /// Vertical shadow offset, so light seems to come from above.
+    pub shadow_offset: i32,
+    pub inactive_opacity: f32,
+    /// Tint the focused window's shadow with its border colour (a glow).
+    pub glow: bool,
+}
+
+impl Design {
+    /// Material 3: medium rounding and a soft elevation shadow.
+    pub fn material() -> Self {
+        Self {
+            border_width: 2,
+            corner_radius: 12,
+            shadow_size: 18,
+            shadow_opacity: 0.35,
+            shadow_offset: 4,
+            inactive_opacity: 1.0,
+            glow: false,
+        }
+    }
+
+    pub fn preset(name: &str) -> Result<Self, String> {
+        let material = Self::material();
+        Ok(match name.trim().to_ascii_lowercase().as_str() {
+            "material" => material,
+            // Frosted look: large radius, hairline border, dimmed background
+            // windows so the focused one stands out.
+            "glass" => Self {
+                border_width: 1,
+                corner_radius: 16,
+                shadow_size: 24,
+                shadow_opacity: 0.25,
+                inactive_opacity: 0.88,
+                ..material
+            },
+            // Square, no shadow: cheapest to draw.
+            "flat" => Self {
+                border_width: 1,
+                corner_radius: 0,
+                shadow_size: 0,
+                shadow_opacity: 0.0,
+                shadow_offset: 0,
+                ..material
+            },
+            // Thick border with a coloured glow around the focused window.
+            "neon" => Self {
+                border_width: 3,
+                corner_radius: 8,
+                shadow_size: 16,
+                shadow_opacity: 0.6,
+                shadow_offset: 0,
+                glow: true,
+                ..material
+            },
+            // No border, only a faint shadow and slight rounding.
+            "minimal" => Self {
+                border_width: 0,
+                corner_radius: 6,
+                shadow_size: 10,
+                shadow_opacity: 0.2,
+                shadow_offset: 2,
+                ..material
+            },
+            _ => {
+                return Err(format!(
+                    "unknown design '{name}' (expected one of {})",
+                    DESIGNS.join(", ")
+                ))
+            }
+        })
+    }
+
+    /// Whether any GPU decoration (rounding, shadow) is needed at all.
+    pub fn needs_shader(&self) -> bool {
+        self.corner_radius > 0 || (self.shadow_size > 0 && self.shadow_opacity > 0.0)
     }
 }
 
@@ -496,6 +654,53 @@ mod tests {
     }
 
     #[test]
+    fn every_design_resolves_and_overrides_win() {
+        for name in DESIGNS {
+            let config = ThemeConfig {
+                design: (*name).into(),
+                ..ThemeConfig::default()
+            };
+            config.validate().expect("listed design validates");
+            assert_eq!(config.design(), Design::preset(name).expect("preset"));
+        }
+        assert!(!Design::preset("flat").expect("flat").needs_shader());
+        assert!(Design::preset("material").expect("material").needs_shader());
+
+        let config = ThemeConfig {
+            design: "flat".into(),
+            corner_radius: Some(20),
+            inactive_opacity: Some(0.5),
+            ..ThemeConfig::default()
+        };
+        let design = config.design();
+        assert_eq!(design.corner_radius, 20);
+        assert_eq!(design.inactive_opacity, 0.5);
+        assert_eq!(design.shadow_size, 0, "untouched fields keep the preset");
+
+        let bad = ThemeConfig {
+            design: "baroque".into(),
+            ..ThemeConfig::default()
+        };
+        assert!(bad.validate().is_err());
+        for bad in [
+            ThemeConfig {
+                corner_radius: Some(65),
+                ..ThemeConfig::default()
+            },
+            ThemeConfig {
+                shadow_opacity: Some(1.5),
+                ..ThemeConfig::default()
+            },
+            ThemeConfig {
+                inactive_opacity: Some(0.0),
+                ..ThemeConfig::default()
+            },
+        ] {
+            assert!(bad.validate().is_err());
+        }
+    }
+
+    #[test]
     fn validation_rejects_out_of_range_values() {
         for config in [
             ThemeConfig {
@@ -503,7 +708,7 @@ mod tests {
                 ..ThemeConfig::default()
             },
             ThemeConfig {
-                border_width: -1,
+                border_width: Some(-1),
                 ..ThemeConfig::default()
             },
             ThemeConfig {

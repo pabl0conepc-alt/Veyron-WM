@@ -288,6 +288,7 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+t", "theme toggle"),
     ("super+shift+t", "theme next"),
     ("super+ctrl+t", "theme variant next"),
+    ("super+alt+t", "theme design next"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];

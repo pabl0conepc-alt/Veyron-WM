@@ -31,6 +31,10 @@ pub enum ThemeOp {
     Variant { variant: String },
     /// Use the next scheme variant (`theme variant next`).
     NextVariant,
+    /// Use a decoration style (`theme design glass`).
+    Design { design: String },
+    /// Use the next decoration style (`theme design next`).
+    NextDesign,
 }
 
 impl ThemeOp {
@@ -61,10 +65,17 @@ impl ThemeOp {
                     variant: variant.to_string(),
                 }
             }
+            ("design", "next") => ThemeOp::NextDesign,
+            ("design", design) if !design.is_empty() => {
+                crate::theme::Design::preset(design).map_err(ActionParseError::new)?;
+                ThemeOp::Design {
+                    design: design.to_ascii_lowercase(),
+                }
+            }
             _ => {
                 return Err(ActionParseError::new(format!(
-                    "theme expects toggle, dark, light, next, seed <colour|preset> or \
-                     variant <name|next>, got '{rest}'"
+                    "theme expects toggle, dark, light, next, seed <colour|preset>, \
+                     variant <name|next> or design <name|next>, got '{rest}'"
                 )))
             }
         };
@@ -81,6 +92,8 @@ impl fmt::Display for ThemeOp {
             ThemeOp::NextPreset => f.write_str("next"),
             ThemeOp::Variant { variant } => write!(f, "variant {variant}"),
             ThemeOp::NextVariant => f.write_str("variant next"),
+            ThemeOp::Design { design } => write!(f, "design {design}"),
+            ThemeOp::NextDesign => f.write_str("design next"),
         }
     }
 }
@@ -680,6 +693,14 @@ mod tests {
             },
             Action::Theme {
                 op: ThemeOp::NextVariant,
+            },
+            Action::Theme {
+                op: ThemeOp::Design {
+                    design: "glass".into(),
+                },
+            },
+            Action::Theme {
+                op: ThemeOp::NextDesign,
             },
             Action::Spawn {
                 command: "alacritty --class veyron".into(),

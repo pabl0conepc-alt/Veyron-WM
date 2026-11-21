@@ -23,10 +23,10 @@ use smithay::{
             element::{
                 render_elements,
                 solid::{SolidColorBuffer, SolidColorRenderElement},
-                surface::WaylandSurfaceRenderElement,
+                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
                 AsRenderElements, Kind,
             },
-            gles::GlesRenderer,
+            gles::{element::PixelShaderElement, GlesRenderer},
             utils::on_commit_buffer_handler,
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
@@ -46,7 +46,7 @@ use smithay::{
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
         Client, DisplayHandle,
     },
-    utils::{Logical, Point, Scale, Serial, Transform, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, Scale, Serial, Transform, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{
@@ -73,15 +73,18 @@ use smithay::{
     },
 };
 use veyron_core::{
-    workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Palette, Rect, RectAnimator,
-    Session, Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
+    workspace_slide, Action, Config, Design, Effects, Modifiers, NewWindow, Palette, Rect,
+    RectAnimator, Session, Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
 };
 use veyron_ipc::{
     OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, ThemeReport,
     WindowReport, MAX_LINE_BYTES,
 };
 
-use crate::ipc::Job;
+use crate::{
+    decoration::{Decoration, DecorationParams, RoundedSurface, Shaders},
+    ipc::Job,
+};
 
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
@@ -150,8 +153,8 @@ pub struct Veyron {
     drag: Option<(WindowId, Point<f64, Logical>)>,
     /// Material You scheme generated from `[theme]`.
     palette: Palette,
-    /// Border rectangles per window, reused so unchanged borders cause no damage.
-    borders: HashMap<WindowId, [SolidColorBuffer; 4]>,
+    /// Window decorations (borders, shadows, rounded corners) kept across frames.
+    chrome: Chrome,
     needs_redraw: bool,
     /// Set when the compositor should exit.
     pub exit: bool,
@@ -269,7 +272,7 @@ impl Veyron {
             pointer_location: (0.0, 0.0).into(),
             drag: None,
             palette,
-            borders: HashMap::new(),
+            chrome: Chrome::default(),
             needs_redraw: true,
             exit: false,
         };
@@ -713,6 +716,11 @@ impl Veyron {
     /// write it to `$XDG_STATE_HOME/veyron/theme/` for waybar, GTK and shell
     /// widgets. Headless runs never touch the user's state directory.
     fn refresh_theme(&mut self) {
+        // Corner radius and colours live in shader uniforms the damage tracker
+        // cannot see, so a theme change redraws the whole output once.
+        if let Some(mode) = self.output.current_mode() {
+            self.damage_tracker = OutputDamageTracker::new(mode.size, 1.0, Transform::Flipped180);
+        }
         let theme = &self.wm.config().theme;
         self.palette = theme.palette();
         self.needs_redraw = true;
@@ -1005,8 +1013,8 @@ impl Veyron {
                 &self.output,
                 &self.windows,
                 &snapshot,
-                &mut self.borders,
-                BorderStyle::from_config(self.wm.config(), &self.palette),
+                &mut self.chrome,
+                Style::new(self.wm.config(), &self.palette, snapshot.output.h),
             );
             let rendered = self.damage_tracker.render_output(
                 renderer,
@@ -1043,38 +1051,78 @@ impl Veyron {
 }
 
 render_elements! {
-    /// Everything a frame is made of: client surfaces and the solid-colour
-    /// window borders drawn by the compositor.
+    /// Everything a frame is made of: client surfaces (optionally clipped to
+    /// rounded corners), shader-drawn decorations and solid fallback borders.
     pub SceneElement<=GlesRenderer>;
     Surface=WaylandSurfaceRenderElement<GlesRenderer>,
+    Rounded=RoundedSurface,
+    Decoration=PixelShaderElement,
     Solid=SolidColorRenderElement,
 }
 
-/// Window border appearance for one frame, taken from the Material theme.
+/// Window decoration appearance for one frame: the active design with the
+/// Material palette's colours.
 #[derive(Debug, Clone, Copy)]
-struct BorderStyle {
-    width: i32,
+struct Style {
+    design: Design,
     active: [f32; 4],
     inactive: [f32; 4],
+    shadow: [f32; 4],
+    /// Maps framebuffer rows to output rows for the clip shader; the nested
+    /// winit output is drawn vertically flipped.
+    frag_map: [f32; 2],
 }
 
-impl BorderStyle {
-    fn from_config(config: &Config, palette: &Palette) -> Self {
+impl Style {
+    fn new(config: &Config, palette: &Palette, output_height: i32) -> Self {
         Self {
-            width: config.theme.border_width,
+            design: config.theme.design(),
             active: palette.border_active_rgba(),
             inactive: palette.border_inactive_rgba(),
+            shadow: palette.rgba("shadow").unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            frag_map: [output_height as f32, -1.0],
         }
     }
 }
 
+/// Per-window decoration state kept across frames so unchanged decorations
+/// cause no damage, plus the lazily compiled shaders.
+#[derive(Debug, Default)]
+struct Chrome {
+    /// `None` until the first frame tries to compile; `Some(None)` when the
+    /// driver rejected the shaders and square solid borders are used.
+    shaders: Option<Option<Shaders>>,
+    shaded: HashMap<WindowId, Decoration>,
+    solid: HashMap<WindowId, [SolidColorBuffer; 4]>,
+}
+
+impl Chrome {
+    fn shaders(&mut self, renderer: &mut GlesRenderer) -> Option<Shaders> {
+        self.shaders
+            .get_or_insert_with(|| match Shaders::compile(renderer) {
+                Ok(shaders) => Some(shaders),
+                Err(error) => {
+                    tracing::warn!(%error, "decoration shaders unavailable, using square borders");
+                    None
+                }
+            })
+            .clone()
+    }
+
+    fn forget_hidden(&mut self, snapshot: &Snapshot) {
+        self.shaded
+            .retain(|id, _| snapshot.placement_of(*id).is_some());
+        self.solid
+            .retain(|id, _| snapshot.placement_of(*id).is_some());
+    }
+}
+
 /// Build the frame's render elements front to back: overlay and top layer
-/// surfaces, then windows from the top of the stack down, each drawn with the
-/// opacity its rules request and followed by its border, then bottom and
-/// background layer surfaces.
+/// surfaces, then windows from the top of the stack down, each followed by
+/// its decoration, then bottom and background layer surfaces.
 ///
-/// Border buffers are reused across frames, so an unchanged border keeps its
-/// commit counter and the damage tracker does not redraw it. The output is
+/// A window's popups are drawn unclipped in front of it; its own surface tree
+/// is clipped to rounded corners when the design asks for them. The output is
 /// unscaled (scale 1.0), so logical and physical coordinates coincide.
 fn scene_elements(
     renderer: &mut GlesRenderer,
@@ -1082,8 +1130,8 @@ fn scene_elements(
     output: &Output,
     windows: &HashMap<WindowId, Window>,
     snapshot: &Snapshot,
-    borders: &mut HashMap<WindowId, [SolidColorBuffer; 4]>,
-    style: BorderStyle,
+    chrome: &mut Chrome,
+    style: Style,
 ) -> Vec<SceneElement> {
     let scale = Scale::from(1.0);
     let mut elements = Vec::new();
@@ -1109,6 +1157,13 @@ fn scene_elements(
     push_layers(&mut elements, Layer::Overlay, renderer);
     push_layers(&mut elements, Layer::Top, renderer);
 
+    let design = style.design;
+    let shaders = if design.needs_shader() {
+        chrome.shaders(renderer)
+    } else {
+        None
+    };
+
     // `Space::elements` yields bottom to top; elements are drawn front first.
     let stacked: Vec<&Window> = space.elements().collect();
     for window in stacked.into_iter().rev() {
@@ -1120,30 +1175,115 @@ fn scene_elements(
             .find(|(_, candidate)| *candidate == window)
             .map(|(id, _)| *id);
         let placement = id.and_then(|id| snapshot.placement_of(id));
-        let alpha = placement.map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
-        let origin = (location - window.geometry().loc).to_physical_precise_round(1.0);
-        elements.extend(
-            window
-                .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
-                    renderer, origin, scale, alpha,
-                )
-                .into_iter()
-                .map(SceneElement::from),
-        );
+        let focused = id.is_some() && snapshot.focused == id;
+        let fullscreen = placement.is_some_and(|placement| placement.fullscreen);
+        let mut alpha = placement.map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
+        if !focused && !fullscreen {
+            alpha *= design.inactive_opacity;
+        }
+        let geometry = window.geometry();
+        let origin = (location - geometry.loc).to_physical_precise_round(1.0);
+        let window_rect = Rectangle::new(location, geometry.size);
 
-        let (Some(id), Some(placement)) = (id, placement) else {
+        match (&shaders, window.toplevel()) {
+            (Some(shaders), Some(toplevel)) if design.corner_radius > 0 && !fullscreen => {
+                let surface = toplevel.wl_surface();
+                for (popup, offset) in PopupManager::popups_for_surface(surface) {
+                    let popup_origin = origin
+                        + (geometry.loc + offset - popup.geometry().loc)
+                            .to_physical_precise_round(1.0);
+                    elements.extend(
+                        render_elements_from_surface_tree::<
+                            _,
+                            WaylandSurfaceRenderElement<GlesRenderer>,
+                        >(
+                            renderer,
+                            popup.wl_surface(),
+                            popup_origin,
+                            scale,
+                            alpha,
+                            Kind::Unspecified,
+                        )
+                        .into_iter()
+                        .map(SceneElement::from),
+                    );
+                }
+                let clip = window_rect.to_physical_precise_round(1.0);
+                elements.extend(
+                    render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
+                        renderer,
+                        surface,
+                        origin,
+                        scale,
+                        alpha,
+                        Kind::Unspecified,
+                    )
+                    .into_iter()
+                    .map(|element| {
+                        SceneElement::from(shaders.rounded(
+                            element,
+                            clip,
+                            design.corner_radius as f32,
+                            style.frag_map,
+                        ))
+                    }),
+                );
+            }
+            _ => elements.extend(
+                window
+                    .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                        renderer, origin, scale, alpha,
+                    )
+                    .into_iter()
+                    .map(SceneElement::from),
+            ),
+        }
+
+        let Some(id) = id.filter(|_| placement.is_some() && !fullscreen) else {
             continue;
         };
-        if style.width <= 0 || placement.fullscreen {
-            continue;
-        }
-        let color = if snapshot.focused == Some(id) {
+        let mut border = if focused {
             style.active
         } else {
             style.inactive
         };
-        let size = window.geometry().size;
-        let (x, y, w, h, b) = (location.x, location.y, size.w, size.h, style.width);
+        border[3] *= alpha;
+
+        if let Some(shaders) = &shaders {
+            let mut shadow = if design.glow && focused {
+                style.active
+            } else {
+                style.shadow
+            };
+            shadow[3] = design.shadow_opacity * alpha;
+            let params = DecorationParams {
+                window: window_rect,
+                radius: design.corner_radius,
+                border_width: design.border_width,
+                border_color: border,
+                shadow_color: shadow,
+                shadow_size: design.shadow_size,
+                shadow_offset: design.shadow_offset,
+            };
+            let decoration = chrome
+                .shaded
+                .entry(id)
+                .or_insert_with(|| Decoration::new(shaders.decoration_program(), params));
+            decoration.update(params);
+            elements.push(SceneElement::from(decoration.element()));
+            continue;
+        }
+
+        if design.border_width <= 0 {
+            continue;
+        }
+        let (x, y, w, h, b) = (
+            location.x,
+            location.y,
+            geometry.size.w,
+            geometry.size.h,
+            design.border_width,
+        );
         // Top, bottom, left, right: the frame sits just outside the window.
         let sides = [
             (x - b, y - b, w + 2 * b, b),
@@ -1151,22 +1291,22 @@ fn scene_elements(
             (x - b, y, b, h),
             (x + w, y, b, h),
         ];
-        let buffers = borders
+        let buffers = chrome
+            .solid
             .entry(id)
             .or_insert_with(|| std::array::from_fn(|_| SolidColorBuffer::new((0, 0), [0.0; 4])));
         for (buffer, (sx, sy, sw, sh)) in buffers.iter_mut().zip(sides) {
-            buffer.update((sw, sh), color);
+            buffer.update((sw, sh), border);
             elements.push(SceneElement::from(SolidColorRenderElement::from_buffer(
                 buffer,
                 (sx, sy),
                 scale,
-                alpha,
+                1.0,
                 Kind::Unspecified,
             )));
         }
     }
-    // Windows that are gone or hidden drop their border buffers.
-    borders.retain(|id, _| snapshot.placement_of(*id).is_some());
+    chrome.forget_hidden(snapshot);
 
     push_layers(&mut elements, Layer::Bottom, renderer);
     push_layers(&mut elements, Layer::Background, renderer);

@@ -243,7 +243,13 @@ mode = "dark"                # dark | light
 variant = "tonal-spot"       # vibrant, expressive, fidelity, content, neutral,
                              # monochrome, rainbow, fruit-salad
 contrast = 0.0               # -1.0 (reduced) .. 1.0 (high)
+design = "material"          # material, glass, flat, neon, minimal
+# Optional overrides of the design's values:
 border_width = 2             # 0 disables borders
+corner_radius = 12           # 0 keeps square corners
+shadow_size = 18             # 0 disables the drop shadow
+shadow_opacity = 0.35
+inactive_opacity = 1.0       # dim unfocused windows (0.1 .. 1.0)
 # border_active = "#ffb4abff"  # override primary / outline_variant
 use_surface_background = true
 export = true                # write ~/.local/state/veyron/theme/*
@@ -346,6 +352,27 @@ Window-management extras borrowed from other compositors:
 | `theme next` | `super+shift+t` | next preset seed colour |
 | `theme variant next` | `super+ctrl+t` | next Material scheme variant |
 | `theme seed <#hex\|preset>` | | use a seed colour |
+| `theme design next` | `super+alt+t` | next decoration style |
+| `theme design <name>` | | `material`, `glass`, `flat`, `neon`, `minimal` |
+
+### Designs
+
+Window decorations are drawn on the GPU by two small GLSL ES 1.00 shaders:
+one clips client content to rounded corners, the other paints the rounded
+border ring and a soft drop shadow from a signed distance field. Colours always
+come from the Material palette.
+
+| Design | Corners | Border | Shadow | Notes |
+|---|---|---|---|---|
+| `material` | 12 px | 2 px `primary` | soft, offset down | Material 3 elevation |
+| `glass` | 16 px | 1 px | wide, light | unfocused windows dimmed to 88% |
+| `flat` | square | 1 px | none | cheapest; no shaders at all |
+| `neon` | 8 px | 3 px | glow in the border colour | focused window glows |
+| `minimal` | 6 px | none | faint | |
+
+Switching a design at runtime drops the per-field overrides so the style shows
+as designed. If the GPU driver rejects the shaders, Veyron logs a warning and
+falls back to square solid borders.
 
 Floating windows can also be dragged with `super` + left button. Keys are
 matched by their unshifted symbol, so `super+shift+1` means the `1` key on any

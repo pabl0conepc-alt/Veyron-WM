@@ -33,13 +33,8 @@
           export XDG_RUNTIME_DIR="$(mktemp -d)"
         '';
 
-        installPhase = ''
-          runHook preInstall
-          install -Dm755 target/release/veyron "$out/bin/veyron"
-          install -Dm755 target/release/veyronctl "$out/bin/veyronctl"
-          runHook postInstall
-        '';
-
+        # The default cargo install hook installs both binaries (`veyron`,
+        # `veyronctl`) from the target-specific release directory.
         postFixup = ''
           patchelf --add-rpath "${runtimeLibPath}" "$out/bin/veyron"
         '';

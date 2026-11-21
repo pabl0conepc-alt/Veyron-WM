@@ -52,7 +52,7 @@ pub use rules::{Glob, RuleSet, WindowPolicy, WindowRule};
 pub use session::{Session, WindowRecord};
 pub use smart::{Affinities, Affinity};
 pub use snap::{PipCorner, SnapZone};
-pub use theme::{Palette, ThemeConfig, ThemeMode};
+pub use theme::{Design, Palette, ThemeConfig, ThemeMode};
 pub use tiling::{arrange, smart_gap, LayoutKind};
 pub use window::{NewWindow, Window, WindowId};
 pub use wm::{Effects, OutputState, PlacementInfo, Snapshot, Wm, Workspace, WorkspacePosition};

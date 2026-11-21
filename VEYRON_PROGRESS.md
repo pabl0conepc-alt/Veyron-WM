@@ -56,6 +56,27 @@ Tests: core 136 unit tests (10 new) and all integration suites pass; 8
 headless real-client tests pass, including a new theme-over-IPC test.
 `material-colors` requires Rust 1.97; CI uses stable (1.99 at the time).
 
+### Third batch: designs, rounded corners and shadows
+
+- `crates/veyron/src/decoration.rs`: a texture shader (installed with
+  `GlesFrame::override_default_tex_program` while a window's surface tree is
+  drawn) clips client content to rounded corners in output pixels via
+  `gl_FragCoord`; a pixel shader draws the rounded border ring and drop
+  shadow. Both compile lazily once; failure falls back to solid borders.
+  Decoration elements are cached per window and only bumped on change; a
+  theme change resets the damage tracker for one full redraw.
+- Popups are drawn unclipped in front of the clipped surface tree.
+- `[theme] design` with five presets and per-field overrides; `theme design
+  <name>|next` (`super+alt+t`); `inactive_opacity` dims unfocused windows.
+- Nix: the custom `installPhase` looked in `target/release`, but
+  buildRustPackage builds into `target/<triple>/release`; the default install
+  hook is used now.
+
+UNVERIFIED: nothing here has been seen on screen. The `frag_map` row flip
+assumes the nested winit output's `Flipped180` transform; if corners are
+clipped at the wrong edge, that is the first thing to check. Shadow offset
+direction depends on the pixel shader's `v_coords` orientation.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
@@ -69,7 +90,8 @@ headless real-client tests pass, including a new theme-over-IPC test.
 | Motion | Position animations, workspace slide, per-window opt-out | PARTIAL | `motion.rs`; open/close anims missing |
 | Motion | Spring/physics, reduced motion | PARTIAL | `motion.rs`; renderer ignores profile motion |
 | Glass | Per-window opacity | PARTIAL | rendered now; needs visual check |
-| Glass | Blur, rounded corners, shadows | MISSING | need GLES shader elements; heavy for HD 3000 |
+| Glass | Rounded corners, shadows, designs | PARTIAL | `decoration.rs`; compiled, not seen on screen |
+| Glass | Blur | MISSING | needs an offscreen pass; likely too heavy for HD 3000 |
 | Theme | Material You scheme, presets, variants, runtime actions | PARTIAL | `theme.rs`; IPC-tested, not visually checked |
 | Theme | Export to waybar/GTK/SCSS/JSON | PARTIAL | unit-tested export; check with a real waybar |
 | Glass | Themed window borders | PARTIAL | `state.rs::scene_elements`; nested visual check |
