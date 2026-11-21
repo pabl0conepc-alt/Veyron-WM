@@ -58,3 +58,72 @@ jobs:
 
       - name: Evaluate and build package
         run: nix build .#default --no-link
+
+  arch-package:
+    name: arch-linux package
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    env:
+      BUILD_USER: builder
+    steps:
+      # git must exist before actions/checkout, or it downloads a tarball
+      # without history and pkgver() cannot run.
+      - name: Install base-devel and dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git rust pkgconf \
+            wayland libxkbcommon libglvnd libffi mesa \
+            desktop-file-utils namcap
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create unprivileged build user
+        run: |
+          useradd --create-home "$BUILD_USER"
+          echo "$BUILD_USER ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/$BUILD_USER"
+          chmod 0440 "/etc/sudoers.d/$BUILD_USER"
+
+      - name: Validate session file
+        run: desktop-file-validate packaging/veyron.desktop
+
+      - name: Check .SRCINFO matches PKGBUILD
+        run: |
+          home="/home/$BUILD_USER"
+          install -d -o "$BUILD_USER" "$home/srcinfo"
+          install -m644 -o "$BUILD_USER" packaging/arch/PKGBUILD "$home/srcinfo/PKGBUILD"
+          sudo -u "$BUILD_USER" -H bash -c 'cd ~/srcinfo && makepkg --printsrcinfo' > /tmp/SRCINFO.generated
+          diff -u packaging/arch/.SRCINFO /tmp/SRCINFO.generated
+
+      # The committed PKGBUILD clones the GitHub repository. Here the source is
+      # pointed at a copy of this checkout instead, so the job tests the commit
+      # under review rather than the default branch.
+      - name: Build, test and package with makepkg
+        run: |
+          home="/home/$BUILD_USER"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git checkout -B ci-arch-build
+          cp -a "$GITHUB_WORKSPACE" "$home/veyron-src"
+          install -d "$home/build"
+          cp packaging/arch/PKGBUILD "$home/build/PKGBUILD"
+          sed -i "s|^source=.*|source=(\"\${_repo}::git+file://$home/veyron-src#branch=ci-arch-build\")|" \
+            "$home/build/PKGBUILD"
+          grep -n '^source=' "$home/build/PKGBUILD"
+          grep -q "git+file://$home/veyron-src#branch=ci-arch-build" "$home/build/PKGBUILD"
+          chown -R "$BUILD_USER:" "$home/veyron-src" "$home/build"
+          sudo -u "$BUILD_USER" -H bash -c 'cd ~/build && makepkg -s --noconfirm'
+
+      - name: Inspect and install the package
+        run: |
+          cd "/home/$BUILD_USER/build"
+          pkg="$(ls veyron-wm-git-[0-9]*.pkg.tar.zst)"
+          echo "Built $pkg"
+          pacman -Qip "$pkg"
+          pacman -Qlp "$pkg"
+          namcap PKGBUILD "$pkg" || true
+          pacman -U --noconfirm "$pkg"
+          veyron --version
+          veyron --help
+          veyronctl --help

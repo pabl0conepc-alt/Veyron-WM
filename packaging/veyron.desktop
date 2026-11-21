@@ -1,0 +1,13 @@
+# Wayland session entry for display managers, installed to
+# /usr/share/wayland-sessions/veyron.desktop.
+#
+# Not usable yet as a standalone session: Veyron only has the nested winit
+# backend, which needs a running Wayland or X11 session to open its window in.
+# Started from a display manager or a bare TTY it has no parent session and
+# exits. This file is shipped so packaging is ready for the DRM/KMS backend.
+[Desktop Entry]
+Type=Application
+Name=Veyron (experimental)
+Comment=Scrollable tiling Wayland compositor. Nested backend only: no standalone session yet
+Exec=veyron
+TryExec=veyron

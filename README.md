@@ -196,7 +196,7 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 
 ## Building
 
-Requirements: Rust 1.97+, a C toolchain, `pkg-config`, and the usual EGL/Mesa
+Requirements: Rust 1.97+ (required by `material-colors`), a C toolchain, `pkg-config`, and the usual EGL/Mesa
 development packages. The nested backend needs a running Wayland or X11 session.
 
 ```sh
@@ -217,6 +217,63 @@ nix profile install .#default
 
 The package build is also checked by GitHub Actions. The first CI build for this
 flake is pending; nested runtime support still needs validation on the target.
+
+### Arch Linux
+
+`packaging/arch/PKGBUILD` builds a `veyron-wm-git` package from the default
+branch on GitHub. It runs the full test suite in `check()` and installs
+`veyron`, `veyronctl`, the README and a Wayland session file:
+
+```sh
+sudo pacman -S --needed base-devel git
+cd packaging/arch
+makepkg -si
+```
+
+To build with plain cargo instead, install the toolchain and the libraries the
+compositor loads at runtime (`libwayland-client`, `libxkbcommon` and `libEGL`
+are opened with `dlopen`), plus a Mesa driver for the nested renderer:
+
+```sh
+sudo pacman -S --needed base-devel rust pkgconf wayland libxkbcommon libglvnd libffi mesa
+cargo build --release --workspace --locked
+XDG_RUNTIME_DIR="$(mktemp -d)" cargo test --workspace --locked
+```
+
+Arch's `rust` package is recent enough for the 1.97 minimum. CI builds the
+PKGBUILD with `makepkg` in an `archlinux:latest` container on every push.
+
+The package installs `/usr/share/wayland-sessions/veyron.desktop`, but Veyron
+cannot be started from a display manager or a TTY yet: the only backend is the
+nested winit one, which needs a running Wayland or X11 session. Start it from
+inside your existing desktop as described under [Running](#running).
+
+### Debian and Ubuntu
+
+A `.deb` is built with [`cargo-deb`](https://github.com/kornelski/cargo-deb)
+from the metadata in `crates/veyron/Cargo.toml`. Distribution `rustc` packages
+are older than the 1.97 minimum, so install the toolchain with
+[rustup](https://rustup.rs):
+
+```sh
+sudo apt install build-essential pkg-config git curl \
+  libwayland-dev libxkbcommon-dev libegl-dev libffi-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install cargo-deb --locked
+cargo deb -p veyron --locked
+sudo apt install ./target/debian/veyron-wm_*.deb
+```
+
+The package installs `veyron`, `veyronctl`, the README and the Wayland session
+file, and depends on `libwayland-client0`, `libxkbcommon0`, `libegl1` and
+`libffi8` explicitly, because those libraries are opened with `dlopen` and
+`dpkg-shlibdeps` cannot see them. The same session-file caveat as on Arch
+applies: start Veyron from inside your existing desktop.
+
+CI (`.github/workflows/debian.yml`) runs the test suite, builds the package in
+`debian:trixie` and `ubuntu:24.04` containers, installs it with `apt` in a
+clean container of the same release and smoke-tests the headless compositor
+through `veyronctl`.
 
 ## Running
 

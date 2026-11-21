@@ -1,0 +1,119 @@
+name: Debian packages
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: build .deb (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:trixie", "ubuntu:24.04"]
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl ca-certificates git \
+            libwayland-dev libxkbcommon-dev libegl-dev libffi-dev \
+            dpkg-dev lintian
+
+      - uses: actions/checkout@v4
+
+      # Distribution rustc packages are older than the 1.97 minimum required
+      # by material-colors, so the toolchain comes from rustup.
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Test
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          cargo test --workspace --locked
+
+      - name: Build package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p veyron --locked
+          ls -l target/debian/
+
+      - name: Inspect package
+        run: |
+          deb="$(ls target/debian/veyron-wm_*.deb)"
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          # Informational: lintian is strict about native Rust packages.
+          lintian --no-tag-display-limit "$deb" || true
+
+      - name: Name artifact
+        id: artifact
+        run: echo "name=veyron-wm-$(echo '${{ matrix.image }}' | tr ':' '-')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: target/debian/veyron-wm_*.deb
+          if-no-files-found: error
+
+  install:
+    name: install and smoke test (${{ matrix.image }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:trixie", "ubuntu:24.04"]
+    # A clean container proves the package declares every runtime dependency.
+    container: ${{ matrix.image }}
+    steps:
+      - name: Name artifact
+        id: artifact
+        run: echo "name=veyron-wm-$(echo '${{ matrix.image }}' | tr ':' '-')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+
+      - name: Install package with apt
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y ./veyron-wm_*.deb
+          dpkg -L veyron-wm
+
+      - name: Smoke test the headless compositor
+        run: |
+          set -eu
+          veyron --help >/dev/null
+          veyronctl --help >/dev/null
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          socket="$XDG_RUNTIME_DIR/veyron-ci.sock"
+          veyron --headless --socket "$socket" > veyron.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 50); do
+            [ -S "$socket" ] && break
+            sleep 0.1
+          done
+          veyronctl --socket "$socket" ping
+          veyronctl --socket "$socket" theme | head -n 3
+          veyronctl --socket "$socket" state
+          veyronctl --socket "$socket" quit
+          wait "$pid"
+          cat veyron.log

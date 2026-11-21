@@ -168,6 +168,36 @@ rendering paths still need the nested-session check.
 - README rewritten with a gallery, highlights, quick start and cheat sheet;
   the README test now validates every TOML block.
 
+### Arch Linux packaging (branch `claude/arch-linux-support`)
+
+- `packaging/arch/PKGBUILD` (`veyron-wm-git`) and a hand-written `.SRCINFO`;
+  `packaging/veyron.desktop` session file, which states that only the nested
+  backend exists (no DM/TTY session yet). Workspace `rust-version` is now 1.97.
+- CI job `arch-linux package`: `makepkg -s` with `check()` in an
+  `archlinux:latest` container against the commit under test, plus
+  `.SRCINFO` diff against `makepkg --printsrcinfo`, `desktop-file-validate`,
+  `namcap` (informational) and a `pacman -U` install smoke test.
+  Raising the MSRV enabled clippy's `chunks_exact_to_as_chunks` lint; the
+  headless test now uses `as_chunks`.
+- Verified in CI only (no local `makepkg`, no real Arch machine): the Arch job
+  passes; `.SRCINFO` matches `makepkg --printsrcinfo`, the release build and
+  all workspace tests (including the 8 headless real-client tests) pass in
+  `check()`, and the installed package runs `veyron --version`/`--help`.
+  Not verified: running the nested compositor on an Arch desktop.
+- namcap reports the missing license file (the repository has no LICENSE,
+  so the package ships none) and flags the dlopen'ed libraries as "may not
+  be needed", which is expected.
+
+### Debian and Ubuntu packaging (branch `claude/debian-support`)
+
+- `cargo deb -p veyron` builds `veyron-wm` from `[package.metadata.deb]` in
+  `crates/veyron/Cargo.toml`; the dlopen'ed Wayland, xkbcommon and EGL
+  libraries are declared explicitly.
+- `.github/workflows/debian.yml` tests, packages and lints on `debian:trixie`
+  and `ubuntu:24.04`, installs the package with apt in a clean container and
+  smoke-tests the headless compositor over `veyronctl`. All four jobs passed.
+  Not verified: the nested compositor on a real Debian or Ubuntu desktop.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |

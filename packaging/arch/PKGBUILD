@@ -1,0 +1,79 @@
+# Maintainer: Pablo Arraes <327252850+pabl0conepc-alt@users.noreply.github.com>
+#
+# VCS package built from the default branch of the upstream repository.
+# Build it from this directory with `makepkg -si`.
+#
+# Veyron currently runs nested only (Smithay winit backend): it opens a window
+# inside an existing Wayland or X11 session. The session file installed below
+# is provided for display managers, but a standalone TTY/DRM session is not
+# supported yet; see README.md.
+
+pkgname=veyron-wm-git
+_repo=veyron-wm
+pkgver=0.1.0.r41.g53f7254
+pkgrel=1
+pkgdesc='Scrollable tiling Wayland compositor written in Rust (nested backend)'
+arch=('x86_64')
+url='https://github.com/pabl0conepc-alt/Veyron-WM'
+license=('MIT')
+# libwayland-client, libxkbcommon and libEGL are loaded with dlopen at runtime,
+# so they are runtime dependencies even though the binary does not link them.
+depends=('glibc' 'libffi' 'libgcc' 'libglvnd' 'libxkbcommon' 'wayland')
+makedepends=('cargo' 'git' 'pkgconf')
+optdepends=('mesa: EGL/GLES driver for the nested renderer')
+provides=('veyron-wm')
+conflicts=('veyron-wm')
+source=("${_repo}::git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${_repo}"
+  if git describe --tags --long >/dev/null 2>&1; then
+    git describe --tags --long --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    local version
+    version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+    printf '%s.r%s.g%s' "${version}" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  fi
+}
+
+prepare() {
+  cd "${_repo}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "${_repo}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --workspace
+}
+
+check() {
+  cd "${_repo}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # The headless suite starts the real compositor and connects Wayland
+  # clients to it; both expect a private, writable runtime directory.
+  local runtime_dir
+  runtime_dir="$(mktemp -d)"
+  chmod 700 "${runtime_dir}"
+  local status=0
+  XDG_RUNTIME_DIR="${runtime_dir}" cargo test --frozen --release --workspace || status=$?
+  rm -rf "${runtime_dir}"
+  return "${status}"
+}
+
+package() {
+  cd "${_repo}"
+  install -Dm755 target/release/veyron "${pkgdir}/usr/bin/veyron"
+  install -Dm755 target/release/veyronctl "${pkgdir}/usr/bin/veyronctl"
+  install -Dm644 packaging/veyron.desktop "${pkgdir}/usr/share/wayland-sessions/veyron.desktop"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  # MIT requires shipping the copyright notice. Upstream declares MIT in
+  # Cargo.toml but has no LICENSE file yet; install it once it exists.
+  if [[ -f LICENSE ]]; then
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  fi
+}

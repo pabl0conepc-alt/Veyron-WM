@@ -1,0 +1,23 @@
+pkgbase = veyron-wm-git
+	pkgdesc = Scrollable tiling Wayland compositor written in Rust (nested backend)
+	pkgver = 0.1.0.r41.g53f7254
+	pkgrel = 1
+	url = https://github.com/pabl0conepc-alt/Veyron-WM
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = git
+	makedepends = pkgconf
+	depends = glibc
+	depends = libffi
+	depends = libgcc
+	depends = libglvnd
+	depends = libxkbcommon
+	depends = wayland
+	optdepends = mesa: EGL/GLES driver for the nested renderer
+	provides = veyron-wm
+	conflicts = veyron-wm
+	source = veyron-wm::git+https://github.com/pabl0conepc-alt/Veyron-WM.git
+	sha256sums = SKIP
+
+pkgname = veyron-wm-git
