@@ -5,14 +5,14 @@ Last updated: 2026-11-21
 ## Current task state
 
 - **Current prompt:** complete engineering audit/development/implementation prompt supplied in the attachment referenced by this task.
-- **Current repository:** `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`, branch `main`, commit `1338ebb` (`Initial commit`). This is the current user-selected tree.
+- **Current repository:** `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`, branch `codex/engineering-audit`, commit `c3963c2` (`docs: audit current Veyron WM implementation`), pushed to `origin`. Draft PR [#2](https://github.com/pabl0conepc-alt/Veyron-WM/pull/2).
 - **Do not confuse with:** `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-finish`, older branch `codex/finish-roadmap` at `70cdf85` and PR #1. Do not copy/reset/merge it into this worktree automatically.
-- **Working tree preservation:** README.md is modified; `.cargo/`, `.gitignore`, Cargo.toml/lock, source and project docs are untracked in the repository. These are existing changes supplied with the updated repo. Preserve them and do not clean/reset.
+- **Working tree preservation:** the pre-existing README/source/docs from the updated checkout were captured in commit `c3963c2`; do not clean/reset or replace this branch with the older checkout.
 - **Last measured task action:** source/docs inventory and matrix generation. A test invocation tried `nix shell nixpkgs#rustc nixpkgs#gcc`; Nix estimated 558.5 MiB download and 1.9 GiB unpacked, so the command was interrupted before compilation to protect the 4 GiB netbook.
 
 ## Current phase
 
-**Phase 1 — Repository discovery, feature matrix and implementation plan.** The current code and documentation audit is recorded in `VEYRON_AUDIT.md`; all 187 requested feature rows are in `VEYRON_FEATURE_MATRIX.md`; dependency ordering is in `VEYRON_IMPLEMENTATION_PLAN.md`. Continue next with a lightweight model test using an already-present Rust toolchain if one exists, or CI/remote build, then start the core surface/output integration.
+**Phase 1 — Repository discovery, feature matrix and implementation plan.** The current code and documentation audit is recorded in `VEYRON_AUDIT.md`; all 187 requested feature rows are in `VEYRON_FEATURE_MATRIX.md`; dependency ordering is in `VEYRON_IMPLEMENTATION_PLAN.md`. GitHub Actions run 44921522852 is validating the current source. After it completes, use that result as build/test evidence, fix failures, then start the core surface/output integration.
 
 ## Implemented / evidence-backed
 
@@ -25,7 +25,7 @@ Last updated: 2026-11-21
 ## In development / incomplete
 
 - `src/main.rs` creates/configures xdg toplevel surfaces but does not map them into `WindowManager` or `SpatialDesktop`.
-- No `wl_output` global/output model, window placement/configure adapter, workspace actions, functioning focus/pointer delivery, config, IPC, persistence or CI/package found in this tree.
+- No `wl_output` global/output model, window placement/configure adapter, workspace actions, functioning focus/pointer delivery, config, IPC, persistence or package found in this tree. CI workflow was added in this task.
 - Render loop redraws the whole output and waits synchronously each iteration; no performance measurements exist.
 - Executable build and nested real-client smoke remain unverified; two earlier builds were stopped under memory pressure according to project records.
 
@@ -38,6 +38,7 @@ Last updated: 2026-11-21
 | Current standalone tests | Not run | Nix toolchain fetch estimated 558.5 MiB download/1.9 GiB unpacked and was interrupted before rustc started. |
 | Full executable build | Not verified | Prior attempts were stopped due memory/swap pressure. |
 | Nested compositor / real client | Not verified | No executable/runtime evidence. |
+| CI run 44921522852 | Failed at Clippy | `clippy::while-let-loop` in `src/main.rs:188`; format passed; test and release build steps were skipped. The lint fix is in progress. |
 
 ## Changed/created this task
 
@@ -45,7 +46,7 @@ Last updated: 2026-11-21
 - Created `VEYRON_FEATURE_MATRIX.md` with 187 requested features and explicit states/gaps/tests/actions.
 - Created `VEYRON_IMPLEMENTATION_PLAN.md` with prerequisite-ordered work packages.
 - This file records the stop point and resumption instructions.
-- Existing code/doc files were not edited by this audit step.
+- Preserved the updated current tree, audit docs and CI in commit `c3963c2`; created draft PR #2.
 
 ## Known blockers/constraints
 
@@ -53,14 +54,14 @@ Last updated: 2026-11-21
 - Current environment PATH has `nix` but not `cargo` or `rustc`; an attempted Nix shell was stopped before download completion.
 - Smithay surface/runtime APIs must be verified against exactly pinned 0.7.0 source/API.
 - Actual target GLES/EGL, output mode, input-device and multi-monitor capabilities are not queried.
-- No committed baseline for the current untracked source/doc tree; reviewability/backup is needed before any destructive Git action.
+- The current baseline is now captured on a feature branch; keep changes on this branch and do not merge without review.
 
 ## Exact next executable work
 
-1. Check whether a Rust compiler/toolchain is already present in `/nix/store` without fetching new dependencies. If not, use a remote CI/build route instead of another large local shell fetch.
-2. Verify the 25 pure model tests and formatting on the current files; record the exact commands/results and update this log.
-3. Verify the current Smithay 0.7 API and implement the first integrated foundation: an output description plus stable registry connecting mapped `ToplevelSurface`s to model IDs, arrangement/configure, and surface teardown. Add real-client integration evidence only when the executable builds.
+1. Inspect CI run 44921522852 to completion and fix current-source failures.
+2. Verify the pinned Smithay 0.7 APIs; implement an output description and stable registry connecting mapped `ToplevelSurface`s to model IDs, arrangement/configure, and surface teardown. Add real-client integration evidence once CI can build the executable.
+3. Correct pointer focus to use real hit testing and then connect input actions to window/workspace state.
 4. Keep feature statuses truthful and update the audit/matrix/plan/progress together after each milestone.
-5. Do not merge the older PR into this worktree without reconciling the two diverged trees and preserving all current uncommitted files.
+5. Keep this work separate from the older PR #1 until its changes are reconciled; do not merge either PR without the user's review.
 
-- Added `.github/workflows/ci.yml` on branch `codex/engineering-audit` as the first build-safety increment. GitHub-hosted CI will run formatting, Clippy, all-target tests, and a release build outside the memory-constrained netbook. It has not run yet because this branch has not been pushed.
+- Added `.github/workflows/ci.yml` on branch `codex/engineering-audit` as the first build-safety increment. GitHub-hosted CI runs formatting, Clippy, all-target tests, and a release build outside the memory-constrained netbook.

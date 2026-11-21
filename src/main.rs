@@ -185,8 +185,7 @@ fn run_nested() -> Result<(), Box<dyn Error>> {
     tracing::info!(display = %socket_name, "Veyron nested compositor started");
     tracing::info!("Connect a Wayland client with WAYLAND_DISPLAY={socket_name}");
 
-    loop {
-        match event_loop.dispatch_new_events(|event| match event {
+    while let PumpStatus::Continue = event_loop.dispatch_new_events(|event| match event {
             WinitEvent::Input(InputEvent::Keyboard { event }) => {
                 keyboard.input::<(), _>(
                     &mut state,
@@ -209,10 +208,8 @@ fn run_nested() -> Result<(), Box<dyn Error>> {
                 }
             }
             _ => {}
-        }) {
-            PumpStatus::Continue => {}
-            PumpStatus::Exit(_) => break,
-        }
+        })
+    {
 
         let size = backend.window_size();
         let damage = Rectangle::from_size(size);
