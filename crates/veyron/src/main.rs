@@ -15,6 +15,7 @@ use calloop::{
 use smithay::{
     backend::{renderer::gles::GlesRenderer, winit},
     reexports::wayland_server::Display,
+    reexports::winit::{dpi::LogicalSize, window::Window as WinitWindow},
     wayland::socket::ListeningSocketSource,
 };
 use veyron_core::{Config, Size as VSize};
@@ -37,9 +38,11 @@ Options:
       --print-config    Print the default configuration and exit
       --headless        Run without a display, GPU or DRM device (for tests/CI)
       --wayland-display <NAME>
-                        Socket name for headless mode (default: wayland-veyron)
+                        Wayland socket name (default: wayland-veyron headless,
+                        the first free wayland-N nested)
       --output-size <WxH>
-                        Headless output size in pixels (default: 1920x1080)
+                        Output size in pixels (default: 1920x1080 headless,
+                        1280x800 for the nested window)
   -h, --help            Print this help
   -V, --version         Print the version
 
@@ -63,7 +66,8 @@ struct Args {
     print_config: bool,
     headless: bool,
     wayland_display: Option<String>,
-    output_size: VSize,
+    /// `None` keeps the mode default (1920x1080 headless, 1280x800 nested).
+    output_size: Option<VSize>,
 }
 
 fn main() {
@@ -103,6 +107,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 /// This is the same `calloop` loop as the nested path; `render` is simply a
 /// no-op and the display's poll fd is what wakes the loop.
 fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
+    let output_size = args.output_size.unwrap_or(VSize::new(1920, 1080));
     let mut display: Display<Veyron> = Display::new()?;
     let socket_name = args.wayland_display.as_deref().unwrap_or("wayland-veyron");
     let socket_source = ListeningSocketSource::with_name(socket_name).map_err(|error| {
@@ -115,12 +120,8 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &wayland_display);
 
     let mut event_loop: EventLoop<Veyron> = EventLoop::try_new()?;
-    let mut state = Veyron::new_headless(
-        args.config.clone(),
-        config,
-        args.output_size,
-        &display.handle(),
-    )?;
+    let mut state =
+        Veyron::new_headless(args.config.clone(), config, output_size, &display.handle())?;
 
     let mut client_display = display.handle();
     event_loop
@@ -153,8 +154,8 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
     tracing::info!(
         wayland = %wayland_display.to_string_lossy(),
         control = %args.socket.display(),
-        width = args.output_size.w,
-        height = args.output_size.h,
+        width = output_size.w,
+        height = output_size.h,
         "VEYRON WM is running headless"
     );
 
@@ -219,14 +220,23 @@ fn spawn_ipc_server(
 /// Run the compositor nested inside an existing Wayland or X11 session.
 fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
     let mut display: Display<Veyron> = Display::new()?;
-    let (backend, winit_loop) = winit::init::<GlesRenderer>().map_err(|error| {
+    let size = args.output_size.unwrap_or(VSize::new(1280, 800));
+    let attributes = WinitWindow::default_attributes()
+        .with_inner_size(LogicalSize::new(f64::from(size.w), f64::from(size.h)))
+        .with_title("VEYRON WM")
+        .with_visible(true);
+    let (backend, winit_loop) = winit::init_from_attributes::<GlesRenderer>(attributes).map_err(|error| {
         format!(
             "could not open the nested backend ({error}); Veyron needs a running Wayland or X11 session"
         )
     })?;
 
     // The compositor's own Wayland socket. Children inherit WAYLAND_DISPLAY.
-    let socket_source = ListeningSocketSource::new_auto()?;
+    let socket_source = match args.wayland_display.as_deref() {
+        Some(name) => ListeningSocketSource::with_name(name)
+            .map_err(|error| format!("could not bind the wayland socket '{name}' ({error})"))?,
+        None => ListeningSocketSource::new_auto()?,
+    };
     let wayland_display = socket_source.socket_name().to_os_string();
     std::env::set_var("WAYLAND_DISPLAY", &wayland_display);
 
@@ -296,7 +306,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut print_config = false;
     let mut headless = false;
     let mut wayland_display = None;
-    let mut output_size = VSize::new(1920, 1080);
+    let mut output_size = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
@@ -316,7 +326,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
             }
             "--output-size" => {
                 let value = args.next().ok_or("--output-size needs WxH")?;
-                output_size = parse_size(&value)?;
+                output_size = Some(parse_size(&value)?);
             }
             "-h" | "--help" => {
                 print!("{HELP}");

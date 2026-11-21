@@ -95,8 +95,10 @@ void main() {
 }
 "#;
 
-/// Border ring and drop shadow around a window rectangle given in the
-/// element's own pixel space. Colours are straight alpha; output is
+/// Border ring and drop shadow around a window rectangle given in output
+/// pixels. Like the clip shader it works from `gl_FragCoord`: interpolated
+/// `v_coords` lose precision on mediump-only paths and showed as a dotted
+/// grid on Intel HD Graphics. Colours are straight alpha; output is
 /// premultiplied like every other Smithay element.
 const DECORATION_SHADER: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
@@ -106,14 +108,13 @@ precision mediump float;
 #endif
 
 uniform float alpha;
-uniform vec2 size;
-varying vec2 v_coords;
 
 #if defined(DEBUG_FLAGS)
 uniform float tint;
 #endif
 
 uniform vec4 window_rect;
+uniform vec2 frag_map;
 uniform float radius;
 uniform float border_width;
 uniform vec4 border_color;
@@ -124,7 +125,7 @@ uniform float shadow_offset;
 ROUNDED_BOX
 
 void main() {
-    vec2 p = v_coords * size;
+    vec2 p = vec2(gl_FragCoord.x, frag_map.x + frag_map.y * gl_FragCoord.y);
     vec2 half_size = window_rect.zw * 0.5;
     vec2 center = window_rect.xy + half_size;
     vec2 outer_half = half_size + vec2(border_width);
@@ -138,6 +139,9 @@ void main() {
     if (shadow_size > 0.0) {
         float d = rounded_box(p - center - vec2(0.0, shadow_offset), outer_half, outer_radius);
         shadow = (1.0 - smoothstep(-1.0, shadow_size, d)) * shadow_color.a * (1.0 - inside);
+        // The faint tail is dithered into a dotted grid by some drivers
+        // (seen on Intel HD Graphics); below 2% it is invisible anyway.
+        shadow *= step(0.02, shadow);
     }
 
     float border_alpha = ring * border_color.a;
@@ -174,6 +178,7 @@ impl Shaders {
             DECORATION_SHADER.replace("ROUNDED_BOX", ROUNDED_BOX),
             &[
                 UniformName::new("window_rect", UniformType::_4f),
+                UniformName::new("frag_map", UniformType::_2f),
                 UniformName::new("radius", UniformType::_1f),
                 UniformName::new("border_width", UniformType::_1f),
                 UniformName::new("border_color", UniformType::_4f),
@@ -230,6 +235,8 @@ pub struct DecorationParams {
     pub shadow_color: [f32; 4],
     pub shadow_size: i32,
     pub shadow_offset: i32,
+    /// Framebuffer-row to output-row mapping, as for the clip shader.
+    pub frag_map: [f32; 2],
 }
 
 impl DecorationParams {
@@ -247,13 +254,12 @@ impl DecorationParams {
     }
 
     fn uniforms(&self) -> Vec<Uniform<'static>> {
-        let margin = (self.border_width + self.shadow_size + self.shadow_offset.abs()) as f32;
         vec![
             Uniform::new(
                 "window_rect",
                 [
-                    margin,
-                    margin,
+                    self.window.loc.x as f32,
+                    self.window.loc.y as f32,
                     self.window.size.w as f32,
                     self.window.size.h as f32,
                 ],
@@ -264,6 +270,7 @@ impl DecorationParams {
             Uniform::new("shadow_color", self.shadow_color),
             Uniform::new("shadow_size", self.shadow_size as f32),
             Uniform::new("shadow_offset", self.shadow_offset as f32),
+            Uniform::new("frag_map", self.frag_map),
         ]
     }
 }
@@ -402,6 +409,7 @@ mod tests {
             shadow_color: [0.0, 0.0, 0.0, 0.35],
             shadow_size: 18,
             shadow_offset: 4,
+            frag_map: [800.0, -1.0],
         }
     }
 

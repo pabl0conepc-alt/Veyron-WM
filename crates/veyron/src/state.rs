@@ -41,6 +41,7 @@ use smithay::{
         Seat, SeatHandler, SeatState,
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
+    reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
     reexports::wayland_server::{
         backend::{ClientData, ClientId, DisconnectReason},
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
@@ -65,6 +66,7 @@ use smithay::{
                 Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
             },
             xdg::{
+                decoration::{XdgDecorationHandler, XdgDecorationState},
                 PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
                 XdgToplevelSurfaceData,
             },
@@ -123,6 +125,9 @@ pub struct Veyron {
     /// Serves `zwlr_layer_shell_v1`: panels, notification daemons, wallpapers
     /// and OSDs are ordinary clients of this protocol.
     layer_shell_state: WlrLayerShellState,
+    /// Serves `zxdg_decoration_manager_v1`: Veyron draws borders, shadows and
+    /// rounded corners itself, so clients are asked not to draw title bars.
+    _decoration_state: XdgDecorationState,
     popup_manager: PopupManager,
 
     /// Kept alive so the seat and its globals stay registered.
@@ -216,6 +221,7 @@ impl Veyron {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let decoration_state = XdgDecorationState::new::<Self>(&dh);
         let popup_manager = PopupManager::default();
 
         let output = Output::new(
@@ -257,6 +263,7 @@ impl Veyron {
             data_device_state,
             _output_manager_state: output_manager_state,
             layer_shell_state,
+            _decoration_state: decoration_state,
             popup_manager,
             _seat: seat,
             keyboard,
@@ -1280,6 +1287,7 @@ fn scene_elements(
                 shadow_color: shadow,
                 shadow_size: design.shadow_size,
                 shadow_offset: design.shadow_offset,
+                frag_map: style.frag_map,
             };
             let decoration = chrome
                 .shaded
@@ -1681,6 +1689,34 @@ impl WlrLayerShellHandler for Veyron {
 }
 
 smithay::delegate_layer_shell!(Veyron);
+
+/// Every toplevel gets server-side decorations: Veyron draws its own borders,
+/// shadows and rounded corners, and client title bars would sit inside them.
+impl XdgDecorationHandler for Veyron {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        set_server_side(&toplevel);
+    }
+
+    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
+        set_server_side(&toplevel);
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        set_server_side(&toplevel);
+    }
+}
+
+fn set_server_side(toplevel: &ToplevelSurface) {
+    toplevel.with_pending_state(|state| {
+        state.decoration_mode = Some(DecorationMode::ServerSide);
+    });
+    // Before the initial configure the mode simply rides along with it.
+    if toplevel.is_initial_configure_sent() {
+        toplevel.send_pending_configure();
+    }
+}
+
+smithay::delegate_xdg_decoration!(Veyron);
 smithay::delegate_compositor!(Veyron);
 smithay::delegate_xdg_shell!(Veyron);
 smithay::delegate_shm!(Veyron);
