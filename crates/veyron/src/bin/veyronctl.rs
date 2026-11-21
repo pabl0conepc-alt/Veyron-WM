@@ -9,6 +9,7 @@ veyronctl — control a running VEYRON WM
 
 Usage:
   veyronctl state [--json]        Show the current layout
+  veyronctl overview [--json]     Show every workspace on its grid
   veyronctl session save <FILE>   Save the current session as TOML
   veyronctl session restore <FILE> Restore a session from TOML
   veyronctl launch <NAME>         Start an installed application
@@ -62,6 +63,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_session_to = None;
     let request = match words[0].as_str() {
         "state" | "status" if words.len() == 1 => Request::State,
+        "overview" if words.len() == 1 => Request::Overview,
         "session" if words.len() == 3 && words[1] == "save" => {
             save_session_to = Some(PathBuf::from(&words[2]));
             Request::CaptureSession
@@ -94,6 +96,27 @@ fn run() -> Result<(), Box<dyn Error>> {
         Response::Ok => Ok(()),
         Response::Pong => {
             println!("pong");
+            Ok(())
+        }
+        Response::Overview(report) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                for tile in &report.tiles {
+                    println!(
+                        "workspace {} ({}, {}) {}x{} at ({}, {}) windows {}{}",
+                        tile.workspace,
+                        tile.position[0],
+                        tile.position[1],
+                        tile.rect[2],
+                        tile.rect[3],
+                        tile.rect[0],
+                        tile.rect[1],
+                        tile.windows.len(),
+                        if tile.active { "  active" } else { "" }
+                    );
+                }
+            }
             Ok(())
         }
         Response::Session { toml } => {

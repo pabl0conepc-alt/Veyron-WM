@@ -27,7 +27,7 @@ Last reviewed: 2026-11-21.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
   core, multi-output policy, named layout/motion profiles with `profile
-  next|prev` cycling, and window identity wiring are implemented and tested (120
+  next|prev` cycling, and window identity wiring are implemented and tested (122
   core tests plus window-feature, multi-output, profile, launcher and headless
   integration tests) with control-protocol version 3. The compositor forwards the app id and
   title a client announces on its first commit, so rules and `veyronctl state`
@@ -36,9 +36,13 @@ Last reviewed: 2026-11-21.
   application out, and a workspace switch slides in from the direction of
   travel, with motion off by default and client sizes still configured at their
   target. `[[workspaces]]` predefines named workspaces, `workspace special`
-  toggles a scratch workspace, and `veyronctl launch` resolves XDG desktop
-  entries. The renderer still ignores opacity/blur, the backend still creates
-  one output, and no nested runtime visual check exists. Gesture and
+  toggles a scratch workspace, `veyronctl launch` resolves XDG desktop entries,
+  `Wm::overview` lays every workspace on the sparse grid for `veyronctl
+  overview`, and `zwlr_layer_shell_v1` clients (bars, notifications, wallpapers,
+  OSDs) are mapped with their exclusive zones and frame callbacks. Pointer input
+  still reaches toplevels only, so layer surfaces cannot be clicked yet. The
+  renderer still ignores opacity/blur, the backend still creates one output, and
+  no nested runtime visual check exists. Gesture and
   overview policy modules were removed before any consumer existed. See
   [ROADMAP.md](ROADMAP.md).
 - `cargo test --workspace` now runs in this environment, including the 7 headless

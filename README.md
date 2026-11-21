@@ -75,7 +75,13 @@ What works:
 - Application launcher: `veyronctl launch <NAME>` resolves an installed XDG
   desktop entry by name or id, refuses entries that need a terminal, and starts
   the rest directly without a shell.
-- Deterministic, unit-tested state machine (120 core tests plus integration
+- Workspace overview: `Wm::overview` lays every workspace on the sparse grid and
+  scales each workspace's windows into its tile; `veyronctl overview [--json]`
+  exposes it for bars, scripts and a future overview surface.
+- Layer-shell: `zwlr_layer_shell_v1` clients (waybar, notification daemons,
+  wallpapers, OSDs) are mapped on the output with their exclusive zones, and
+  their frame callbacks are delivered.
+- Deterministic, unit-tested state machine (122 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -97,8 +103,9 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 - No client-side decorations drawn by the compositor and no cursor image. Only
   window positions animate: there are no opening/closing transitions, and client
   sizes still jump to their target.
-- Popup grabs, layer-shell (bars/panels), screencopy, idle and input-method
-  protocols are not implemented.
+- Popup grabs, screencopy, idle, input-method and session-lock protocols are not
+  implemented. Layer-shell surfaces render, but pointer clicks on a panel are
+  not forwarded to it yet.
 - Window rules, opacity and Veyron Recall see the identity a client announces
   on its first commit, but the renderer still draws every window opaque and
   unblurred.
@@ -326,6 +333,7 @@ veyronctl resize width 32
 veyronctl move-floating right 32
 veyronctl layout master-stack
 veyronctl layout next
+veyronctl overview --json
 veyronctl profile coding
 veyronctl scratchpad
 veyronctl session save ~/.local/state/veyron/session.toml
@@ -346,8 +354,8 @@ Any other program can use the socket directly:
 
 Protocol version 3 includes the signed 2D workspace coordinate, the resolved
 layout name, the effective gap and, per window, the announced app id, title,
-rule opacity, geometry and state. Requests: `action`, `state`, `capture-session`,
-`restore-session`, `launch`, `reload`, `quit`, `ping`. Session TOML and all other messages
+rule opacity, geometry and state. Requests: `action`, `state`, `overview`,
+`capture-session`, `restore-session`, `launch`, `reload`, `quit`, `ping`. Session TOML and all other messages
 are capped at 64 KiB; the socket is
 owner-only (`0600`), the server never deletes a non-socket file, and a crashed
 compositor's stale socket is safely replaced.

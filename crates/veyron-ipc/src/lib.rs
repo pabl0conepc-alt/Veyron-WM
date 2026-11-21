@@ -47,6 +47,8 @@ pub enum Request {
     Action { action: String },
     /// Ask for a description of the current layout.
     State,
+    /// Ask for every workspace laid out on the sparse grid.
+    Overview,
     /// Capture the current window-manager session as validated TOML.
     CaptureSession,
     /// Restore a previously captured session from TOML.
@@ -71,6 +73,8 @@ pub enum Response {
     Pong,
     /// Reply to [`Request::State`].
     State(StateReport),
+    /// Reply to [`Request::Overview`].
+    Overview(OverviewReport),
     /// Reply to [`Request::CaptureSession`].
     Session { toml: String },
     /// Reply to [`Request::Launch`]: the application that was started.
@@ -120,6 +124,36 @@ pub struct WindowReport {
     pub title: String,
     /// Opacity requested by the window rules (`1.0` when none match).
     pub opacity: f32,
+}
+
+/// Every workspace laid out on the sparse grid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverviewReport {
+    /// `[x, y, width, height]` covering every tile.
+    pub bounds: [i32; 4],
+    /// Output area the window rectangles are scaled from.
+    pub viewport: [i32; 4],
+    pub tiles: Vec<OverviewTileReport>,
+}
+
+/// One workspace tile of an [`OverviewReport`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverviewTileReport {
+    pub workspace: String,
+    pub index: usize,
+    /// Sparse grid coordinate of the workspace.
+    pub position: [i64; 2],
+    pub active: bool,
+    pub rect: [i32; 4],
+    pub windows: Vec<OverviewWindowReport>,
+}
+
+/// A window drawn inside an overview tile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverviewWindowReport {
+    pub id: u64,
+    pub rect: [i32; 4],
+    pub floating: bool,
 }
 
 /// IPC failure.
@@ -366,6 +400,7 @@ mod tests {
         let requests = [
             Request::Ping,
             Request::State,
+            Request::Overview,
             Request::CaptureSession,
             Request::RestoreSession {
                 toml: "workspaces = []\nwindows = []\n".into(),
@@ -408,6 +443,32 @@ mod tests {
             }],
             focused: Some(7),
             scroll: 12.5,
+        });
+
+        let mut buffer = Vec::new();
+        write_message(&mut buffer, &response).expect("writes");
+        let mut reader = Cursor::new(buffer);
+        let decoded: Option<Response> = read_message(&mut reader).expect("reads");
+        assert_eq!(decoded, Some(response));
+    }
+
+    #[test]
+    fn overview_responses_round_trip_over_the_wire_format() {
+        let response = Response::Overview(OverviewReport {
+            bounds: [0, 0, 410, 250],
+            viewport: [0, 0, 1280, 800],
+            tiles: vec![OverviewTileReport {
+                workspace: "1".into(),
+                index: 0,
+                position: [0, 0],
+                active: true,
+                rect: [0, 0, 200, 120],
+                windows: vec![OverviewWindowReport {
+                    id: 7,
+                    rect: [4, 6, 120, 60],
+                    floating: false,
+                }],
+            }],
         });
 
         let mut buffer = Vec::new();

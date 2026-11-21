@@ -26,6 +26,7 @@ pub mod groups;
 pub mod launcher;
 pub mod layout;
 pub mod motion;
+pub mod overview;
 pub mod profiles;
 pub mod rules;
 pub mod session;
@@ -43,6 +44,7 @@ pub use layout::{LayoutConfig, Placement, ScrollLayout};
 pub use motion::{
     workspace_slide, Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig,
 };
+pub use overview::{Overview, OverviewTile, OverviewWindow};
 pub use profiles::{LayoutPatch, MotionPatch, Profile, Profiles};
 pub use rules::{Glob, RuleSet, WindowPolicy, WindowRule};
 pub use session::{Session, WindowRecord};

@@ -23,7 +23,10 @@ use smithay::{
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
     },
-    desktop::{PopupKind, PopupManager, Space, Window},
+    desktop::{
+        layer_map_for_output, LayerSurface as DesktopLayerSurface, PopupKind, PopupManager, Space,
+        Window, WindowSurfaceType,
+    },
     input::{
         keyboard::{xkb, FilterResult, KeyboardHandle, KeysymHandle},
         pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent, PointerHandle},
@@ -49,9 +52,14 @@ use smithay::{
             },
             SelectionHandler,
         },
-        shell::xdg::{
-            PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
-            XdgToplevelSurfaceData,
+        shell::{
+            wlr_layer::{
+                Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+            },
+            xdg::{
+                PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+                XdgToplevelSurfaceData,
+            },
         },
         shm::{ShmHandler, ShmState},
     },
@@ -60,12 +68,20 @@ use veyron_core::{
     workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session,
     Size as VSize, WindowId, Wm, WorkspacePosition,
 };
-use veyron_ipc::{Response, StateReport, WindowReport, MAX_LINE_BYTES};
+use veyron_ipc::{
+    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, WindowReport,
+    MAX_LINE_BYTES,
+};
 
 use crate::ipc::Job;
 
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
+
+/// Size of one workspace tile in the `veyronctl overview` grid.
+const OVERVIEW_TILE: VSize = VSize::new(320, 200);
+/// Space between overview tiles.
+const OVERVIEW_GAP: i32 = 16;
 
 /// Per-client protocol state (required by `smithay`'s compositor handler).
 #[derive(Debug, Default)]
@@ -90,6 +106,9 @@ pub struct Veyron {
     data_device_state: DataDeviceState,
     /// Kept alive so the `wl_output`/`zxdg_output` globals stay registered.
     _output_manager_state: OutputManagerState,
+    /// Serves `zwlr_layer_shell_v1`: panels, notification daemons, wallpapers
+    /// and OSDs are ordinary clients of this protocol.
+    layer_shell_state: WlrLayerShellState,
     popup_manager: PopupManager,
 
     /// Kept alive so the seat and its globals stay registered.
@@ -175,6 +194,7 @@ impl Veyron {
 
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let popup_manager = PopupManager::default();
 
         let output = Output::new(
@@ -214,6 +234,7 @@ impl Veyron {
             seat_state,
             data_device_state,
             _output_manager_state: output_manager_state,
+            layer_shell_state,
             popup_manager,
             _seat: seat,
             keyboard,
@@ -469,6 +490,7 @@ impl Veyron {
         let response = match job.request {
             veyron_ipc::Request::Ping => Response::Pong,
             veyron_ipc::Request::State => Response::State(self.state_report()),
+            veyron_ipc::Request::Overview => Response::Overview(self.overview_report()),
             veyron_ipc::Request::CaptureSession => match self.wm.capture_session().to_toml() {
                 Ok(toml) => {
                     let response = Response::Session { toml };
@@ -563,6 +585,35 @@ impl Veyron {
         }
     }
 
+    fn overview_report(&self) -> OverviewReport {
+        let overview = self.wm.overview(OVERVIEW_TILE, OVERVIEW_GAP);
+        let rect = |rect: Rect| [rect.x, rect.y, rect.w, rect.h];
+        OverviewReport {
+            bounds: rect(overview.bounds),
+            viewport: rect(overview.viewport),
+            tiles: overview
+                .tiles
+                .iter()
+                .map(|tile| OverviewTileReport {
+                    workspace: tile.workspace.clone(),
+                    index: tile.index,
+                    position: [tile.position.x, tile.position.y],
+                    active: tile.active,
+                    rect: rect(tile.rect),
+                    windows: tile
+                        .windows
+                        .iter()
+                        .map(|window| OverviewWindowReport {
+                            id: window.window,
+                            rect: rect(window.rect),
+                            floating: window.floating,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
     /// Report the identity a client announced for its toplevel to the core, so
     /// window rules, `veyronctl state` and Veyron Recall see the real app id
     /// and title. Rules are applied by the core on the first announcement.
@@ -636,6 +687,17 @@ impl Veyron {
         self.output.set_preferred(mode);
         self.space.map_output(&self.output, (0, 0));
         self.damage_tracker = OutputDamageTracker::new(window_size, 1.0, Transform::Flipped180);
+
+        // Panels and notification surfaces get exclusive zones and sizes
+        // recomputed, then a configure for their new geometry.
+        let layers: Vec<_> = {
+            let mut map = layer_map_for_output(&self.output);
+            map.arrange();
+            map.layers().cloned().collect()
+        };
+        for layer in layers {
+            layer.layer_surface().send_pending_configure();
+        }
     }
 
     /// Match the scene graph to the layout snapshot and configure clients.
@@ -816,6 +878,14 @@ impl Veyron {
                 send_frames_surface_tree(toplevel.wl_surface(), time);
             }
         }
+        // Panels and other layer clients animate on frame callbacks too.
+        let layers: Vec<_> = layer_map_for_output(&self.output)
+            .layers()
+            .cloned()
+            .collect();
+        for layer in layers {
+            send_frames_surface_tree(layer.wl_surface(), time);
+        }
     }
 }
 
@@ -869,6 +939,25 @@ impl CompositorHandler for Veyron {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+
+        if self
+            .space
+            .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+            .is_some()
+        {
+            let rearranged = { layer_map_for_output(&self.output).arrange() };
+            if rearranged {
+                let layers: Vec<_> = layer_map_for_output(&self.output)
+                    .layers()
+                    .cloned()
+                    .collect();
+                for layer in layers {
+                    layer.layer_surface().send_pending_configure();
+                }
+            }
+            self.needs_redraw = true;
+            return;
+        }
         self.popup_manager.commit(surface);
 
         let mut committed = None;
@@ -1014,6 +1103,61 @@ impl XdgShellHandler for Veyron {
     fn unfullscreen_request(&mut self, _surface: ToplevelSurface) {}
 }
 
+impl WlrLayerShellHandler for Veyron {
+    fn shell_state(&mut self) -> &mut WlrLayerShellState {
+        &mut self.layer_shell_state
+    }
+
+    fn new_layer_surface(
+        &mut self,
+        surface: WlrLayerSurface,
+        output: Option<wl_output::WlOutput>,
+        _layer: Layer,
+        namespace: String,
+    ) {
+        // Nested mode has exactly one output, so a surface that asks for any
+        // other output is mapped here instead of being dropped.
+        let output = output
+            .as_ref()
+            .and_then(Output::from_resource)
+            .filter(|output| *output == self.output)
+            .unwrap_or_else(|| self.output.clone());
+        let layer_surface = DesktopLayerSurface::new(surface, namespace);
+        if layer_map_for_output(&output)
+            .map_layer(&layer_surface)
+            .is_err()
+        {
+            tracing::warn!("could not map a layer surface");
+            return;
+        }
+        // Mapping arranged the surface, so this is its initial configure.
+        layer_surface.layer_surface().send_configure();
+        self.needs_redraw = true;
+    }
+
+    fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        let doomed = layer_map_for_output(&self.output)
+            .layers()
+            .find(|layer| layer.layer_surface() == &surface)
+            .cloned();
+        if let Some(layer) = doomed {
+            layer_map_for_output(&self.output).unmap_layer(&layer);
+            self.needs_redraw = true;
+        }
+    }
+
+    fn new_popup(&mut self, _parent: WlrLayerSurface, popup: PopupSurface) {
+        if self
+            .popup_manager
+            .track_popup(PopupKind::Xdg(popup))
+            .is_err()
+        {
+            tracing::warn!("could not track a layer popup");
+        }
+    }
+}
+
+smithay::delegate_layer_shell!(Veyron);
 smithay::delegate_compositor!(Veyron);
 smithay::delegate_xdg_shell!(Veyron);
 smithay::delegate_shm!(Veyron);

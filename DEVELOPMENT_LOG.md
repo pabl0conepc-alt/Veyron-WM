@@ -1,5 +1,26 @@
 # Development log
 
+## 2026-11-21 — Workspace overview and layer-shell
+
+- `Wm::overview(tile, gap)` lays every workspace of the active output on the
+  sparse grid, normalises coordinates so the top-left tile starts at the origin,
+  and scales each workspace's windows from the viewport into its tile.
+  `build_snapshot` now takes a workspace index, so inactive workspaces can be
+  inspected without switching to them.
+- `veyronctl overview [--json]` reports that grid over the control protocol. The
+  new request and response are additive, so the protocol stays at version 3.
+- `zwlr_layer_shell_v1` is served: layer surfaces are mapped into the output's
+  layer map with their exclusive zones arranged, receive an initial configure,
+  are re-arranged and re-configured when the output resizes, and get frame
+  callbacks. Panels, notification daemons, wallpapers and OSDs can run as
+  clients. Pointer and keyboard input on layer surfaces is not implemented.
+- Verified with `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`
+  (122 core tests, 2 launcher unit tests in the binary, 5 window-feature,
+  9 multi-output, 10 profile, 1 README-config, 9 IPC and 7 headless
+  Wayland-client tests). Layer-shell is compile-verified only: no layer-shell
+  client was run here.
+
 ## 2026-11-21 — Persistent workspaces, per-window motion and a launcher
 
 - `[[workspaces]]` predefines named workspaces on the primary output with an

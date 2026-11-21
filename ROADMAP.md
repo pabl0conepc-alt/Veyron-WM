@@ -87,6 +87,10 @@ scheduling, and measured behavior. Blur and transparency remain optional.
 - [x] Expose actions, state, reload, ping and graceful shutdown over IPC.
 - [x] Resolve installed XDG desktop entries and launch them with
   `veyronctl launch <NAME>`, refusing entries that need a terminal.
+- [x] Serve `zwlr_layer_shell_v1` so bars, notification daemons, wallpapers and
+  OSDs are ordinary clients with exclusive zones and frame callbacks.
+- [x] Workspace overview geometry: every workspace on the sparse grid with its
+  windows scaled into a tile, exposed as `veyronctl overview [--json]`.
 - [x] Expose spatial workspace coordinates and window-transfer actions through
   the core action parser, default bindings and state IPC.
 - [x] Research Smithay's XWayland/XWM boundary and record an ADR.
@@ -182,7 +186,7 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test --workspace` (120 core tests, 5 window-feature
+**Evidence:** `cargo test --workspace` (122 core tests, 5 window-feature
 integration tests, 9 multi-output integration tests, 10 profile integration
 tests, 8 IPC tests and 7 headless Wayland-client integration tests) covers every
 implemented item above; `cargo clippy --workspace --all-targets -- -D warnings`

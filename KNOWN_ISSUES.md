@@ -34,6 +34,12 @@
   directly. It refuses `Terminal=true` entries, ignores desktop actions and does
   not use D-Bus activation, so applications relying on either need an explicit
   `spawn` binding.
+- `zwlr_layer_shell_v1` surfaces render with their exclusive zones and receive
+  frame callbacks, but pointer input is still routed to toplevels only: a panel,
+  OSD or notification cannot be clicked yet. Keyboard interactivity on layer
+  surfaces is not implemented either.
+- The workspace overview is geometry plus IPC (`veyronctl overview`); the
+  compositor does not draw an overview surface, and no gesture input is wired.
 - Veyron Recall saves and restores validated TOML through `veyronctl session
   save|restore`. Restore recreates policy state in the core; it does not launch
   applications or reconnect restored records to future client surfaces.

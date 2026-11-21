@@ -11,6 +11,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     action::{Action, Direction, ResizeAxis},
     config::Config,
@@ -94,7 +96,7 @@ impl Workspace {
 }
 
 /// Sparse signed coordinates for an infinite desktop workspace.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WorkspacePosition {
     pub x: i64,
     pub y: i64,
@@ -139,6 +141,10 @@ impl OutputState {
 
     pub fn workspaces(&self) -> &[Workspace] {
         &self.workspaces
+    }
+
+    pub fn active_workspace_index(&self) -> usize {
+        self.active
     }
 
     pub fn active_workspace_position(&self) -> WorkspacePosition {
@@ -1176,27 +1182,41 @@ impl Wm {
 
     /// Build the frame description of the active output.
     pub fn snapshot(&self) -> Snapshot {
-        self.build_snapshot(self.active_output)
+        let output = self.active_output;
+        self.build_snapshot(output, self.outputs[output].active)
     }
 
     /// Frame description of one output, `None` when the index is out of range.
     pub fn output_snapshot(&self, output_index: usize) -> Option<Snapshot> {
-        if output_index >= self.outputs.len() {
+        let output = self.outputs.get(output_index)?;
+        Some(self.build_snapshot(output_index, output.active))
+    }
+
+    /// Frame description of one workspace of one output, `None` when either
+    /// index is out of range. The overview uses this to draw inactive
+    /// workspaces without switching to them.
+    pub fn workspace_snapshot(
+        &self,
+        output_index: usize,
+        workspace_index: usize,
+    ) -> Option<Snapshot> {
+        let output = self.outputs.get(output_index)?;
+        if workspace_index >= output.workspaces.len() {
             return None;
         }
-        Some(self.build_snapshot(output_index))
+        Some(self.build_snapshot(output_index, workspace_index))
     }
 
     /// One frame description per output, in compositor order.
     pub fn snapshots(&self) -> Vec<Snapshot> {
         (0..self.outputs.len())
-            .map(|index| self.build_snapshot(index))
+            .map(|index| self.build_snapshot(index, self.outputs[index].active))
             .collect()
     }
 
-    fn build_snapshot(&self, output_index: usize) -> Snapshot {
+    fn build_snapshot(&self, output_index: usize, workspace_index: usize) -> Snapshot {
         let output = &self.outputs[output_index];
-        let workspace = output.active_workspace();
+        let workspace = &output.workspaces[workspace_index];
         let viewport = viewport_for(output.rect, &self.config.layout);
         let layout = workspace.effective_layout();
         let gap = smart_gap(&self.config.layout, workspace.layout.window_count());
@@ -1275,7 +1295,7 @@ impl Wm {
             output_index,
             viewport,
             workspace: workspace.name.clone(),
-            workspace_index: output.active,
+            workspace_index,
             workspace_count: output.workspaces.len(),
             workspace_position: workspace.position,
             layout,

@@ -195,6 +195,17 @@ application directories with depth, count and file-size bounds, lets earlier
 directories win, refuses `Terminal=true` entries, and spawns the resolved argv
 without a shell.
 
+### Workspace overview
+
+`Wm::overview(tile, gap)` returns one `OverviewTile` per workspace of the active
+output: the workspace name, its sparse-grid coordinate, whether it is active,
+the tile rectangle and its windows scaled from the output viewport into the
+tile. Coordinates are normalised so the top-left workspace starts at the origin,
+which keeps the grid stable when the user navigates into negative coordinates.
+`build_snapshot` takes a workspace index for this, so inactive workspaces can be
+inspected without switching to them. The compositor exposes the same structure
+as `veyronctl overview [--json]`; drawing it is left to an overview client.
+
 ### Snapping, groups and sessions
 
 `snap.rs` owns the geometry of screen zones and picture-in-picture corners. Both
@@ -260,6 +271,12 @@ features.
 - **Configures:** tiled windows are sent a `xdg_toplevel.configure` only when
   their target size changes (`configured` map). The scene graph and the client
   therefore converge without configure storms.
+- **Layer shell:** `zwlr_layer_shell_v1` surfaces are mapped into the output's
+  layer map, arranged with their anchors, margins and exclusive zones, sent an
+  initial configure, re-arranged and re-configured on output resize, and given
+  frame callbacks. Panels, notification daemons, wallpapers and OSDs therefore
+  render without being part of `Wm`. Pointer and keyboard input on layer
+  surfaces is not forwarded yet.
 - **Focus:** keyboard focus follows the snapshot's focused window; activation
   state is applied to every managed window. Pointer buttons focus the window
   under the cursor and raise floating windows.
@@ -310,6 +327,9 @@ State reports carry the active workspace, layout, gap and scroll offset plus one
 entry per window with its geometry, floating/fullscreen state and the app id,
 title and rule opacity the core knows; identity comes from the client's first
 commit, so a signed-out or as-yet anonymous toplevel reports empty strings.
+`overview` returns each workspace's tile, sparse coordinate, active flag and
+scaled window rectangles, so a bar or an overview client gets every workspace
+in one round trip.
 
 Threading: IPC connections are handled on their own threads; requests are
 forwarded to the compositor loop through a `calloop` channel and replies return
