@@ -1,0 +1,53 @@
+// Waybar for VEYRON WM. Copy to ~/.config/waybar/config.jsonc together with
+// style.css from this directory, then start waybar from inside Veyron (or add
+// it to `startup` in veyron.toml).
+{
+    "layer": "top",
+    "position": "top",
+    "height": 32,
+    "reload_style_on_change": true,
+    "modules-left": ["custom/veyron"],
+    "modules-center": ["clock"],
+    "modules-right": ["pulseaudio", "network", "battery", "tray"],
+
+    // Workspaces and layout, streamed by veyronctl on every change.
+    "custom/veyron": {
+        "exec": "veyronctl watch --waybar",
+        "return-type": "json",
+        "restart-interval": 2,
+        "format": "{}",
+        "on-click": "veyronctl workspace next",
+        "on-click-right": "veyronctl layout next",
+        "on-scroll-up": "veyronctl workspace prev",
+        "on-scroll-down": "veyronctl workspace next"
+    },
+
+    "clock": {
+        "format": "{:%H:%M}",
+        "format-alt": "{:%a %d %b}",
+        "tooltip-format": "<tt>{calendar}</tt>",
+        "on-click-right": "veyronctl theme toggle"
+    },
+
+    "pulseaudio": {
+        "format": "{icon} {volume}%",
+        "format-muted": "󰝟",
+        "format-icons": { "default": ["󰕿", "󰖀", "󰕾"] },
+        "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle"
+    },
+
+    "network": {
+        "format-wifi": "󰤨 {essid}",
+        "format-ethernet": "󰈀",
+        "format-disconnected": "󰤭",
+        "tooltip-format": "{ifname} {ipaddr}"
+    },
+
+    "battery": {
+        "format": "{icon} {capacity}%",
+        "format-icons": ["󰁺", "󰁼", "󰁾", "󰂀", "󰁹"],
+        "states": { "warning": 25, "critical": 10 }
+    },
+
+    "tray": { "spacing": 8 }
+}

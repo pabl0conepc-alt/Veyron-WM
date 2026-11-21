@@ -147,6 +147,27 @@ Noted, not changed (doubtful or feature-sized):
 Unverified: nothing was run on screen; the two input fixes and all
 rendering paths still need the nested-session check.
 
+### Fourth batch: on-screen check, UX and installation
+
+- **First on-screen validation** (KDE Plasma, Intel HD Graphics 3000, nested,
+  foot clients; screenshots in `docs/screenshots/`): rounded corner clipping,
+  rounded borders, focused-border colour, neon glow, glass dimming, light
+  mode, master-stack/dwindle/scroll layouts and runtime `theme` switching all
+  render as intended. The `frag_map` row flip is correct.
+- Found on screen and fixed: clients drew their own title bars (now
+  server-side xdg-decoration); `--wayland-display` and `--output-size` were
+  ignored in nested mode. Still open: a faint dotted dithering pattern in
+  shadow edges on this GPU (`flat` avoids it), and KWin may keep the nested
+  window at a remembered size.
+- UX: config file watched and auto-reloaded (headless test), `veyron
+  --check-config`, `terminal` action on super+return picking `$TERMINAL` or an
+  installed terminal, `veyronctl watch [--waybar]` state stream with
+  `contrib/waybar/` config and Material style.
+- Installation: `install.sh` for NixOS, Arch, Debian/Ubuntu and Fedora
+  (shellcheck clean; only `--help`/option parsing exercised, not a full run).
+- README rewritten with a gallery, highlights, quick start and cheat sheet;
+  the README test now validates every TOML block.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |

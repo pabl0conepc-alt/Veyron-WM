@@ -79,3 +79,8 @@
   square (no rounded corners) and have not been visually checked on the
   target GPU. Runtime `theme`, `gaps` and `opacity` changes are not written
   back to `veyron.toml`, so `reload` restores the file's values.
+- On Intel HD Graphics 3000 in the nested window, the faint outer edge of the
+  GPU shadows shows a slight dotted (dithered) pattern. It is cosmetic; the
+  `flat` design draws no shadows and avoids it.
+- `veyronctl watch` samples the state four times a second instead of receiving
+  pushed events; it emits a line only when the state changes.
