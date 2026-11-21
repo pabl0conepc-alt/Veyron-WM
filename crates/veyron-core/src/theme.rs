@@ -589,8 +589,13 @@ pub fn export(palette: &Palette, dir: &std::path::Path) -> std::io::Result<usize
         }
         // Write then rename so readers never observe a half-written file.
         let temporary = dir.join(format!(".{name}.tmp"));
-        std::fs::write(&temporary, contents)?;
-        std::fs::rename(&temporary, &path)?;
+        let result =
+            std::fs::write(&temporary, contents).and_then(|()| std::fs::rename(&temporary, &path));
+        if let Err(error) = result {
+            // Do not leave a stray, possibly half-written file behind.
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
         written += 1;
     }
     Ok(written)
@@ -737,6 +742,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(export(&palette, &dir).expect("first export"), 4);
         assert_eq!(export(&palette, &dir).expect("second export"), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_export_leaves_no_temporary_file_behind() {
+        let palette = ThemeConfig::default().palette();
+        let dir =
+            std::env::temp_dir().join(format!("veyron-theme-fail-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // A non-empty directory where `colors.json` belongs makes the rename
+        // step fail after the temporary file was written.
+        std::fs::create_dir_all(dir.join("colors.json").join("occupied"))
+            .expect("create the obstacle");
+        assert!(export(&palette, &dir).is_err());
+        assert!(
+            !dir.join(".colors.json.tmp").exists(),
+            "the half-finished temporary file is removed"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
