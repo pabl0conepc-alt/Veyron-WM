@@ -13,6 +13,9 @@ Usage:
   veyronctl session save <FILE>   Save the current session as TOML
   veyronctl session restore <FILE> Restore a session from TOML
   veyronctl launch <NAME>         Start an installed application
+  veyronctl theme [--json]        Show the Material You colours
+  veyronctl theme <OP>            toggle, dark, light, next, seed <#hex|preset>,
+                                  variant <name|next>
   veyronctl ping                  Check the compositor is alive
   veyronctl reload                Reload the configuration
   veyronctl quit                  Ask the compositor to exit
@@ -77,6 +80,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             query: words[1..].join(" "),
         },
         "launch" => return Err("usage: veyronctl launch <NAME>".into()),
+        "theme" if words.len() == 1 => Request::Theme,
         "ping" if words.len() == 1 => Request::Ping,
         "reload" if words.len() == 1 => Request::Reload,
         "quit" if words.len() == 1 => Request::Quit,
@@ -127,6 +131,23 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         Response::Launched { name, command } => {
             println!("launched {name} ({command})");
+            Ok(())
+        }
+        Response::Theme(report) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "theme {} seed {} variant {}",
+                    report.mode, report.seed, report.variant
+                );
+                for (role, hex) in &report.colors {
+                    println!("  {role:<28} {hex}");
+                }
+                if let Some(dir) = &report.export_dir {
+                    println!("exported to {dir}");
+                }
+            }
             Ok(())
         }
         Response::State(report) => {

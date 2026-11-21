@@ -235,6 +235,19 @@ master_ratio = 0.6           # master width in master-stack
 [appearance]
 background = "#101014"
 
+# Material You scheme: window borders, and colour files for bars and widgets.
+[theme]
+seed = "ocean"               # #rrggbb or a preset: material, ocean, forest,
+                             # ember, amber, teal, rose, slate
+mode = "dark"                # dark | light
+variant = "tonal-spot"       # vibrant, expressive, fidelity, content, neutral,
+                             # monochrome, rainbow, fruit-salad
+contrast = 0.0               # -1.0 (reduced) .. 1.0 (high)
+border_width = 2             # 0 disables borders
+# border_active = "#ffb4abff"  # override primary / outline_variant
+use_surface_background = true
+export = true                # write ~/.local/state/veyron/theme/*
+
 [motion]                     # layout transitions; off by default
 enabled = false              # animate retiles and workspace switches
 duration_ms = 180
@@ -320,6 +333,49 @@ there are `snap <zone>` (halves, quadrants, thirds, `center`, `maximize`),
 `workspace-output <direction>` actions. If a `[bindings]` table is present it
 replaces the default keymap entirely; omit it to keep the defaults.
 
+Window-management extras borrowed from other compositors:
+
+| Action | Default chord | Does |
+|---|---|---|
+| `focus-cycle next\|prev` | `alt+tab`, `alt+shift+tab` | cycle through visible windows |
+| `move-to-workspace <n>` | `super+shift+1..5` | send the window to workspace n and follow it |
+| `center-floating` | `super+shift+c` | center the focused floating window |
+| `gaps <±px>` | `super+ctrl+minus/equal` | change the inner gap live (0–64 px) |
+| `opacity <±%>` | `super+alt+minus/equal` | change the focused window's opacity (min 10%) |
+| `theme toggle` | `super+t` | switch dark/light |
+| `theme next` | `super+shift+t` | next preset seed colour |
+| `theme variant next` | `super+ctrl+t` | next Material scheme variant |
+| `theme seed <#hex\|preset>` | | use a seed colour |
+
+Floating windows can also be dragged with `super` + left button. Keys are
+matched by their unshifted symbol, so `super+shift+1` means the `1` key on any
+layout.
+
+### Theme without shell scripts
+
+`[theme]` generates a Material You scheme from one seed colour with the same
+Material Color Utilities algorithm Android and Caelestia-style shells use. The
+compositor colours window borders with it (`primary` focused, `outline_variant`
+unfocused) and, in a real session, writes it to `~/.local/state/veyron/theme/`
+whenever it changes, at startup, on `reload` and on every `theme` action:
+
+| File | For |
+|---|---|
+| `colors.css` | GTK named colours (`@define-color primary #…;`): waybar, swaync, GTK apps |
+| `waybar.css` | a complete Material 3 waybar style using those colours |
+| `colors.scss` | Sass variables (`$primary: #…;`) for eww widgets |
+| `colors.json` | every role for scripts and other tools |
+
+For waybar, point `style.css` at the generated file and enable
+`"reload_style_on_change": true` so bars recolour live:
+
+```css
+@import url("file:///home/YOU/.local/state/veyron/theme/waybar.css");
+```
+
+`veyronctl theme [--json]` prints the active scheme. Only files whose contents
+changed are rewritten, atomically, so file watchers do not reload needlessly.
+
 ## Control protocol
 
 `veyronctl` speaks a versioned, newline-delimited JSON protocol over a Unix
@@ -346,6 +402,10 @@ veyronctl session save ~/.local/state/veyron/session.toml
 veyronctl session restore ~/.local/state/veyron/session.toml
 veyronctl launch firefox
 veyronctl workspace special
+veyronctl theme
+veyronctl theme seed forest
+veyronctl focus-cycle next
+veyronctl move-to-workspace 3
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit

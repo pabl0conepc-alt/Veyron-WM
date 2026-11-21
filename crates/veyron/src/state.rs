@@ -20,7 +20,12 @@ use smithay::{
         },
         renderer::{
             damage::OutputDamageTracker,
-            element::{surface::WaylandSurfaceRenderElement, AsRenderElements},
+            element::{
+                render_elements,
+                solid::{SolidColorBuffer, SolidColorRenderElement},
+                surface::WaylandSurfaceRenderElement,
+                AsRenderElements, Kind,
+            },
             gles::GlesRenderer,
             utils::on_commit_buffer_handler,
         },
@@ -68,12 +73,12 @@ use smithay::{
     },
 };
 use veyron_core::{
-    workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session,
-    Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
+    workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Palette, Rect, RectAnimator,
+    Session, Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
 };
 use veyron_ipc::{
-    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, WindowReport,
-    MAX_LINE_BYTES,
+    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, ThemeReport,
+    WindowReport, MAX_LINE_BYTES,
 };
 
 use crate::ipc::Job;
@@ -143,6 +148,10 @@ pub struct Veyron {
     /// Floating window being dragged with `super` + left button, and the
     /// pointer's offset from its top-left corner when the drag started.
     drag: Option<(WindowId, Point<f64, Logical>)>,
+    /// Material You scheme generated from `[theme]`.
+    palette: Palette,
+    /// Border rectangles per window, reused so unchanged borders cause no damage.
+    borders: HashMap<WindowId, [SolidColorBuffer; 4]>,
     needs_redraw: bool,
     /// Set when the compositor should exit.
     pub exit: bool,
@@ -231,7 +240,8 @@ impl Veyron {
         let startup = config.startup.clone();
         let wm = Wm::new(config, "VEYRON-1", size);
 
-        let state = Self {
+        let palette = wm.config().theme.palette();
+        let mut state = Self {
             start: Instant::now(),
             config_path,
             compositor_state,
@@ -258,11 +268,14 @@ impl Veyron {
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
             drag: None,
+            palette,
+            borders: HashMap::new(),
             needs_redraw: true,
             exit: false,
         };
 
         state.output.create_global::<Self>(&dh);
+        state.refresh_theme();
 
         for command in startup {
             spawn(&command);
@@ -527,6 +540,10 @@ impl Veyron {
             self.update_workspace_indicator();
         }
 
+        if effects.theme_changed {
+            self.refresh_theme();
+        }
+
         if effects.needs_redraw() {
             self.needs_redraw = true;
         }
@@ -540,6 +557,7 @@ impl Veyron {
     pub fn handle_ipc(&mut self, job: Job) {
         let response = match job.request {
             veyron_ipc::Request::Ping => Response::Pong,
+            veyron_ipc::Request::Theme => self.theme_report(),
             veyron_ipc::Request::State => Response::State(self.state_report()),
             veyron_ipc::Request::Overview => Response::Overview(self.overview_report()),
             veyron_ipc::Request::CaptureSession => match self.wm.capture_session().to_toml() {
@@ -691,11 +709,55 @@ impl Veyron {
         self.apply_effects(effects);
     }
 
+    /// Regenerate the Material palette from `[theme]` and, in a real session,
+    /// write it to `$XDG_STATE_HOME/veyron/theme/` for waybar, GTK and shell
+    /// widgets. Headless runs never touch the user's state directory.
+    fn refresh_theme(&mut self) {
+        let theme = &self.wm.config().theme;
+        self.palette = theme.palette();
+        self.needs_redraw = true;
+        if !theme.export || self.backend.is_none() {
+            return;
+        }
+        let Some(dir) = veyron_core::theme::export_dir() else {
+            tracing::warn!("no HOME or XDG_STATE_HOME: theme files not exported");
+            return;
+        };
+        match veyron_core::theme::export(&self.palette, &dir) {
+            Ok(0) => {}
+            Ok(written) => {
+                tracing::info!(written, dir = %dir.display(), "theme exported");
+            }
+            Err(error) => {
+                tracing::warn!(%error, dir = %dir.display(), "could not export theme");
+            }
+        }
+    }
+
+    fn theme_report(&self) -> Response {
+        let theme = &self.wm.config().theme;
+        Response::Theme(ThemeReport {
+            mode: theme.mode.as_str().to_string(),
+            seed: theme.seed.clone(),
+            variant: theme.variant.clone(),
+            colors: self
+                .palette
+                .roles
+                .iter()
+                .map(|(role, hex)| ((*role).to_string(), hex.clone()))
+                .collect(),
+            export_dir: veyron_core::theme::export_dir()
+                .filter(|_| theme.export)
+                .map(|dir| dir.display().to_string()),
+        })
+    }
+
     fn reload_config(&mut self) {
         match Config::load_or_default(&self.config_path) {
             Ok(config) => {
                 tracing::info!(path = %self.config_path.display(), "configuration reloaded");
                 self.wm.set_config(config);
+                self.refresh_theme();
             }
             Err(error) => {
                 tracing::error!(%error, path = %self.config_path.display(), "could not reload configuration");
@@ -926,7 +988,14 @@ impl Veyron {
         // After the first bind, the EGL surface remains current between swaps.
         // A missing or unavailable age forces a correct full redraw in Smithay.
         let age = backend.buffer_age().unwrap_or(0);
-        let background = self.wm.config().appearance.background_rgba();
+        let config = self.wm.config();
+        let background = if config.theme.use_surface_background {
+            self.palette
+                .rgba("surface")
+                .unwrap_or_else(|| config.appearance.background_rgba())
+        } else {
+            config.appearance.background_rgba()
+        };
         let snapshot = self.wm.snapshot();
         let damage = {
             let (renderer, mut framebuffer) = backend.bind()?;
@@ -936,6 +1005,8 @@ impl Veyron {
                 &self.output,
                 &self.windows,
                 &snapshot,
+                &mut self.borders,
+                BorderStyle::from_config(self.wm.config(), &self.palette),
             );
             let rendered = self.damage_tracker.render_output(
                 renderer,
@@ -971,34 +1042,70 @@ impl Veyron {
     }
 }
 
+render_elements! {
+    /// Everything a frame is made of: client surfaces and the solid-colour
+    /// window borders drawn by the compositor.
+    pub SceneElement<=GlesRenderer>;
+    Surface=WaylandSurfaceRenderElement<GlesRenderer>,
+    Solid=SolidColorRenderElement,
+}
+
+/// Window border appearance for one frame, taken from the Material theme.
+#[derive(Debug, Clone, Copy)]
+struct BorderStyle {
+    width: i32,
+    active: [f32; 4],
+    inactive: [f32; 4],
+}
+
+impl BorderStyle {
+    fn from_config(config: &Config, palette: &Palette) -> Self {
+        Self {
+            width: config.theme.border_width,
+            active: palette.border_active_rgba(),
+            inactive: palette.border_inactive_rgba(),
+        }
+    }
+}
+
 /// Build the frame's render elements front to back: overlay and top layer
 /// surfaces, then windows from the top of the stack down, each drawn with the
-/// opacity its rules request, then bottom and background layer surfaces.
+/// opacity its rules request and followed by its border, then bottom and
+/// background layer surfaces.
 ///
-/// The output is unscaled (scale 1.0), so logical and physical coordinates
-/// coincide.
+/// Border buffers are reused across frames, so an unchanged border keeps its
+/// commit counter and the damage tracker does not redraw it. The output is
+/// unscaled (scale 1.0), so logical and physical coordinates coincide.
 fn scene_elements(
     renderer: &mut GlesRenderer,
     space: &Space<Window>,
     output: &Output,
     windows: &HashMap<WindowId, Window>,
     snapshot: &Snapshot,
-) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+    borders: &mut HashMap<WindowId, [SolidColorBuffer; 4]>,
+    style: BorderStyle,
+) -> Vec<SceneElement> {
     let scale = Scale::from(1.0);
     let mut elements = Vec::new();
     let map = layer_map_for_output(output);
-    let push_layers = |elements: &mut Vec<_>, layer: Layer, renderer: &mut GlesRenderer| {
-        for surface in map.layers_on(layer).rev() {
-            if let Some(geometry) = map.layer_geometry(surface) {
-                elements.extend(surface.render_elements(
-                    renderer,
-                    geometry.loc.to_physical_precise_round(1.0),
-                    scale,
-                    1.0,
-                ));
+    let push_layers =
+        |elements: &mut Vec<SceneElement>, layer: Layer, renderer: &mut GlesRenderer| {
+            for surface in map.layers_on(layer).rev() {
+                if let Some(geometry) = map.layer_geometry(surface) {
+                    elements.extend(
+                        surface
+                            .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                                renderer,
+                                geometry.loc.to_physical_precise_round(1.0),
+                                scale,
+                                1.0,
+                            )
+                            .into_iter()
+                            .map(SceneElement::from),
+                    );
+                }
             }
-        }
-    };
+        };
     push_layers(&mut elements, Layer::Overlay, renderer);
     push_layers(&mut elements, Layer::Top, renderer);
 
@@ -1008,22 +1115,73 @@ fn scene_elements(
         let Some(location) = space.element_location(window) else {
             continue;
         };
-        let alpha = windows
+        let id = windows
             .iter()
             .find(|(_, candidate)| *candidate == window)
-            .and_then(|(id, _)| snapshot.placement_of(*id))
-            .map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
+            .map(|(id, _)| *id);
+        let placement = id.and_then(|id| snapshot.placement_of(id));
+        let alpha = placement.map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
         let origin = (location - window.geometry().loc).to_physical_precise_round(1.0);
-        elements.extend(window.render_elements(renderer, origin, scale, alpha));
+        elements.extend(
+            window
+                .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                    renderer, origin, scale, alpha,
+                )
+                .into_iter()
+                .map(SceneElement::from),
+        );
+
+        let (Some(id), Some(placement)) = (id, placement) else {
+            continue;
+        };
+        if style.width <= 0 || placement.fullscreen {
+            continue;
+        }
+        let color = if snapshot.focused == Some(id) {
+            style.active
+        } else {
+            style.inactive
+        };
+        let size = window.geometry().size;
+        let (x, y, w, h, b) = (location.x, location.y, size.w, size.h, style.width);
+        // Top, bottom, left, right: the frame sits just outside the window.
+        let sides = [
+            (x - b, y - b, w + 2 * b, b),
+            (x - b, y + h, w + 2 * b, b),
+            (x - b, y, b, h),
+            (x + w, y, b, h),
+        ];
+        let buffers = borders
+            .entry(id)
+            .or_insert_with(|| std::array::from_fn(|_| SolidColorBuffer::new((0, 0), [0.0; 4])));
+        for (buffer, (sx, sy, sw, sh)) in buffers.iter_mut().zip(sides) {
+            buffer.update((sw, sh), color);
+            elements.push(SceneElement::from(SolidColorRenderElement::from_buffer(
+                buffer,
+                (sx, sy),
+                scale,
+                alpha,
+                Kind::Unspecified,
+            )));
+        }
     }
+    // Windows that are gone or hidden drop their border buffers.
+    borders.retain(|id, _| snapshot.placement_of(*id).is_some());
 
     push_layers(&mut elements, Layer::Bottom, renderer);
     push_layers(&mut elements, Layer::Background, renderer);
     elements
 }
 
+/// Name of the key for binding lookup. The unmodified (level 1) symbol is used,
+/// preferring a Latin layout, so `super+shift+1` matches the `1` key instead
+/// of `exclam`, `alt+shift+tab` matches `tab` instead of `iso_left_tab`, and
+/// bindings keep working on non-Latin layouts.
 fn keysym_name(handle: &KeysymHandle<'_>) -> String {
-    xkb::keysym_get_name(handle.modified_sym()).to_ascii_lowercase()
+    let sym = handle
+        .raw_latin_sym_or_raw_current_sym()
+        .unwrap_or_else(|| handle.modified_sym());
+    xkb::keysym_get_name(sym).to_ascii_lowercase()
 }
 
 fn spawn(command: &str) {

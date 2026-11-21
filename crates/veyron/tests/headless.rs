@@ -839,3 +839,46 @@ fn headless_shuts_down_cleanly_on_quit_request() {
     let _client = Client::connect(&harness.wayland_socket);
     harness.shutdown();
 }
+
+#[test]
+fn theme_actions_recolour_the_scheme_over_the_control_socket() {
+    let mut harness = Harness::start("theme-ipc", 800, 600);
+    let theme =
+        |harness: &Harness| match veyron_ipc::request(&harness.control_socket, &Request::Theme) {
+            Ok(Response::Theme(report)) => report,
+            other => panic!("theme request failed: {other:?}"),
+        };
+
+    let dark = theme(&harness);
+    assert_eq!(dark.mode, "dark");
+    assert!(dark.colors.contains_key("primary"));
+    assert!(dark.colors.contains_key("on_surface"));
+
+    for action in ["theme toggle", "theme seed forest"] {
+        match veyron_ipc::request(
+            &harness.control_socket,
+            &Request::Action {
+                action: action.to_string(),
+            },
+        ) {
+            Ok(Response::Ok) => {}
+            other => panic!("{action} failed: {other:?}"),
+        }
+    }
+    let light = theme(&harness);
+    assert_eq!(light.mode, "light");
+    assert_eq!(light.seed, "forest");
+    assert_ne!(light.colors["surface"], dark.colors["surface"]);
+
+    match veyron_ipc::request(
+        &harness.control_socket,
+        &Request::Action {
+            action: "theme seed not-a-colour".to_string(),
+        },
+    ) {
+        Ok(Response::Error { .. }) => {}
+        other => panic!("an invalid seed must be rejected: {other:?}"),
+    }
+
+    harness.shutdown();
+}

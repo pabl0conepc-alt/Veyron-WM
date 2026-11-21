@@ -30,7 +30,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Bumped whenever a message shape changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Hard limit for a single message, newline included.
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
@@ -61,6 +61,8 @@ pub enum Request {
     Quit,
     /// Liveness check.
     Ping,
+    /// Ask for the active Material You scheme.
+    Theme,
 }
 
 /// A response from the compositor.
@@ -79,6 +81,8 @@ pub enum Response {
     Session { toml: String },
     /// Reply to [`Request::Launch`]: the application that was started.
     Launched { name: String, command: String },
+    /// Reply to [`Request::Theme`].
+    Theme(ThemeReport),
     /// The request was rejected. The message is meant for humans.
     Error { message: String },
 }
@@ -124,6 +128,20 @@ pub struct WindowReport {
     pub title: String,
     /// Opacity requested by the window rules (`1.0` when none match).
     pub opacity: f32,
+}
+
+/// The active Material You scheme, as generated from `[theme]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeReport {
+    /// `dark` or `light`.
+    pub mode: String,
+    /// Seed colour or preset name.
+    pub seed: String,
+    pub variant: String,
+    /// Material role name (snake case) to `#rrggbb`.
+    pub colors: std::collections::BTreeMap<String, String>,
+    /// Where the theme files are exported, when exporting is enabled.
+    pub export_dir: Option<String>,
 }
 
 /// Every workspace laid out on the sparse grid.

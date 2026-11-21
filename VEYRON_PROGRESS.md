@@ -30,6 +30,32 @@ Tests run: `cargo test -p veyron-core` (126 unit and all integration tests
 passed); `cargo test -p veyron` (2 unit tests and 7 headless real-client tests
 passed). Clippy was not available locally; CI runs it.
 
+### Second batch: Veyron Theme and borrowed WM actions
+
+- **Veyron Theme** (`veyron-core/src/theme.rs`): Material You schemes from a
+  seed colour or preset via `material-colors` 0.5 (the generator the user's
+  Sheels/cealestia-on-rust daemon already uses), nine variants, contrast,
+  dark/light. Exports `colors.css`, `waybar.css`, `colors.scss`,
+  `colors.json` to `$XDG_STATE_HOME/veyron/theme/` atomically and only when
+  changed; headless runs never export.
+- **Window borders** drawn by the compositor as reusable solid-colour
+  elements (no damage when unchanged), focused = `primary`, others =
+  `outline_variant`, hidden for fullscreen, following window opacity.
+- **Runtime theme actions**: `theme toggle|dark|light|next|seed|variant`,
+  bound to `super+t`, `super+shift+t`, `super+ctrl+t`.
+- **New actions** (ideas from Hyprland/niri): `focus-cycle`, `move-to-workspace
+  <n>`, `center-floating`, `gaps <±px>`, `opacity <±%>`, with default chords.
+  `move_focused_to_workspace` was refactored into a position-based helper
+  shared by direction and index moves.
+- **Keybinding fix**: keys are matched by their unshifted Latin symbol, so
+  `super+shift+1` and `alt+shift+tab` bindings can fire (they never matched
+  before because the modified symbol was `exclam` / `iso_left_tab`).
+- **IPC v4**: `Request::Theme` / `Response::Theme`, `veyronctl theme [--json]`.
+
+Tests: core 136 unit tests (10 new) and all integration suites pass; 8
+headless real-client tests pass, including a new theme-over-IPC test.
+`material-colors` requires Rust 1.97; CI uses stable (1.99 at the time).
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
@@ -44,6 +70,10 @@ passed). Clippy was not available locally; CI runs it.
 | Motion | Spring/physics, reduced motion | PARTIAL | `motion.rs`; renderer ignores profile motion |
 | Glass | Per-window opacity | PARTIAL | rendered now; needs visual check |
 | Glass | Blur, rounded corners, shadows | MISSING | need GLES shader elements; heavy for HD 3000 |
+| Theme | Material You scheme, presets, variants, runtime actions | PARTIAL | `theme.rs`; IPC-tested, not visually checked |
+| Theme | Export to waybar/GTK/SCSS/JSON | PARTIAL | unit-tested export; check with a real waybar |
+| Glass | Themed window borders | PARTIAL | `state.rs::scene_elements`; nested visual check |
+| WM | Alt-tab cycle, move-to-workspace N, center, live gaps/opacity | PARTIAL | `wm.rs`; unit-tested |
 | Spaces | Dynamic/named/persistent/special workspaces, 2D grid | PARTIAL | `wm.rs`; nested check |
 | Spaces | Overview | PARTIAL | IPC geometry only; no drawn overview |
 | Gestures | Touchpad/touch gestures | MISSING | winit backend gives no swipe events; needs libinput/udev backend |
@@ -64,3 +94,8 @@ passed). Clippy was not available locally; CI runs it.
    super+drag and clicking a layer-shell bar (e.g. `waybar`).
 3. Then wire `move_request`/`resize_request` and pointer resize, reusing
    `begin_drag`.
+4. Point the Sheels daemon (cealestia-on-rust) at Veyron: it already speaks a
+   JSON IPC to driftwm; a `subscribe` event stream in `veyron-ipc` plus an
+   `ext-workspace` export would let its bar show Veyron workspaces.
+5. Rounded corners as a cheap GLES pixel shader on window elements, gated by
+   a config switch so the HD 3000 can turn it off.

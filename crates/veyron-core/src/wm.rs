@@ -179,12 +179,14 @@ pub struct Effects {
     pub close_requested: Option<WindowId>,
     /// Shell commands to run.
     pub spawn: Vec<String>,
+    /// The theme changed: borders must be recoloured and colours re-exported.
+    pub theme_changed: bool,
 }
 
 impl Effects {
     /// Whether the frame needs to be redrawn.
     pub fn needs_redraw(&self) -> bool {
-        self.layout_changed || self.focus_changed || self.workspace_changed
+        self.layout_changed || self.focus_changed || self.workspace_changed || self.theme_changed
     }
 }
 
@@ -1287,6 +1289,20 @@ impl Wm {
             }
             Action::ProfileNext => effects.layout_changed = self.cycle_profile(1),
             Action::ProfilePrev => effects.layout_changed = self.cycle_profile(-1),
+            Action::FocusCycle { delta } => {
+                effects.focus_changed = self.cycle_focus(delta);
+                effects.layout_changed = effects.focus_changed;
+            }
+            Action::MoveToWorkspaceIndex { index } => {
+                effects.workspace_changed =
+                    self.move_focused_to_workspace_index(index.saturating_sub(1));
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
+            }
+            Action::CenterFloating => effects.layout_changed = self.center_focused_floating(),
+            Action::Gaps { delta } => effects.layout_changed = self.adjust_gap(delta),
+            Action::Opacity { delta } => effects.layout_changed = self.adjust_opacity(delta),
+            Action::Theme { op } => effects.theme_changed = self.apply_theme_op(op),
         }
 
         if effects.layout_changed {
@@ -1982,15 +1998,41 @@ impl Wm {
     }
 
     fn move_focused_to_workspace(&mut self, direction: crate::action::Direction) -> bool {
+        let output_index = self.active_output;
+        let source_index = self.outputs[output_index].active;
+        let Some(destination_position) = self.outputs[output_index].workspaces[source_index]
+            .position
+            .offset(direction)
+        else {
+            return false;
+        };
+        self.move_focused_to_position(destination_position)
+    }
+
+    /// Move the focused window to the workspace at a 0-based index of the
+    /// active output, creating workspaces up to it like `workspace <n>` does.
+    fn move_focused_to_workspace_index(&mut self, index: usize) -> bool {
+        if self.focused_window().is_none() {
+            return false;
+        }
+        let output_index = self.active_output;
+        while self.outputs[output_index].workspaces.len() <= index {
+            let position = self.next_linear_position(output_index);
+            self.append_workspace(output_index, position);
+        }
+        let position = self.outputs[output_index].workspaces[index].position;
+        self.move_focused_to_position(position)
+    }
+
+    /// Move the focused window to the workspace at `destination_position` on the
+    /// active output, creating it on demand, and follow it there.
+    fn move_focused_to_position(&mut self, destination_position: WorkspacePosition) -> bool {
         let Some(id) = self.focused_window() else {
             return false;
         };
         let output_index = self.active_output;
         let source_index = self.outputs[output_index].active;
         let source = &self.outputs[output_index].workspaces[source_index];
-        let Some(destination_position) = source.position.offset(direction) else {
-            return false;
-        };
         if source.position == destination_position {
             return false;
         }
@@ -2183,6 +2225,112 @@ impl Wm {
             crate::action::Direction::Down => (0, delta),
         };
         self.move_floating_to(id, rect.x.saturating_add(dx), rect.y.saturating_add(dy))
+    }
+
+    /// Focus the next (`delta > 0`) or previous visible window of the active
+    /// workspace in draw order, wrapping around (alt-tab).
+    fn cycle_focus(&mut self, delta: i32) -> bool {
+        let order: Vec<WindowId> = self.snapshot().windows().collect();
+        if order.len() < 2 || delta == 0 {
+            return false;
+        }
+        let len = order.len() as i64;
+        let current = self
+            .focused_window()
+            .and_then(|id| order.iter().position(|window| *window == id))
+            .map_or(-1, |index| index as i64);
+        let step = if delta > 0 { 1 } else { -1 };
+        let next = (current + step).rem_euclid(len) as usize;
+        self.focus_window(order[next])
+    }
+
+    fn center_focused_floating(&mut self) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let Some(window) = self.windows.get(&id) else {
+            return false;
+        };
+        if !window.is_floating() {
+            return false;
+        }
+        let rect = window.floating_rect();
+        let viewport = self.viewport();
+        self.move_floating_to(
+            id,
+            viewport.x + (viewport.w - rect.w) / 2,
+            viewport.y + (viewport.h - rect.h) / 2,
+        )
+    }
+
+    /// Largest inner gap reachable with the `gaps` action.
+    const MAX_RUNTIME_GAP: i32 = 64;
+
+    fn adjust_gap(&mut self, delta: i32) -> bool {
+        let gap = self
+            .config
+            .layout
+            .gap
+            .saturating_add(delta)
+            .clamp(0, Self::MAX_RUNTIME_GAP);
+        if gap == self.config.layout.gap {
+            return false;
+        }
+        let mut config = self.config.clone();
+        config.layout.gap = gap;
+        self.set_config(config);
+        true
+    }
+
+    /// Change the focused window's opacity by `delta` percent, never below 10%
+    /// so a window cannot become invisible by accident.
+    fn adjust_opacity(&mut self, delta: i32) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        let Some(window) = self.windows.get_mut(&id) else {
+            return false;
+        };
+        let current = window.opacity();
+        let opacity = (current + delta as f32 / 100.0).clamp(0.1, 1.0);
+        if (opacity - current).abs() < f32::EPSILON {
+            return false;
+        }
+        window.set_opacity(opacity);
+        true
+    }
+
+    /// Apply a runtime theme change. Returns whether the theme changed.
+    fn apply_theme_op(&mut self, op: crate::action::ThemeOp) -> bool {
+        use crate::{action::ThemeOp, theme};
+
+        let mut next = self.config.theme.clone();
+        match op {
+            ThemeOp::Toggle => next.mode = next.mode.toggled(),
+            ThemeOp::Mode { mode } => next.mode = mode,
+            ThemeOp::Seed { seed } => next.seed = seed,
+            ThemeOp::NextPreset => {
+                let current = theme::PRESETS
+                    .iter()
+                    .position(|(name, _)| name.eq_ignore_ascii_case(&next.seed));
+                let index = current.map_or(0, |index| (index + 1) % theme::PRESETS.len());
+                next.seed = theme::PRESETS[index].0.to_string();
+            }
+            ThemeOp::Variant { variant } => next.variant = variant,
+            ThemeOp::NextVariant => {
+                let current = theme::parse_variant(&next.variant).ok();
+                let index = theme::VARIANTS
+                    .iter()
+                    .position(|name| theme::parse_variant(name).ok() == current)
+                    .map_or(0, |index| (index + 1) % theme::VARIANTS.len());
+                next.variant = theme::VARIANTS[index].to_string();
+            }
+        }
+        if next == self.config.theme || next.validate().is_err() {
+            return false;
+        }
+        self.config.theme = next;
+        true
     }
 
     /// Place a floating window's top-left corner at `(x, y)`, keeping its size
@@ -2591,6 +2739,116 @@ mod tests {
                 .map(|placement| placement.rect),
             Some(original)
         );
+    }
+
+    #[test]
+    fn focus_cycle_wraps_through_visible_windows() {
+        let mut wm = wm();
+        let a = wm.create_window(NewWindow::default());
+        let b = wm.create_window(NewWindow::default());
+        let c = wm.create_window(NewWindow::default());
+        let order: Vec<WindowId> = wm.snapshot().windows().collect();
+        assert_eq!(order.len(), 3);
+        let start = wm.focused_window().expect("focused");
+        let mut seen = vec![start];
+        for _ in 0..3 {
+            assert!(wm.dispatch(Action::FocusCycle { delta: 1 }).focus_changed);
+            seen.push(wm.focused_window().expect("focused"));
+        }
+        assert_eq!(seen.first(), seen.last(), "three steps wrap around");
+        for id in [a, b, c] {
+            assert!(seen.contains(&id));
+        }
+        wm.dispatch(Action::FocusCycle { delta: -1 });
+        assert_eq!(wm.focused_window(), Some(seen[2]));
+    }
+
+    #[test]
+    fn move_to_workspace_index_creates_and_follows() {
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow::default());
+        let effects = wm.dispatch(Action::MoveToWorkspaceIndex { index: 3 });
+        assert!(effects.workspace_changed);
+        assert_eq!(wm.snapshot().workspace_index, 2);
+        assert_eq!(wm.focused_window(), Some(id));
+        assert!(wm.workspace_count() >= 3);
+        // Already there: nothing to do.
+        assert!(
+            !wm.dispatch(Action::MoveToWorkspaceIndex { index: 3 })
+                .workspace_changed
+        );
+        wm.dispatch(Action::Workspace { index: 1 });
+        assert!(wm.snapshot().placement_of(id).is_none());
+    }
+
+    #[test]
+    fn center_gaps_and_opacity_actions() {
+        let mut wm = wm();
+        let id = wm.create_window(NewWindow::default());
+        assert!(!wm.dispatch(Action::CenterFloating).layout_changed);
+        wm.dispatch(Action::ToggleFloating);
+        let viewport = wm.snapshot().viewport;
+        wm.move_floating_to(id, viewport.x, viewport.y);
+        wm.dispatch(Action::CenterFloating);
+        let rect = wm.snapshot().placement_of(id).expect("placement").rect;
+        assert!((rect.x - viewport.x - (viewport.w - rect.w) / 2).abs() <= 1);
+
+        let gap = wm.config().layout.gap;
+        assert!(wm.dispatch(Action::Gaps { delta: 4 }).layout_changed);
+        assert_eq!(wm.config().layout.gap, gap + 4);
+        wm.dispatch(Action::Gaps { delta: -1000 });
+        assert_eq!(wm.config().layout.gap, 0);
+        assert!(!wm.dispatch(Action::Gaps { delta: -4 }).layout_changed);
+
+        assert!(wm.dispatch(Action::Opacity { delta: -30 }).layout_changed);
+        let opacity = wm.snapshot().placement_of(id).expect("placement").opacity;
+        assert!((opacity - 0.7).abs() < 1e-4);
+        wm.dispatch(Action::Opacity { delta: -1000 });
+        let opacity = wm.snapshot().placement_of(id).expect("placement").opacity;
+        assert!((opacity - 0.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn theme_actions_change_the_runtime_theme() {
+        use crate::{action::ThemeOp, theme::ThemeMode};
+
+        let mut wm = wm();
+        assert_eq!(wm.config().theme.mode, ThemeMode::Dark);
+        assert!(
+            wm.dispatch(Action::Theme {
+                op: ThemeOp::Toggle
+            })
+            .theme_changed
+        );
+        assert_eq!(wm.config().theme.mode, ThemeMode::Light);
+        assert!(
+            !wm.dispatch(Action::Theme {
+                op: ThemeOp::Mode {
+                    mode: ThemeMode::Light
+                }
+            })
+            .theme_changed
+        );
+
+        wm.dispatch(Action::Theme {
+            op: ThemeOp::NextPreset,
+        });
+        assert_eq!(wm.config().theme.seed, crate::theme::PRESETS[1].0);
+
+        wm.dispatch(Action::Theme {
+            op: ThemeOp::NextVariant,
+        });
+        assert_eq!(wm.config().theme.variant, crate::theme::VARIANTS[1]);
+
+        assert!(
+            wm.dispatch(Action::Theme {
+                op: ThemeOp::Seed {
+                    seed: "#123456".into()
+                }
+            })
+            .theme_changed
+        );
+        assert_eq!(wm.config().theme.seed, "#123456");
     }
 
     #[test]

@@ -74,3 +74,8 @@
   versioning, and its control socket is restricted to the current user.
   External plugins are not implemented; spawned commands intentionally execute
   with the user's own privileges.
+- Veyron Theme generates Material You schemes and draws solid window borders;
+  theme files are exported only in a real (non-headless) session. Borders are
+  square (no rounded corners) and have not been visually checked on the
+  target GPU. Runtime `theme`, `gaps` and `opacity` changes are not written
+  back to `veyron.toml`, so `reload` restores the file's values.

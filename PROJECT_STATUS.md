@@ -29,7 +29,7 @@ Last reviewed: 2026-11-21.
   core, multi-output policy, named layout/motion profiles with `profile
   next|prev` cycling, and window identity wiring are implemented and tested (125
   core tests plus smart-placement, window-feature, multi-output, profile,
-  launcher and headless integration tests) with control-protocol version 3. The compositor forwards the app id and
+  launcher and headless integration tests) with control-protocol version 4 (theme request added). The compositor forwards the app id and
   title a client announces on its first commit, so rules and `veyronctl state`
   use real metadata. The nested loop advances window transitions and bounds its
   sleep to one frame while they run, per-window `animation = false` rules opt an

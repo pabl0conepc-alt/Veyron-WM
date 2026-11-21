@@ -17,6 +17,7 @@ use crate::{
     motion::MotionConfig,
     profiles::{Profile, Profiles},
     rules::{RuleSet, WindowRule},
+    theme::ThemeConfig,
     tiling::LayoutKind,
 };
 
@@ -198,6 +199,8 @@ impl Default for Behavior {
 pub struct Config {
     pub layout: LayoutConfig,
     pub appearance: Appearance,
+    /// Material You scheme for borders and exported desktop colours.
+    pub theme: ThemeConfig,
     pub motion: MotionConfig,
     pub behavior: Behavior,
     pub rules: RuleSet,
@@ -270,6 +273,21 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+ctrl+comma", "workspace-output left"),
     ("super+ctrl+period", "workspace-output right"),
     ("super+p", "profile next"),
+    ("alt+tab", "focus-cycle next"),
+    ("alt+shift+tab", "focus-cycle prev"),
+    ("super+shift+1", "move-to-workspace 1"),
+    ("super+shift+2", "move-to-workspace 2"),
+    ("super+shift+3", "move-to-workspace 3"),
+    ("super+shift+4", "move-to-workspace 4"),
+    ("super+shift+5", "move-to-workspace 5"),
+    ("super+shift+c", "center-floating"),
+    ("super+ctrl+minus", "gaps -4"),
+    ("super+ctrl+equal", "gaps 4"),
+    ("super+alt+minus", "opacity -10"),
+    ("super+alt+equal", "opacity 10"),
+    ("super+t", "theme toggle"),
+    ("super+shift+t", "theme next"),
+    ("super+ctrl+t", "theme variant next"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];
@@ -279,6 +297,7 @@ impl Default for Config {
         let mut config = Self {
             layout: LayoutConfig::default(),
             appearance: Appearance::default(),
+            theme: ThemeConfig::default(),
             motion: MotionConfig::default(),
             behavior: Behavior::default(),
             rules: RuleSet::default(),
@@ -316,6 +335,9 @@ impl Config {
         if parse_hex_color(&appearance.background).is_none() {
             return Err(ConfigError::InvalidColor(appearance.background));
         }
+
+        let theme = raw.theme.unwrap_or_default();
+        theme.validate().map_err(ConfigError::Invalid)?;
 
         let motion = raw.motion.unwrap_or_default();
         motion.validate().map_err(ConfigError::Invalid)?;
@@ -376,6 +398,7 @@ impl Config {
         Ok(Config {
             layout,
             appearance,
+            theme,
             motion,
             behavior: raw.behavior.unwrap_or_default(),
             rules,
@@ -435,6 +458,7 @@ impl Config {
         struct Serializable<'a> {
             layout: &'a LayoutConfig,
             appearance: &'a Appearance,
+            theme: &'a ThemeConfig,
             motion: &'a MotionConfig,
             behavior: &'a Behavior,
             default_profile: &'a Option<String>,
@@ -448,6 +472,7 @@ impl Config {
         let serializable = Serializable {
             layout: &self.layout,
             appearance: &self.appearance,
+            theme: &self.theme,
             motion: &self.motion,
             behavior: &self.behavior,
             default_profile: &self.default_profile,
@@ -481,6 +506,7 @@ impl Config {
 struct RawConfig {
     layout: Option<LayoutConfig>,
     appearance: Option<Appearance>,
+    theme: Option<ThemeConfig>,
     motion: Option<MotionConfig>,
     behavior: Option<Behavior>,
     rules: Option<Vec<WindowRule>>,
