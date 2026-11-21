@@ -698,6 +698,23 @@ fn xdg_fullscreen_request_updates_client_and_window_model() {
     );
 }
 
+#[test]
+fn compositor_fullscreen_action_updates_client_configure() {
+    let harness = Harness::start("fullscreen-action", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _toplevel = client.create_toplevel("fullscreen-action");
+
+    harness.action("toggle-fullscreen");
+    let fullscreen = client.wait_for_fullscreen(true);
+    assert_eq!((fullscreen.width, fullscreen.height), (1256, 776));
+    assert!(harness.state().windows[0].fullscreen);
+
+    harness.action("toggle-fullscreen");
+    let restored = client.wait_for_fullscreen(false);
+    assert_eq!((restored.width, restored.height), (620, 776));
+    assert!(!harness.state().windows[0].fullscreen);
+}
+
 impl Dispatch<WlSeat, ()> for ClientState {
     fn event(
         _state: &mut Self,
