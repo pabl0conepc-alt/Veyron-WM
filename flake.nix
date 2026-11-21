@@ -26,15 +26,11 @@
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         '';
 
-        installPhase = ''
-          runHook preInstall
-          install -Dm755 target/release/veyron "$out/bin/veyron"
-          install -Dm755 target/release/veyronctl "$out/bin/veyronctl"
+        postInstall = ''
           wrapProgram "$out/bin/veyron" \
             --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}"
           wrapProgram "$out/bin/veyronctl" \
             --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}"
-          runHook postInstall
         '';
 
         meta = {
