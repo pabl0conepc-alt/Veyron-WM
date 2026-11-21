@@ -117,7 +117,7 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 
 ## Building
 
-Requirements: Rust 1.87+, a C toolchain, `pkg-config`, and the usual EGL/Mesa
+Requirements: Rust 1.97+ (required by `material-colors`), a C toolchain, `pkg-config`, and the usual EGL/Mesa
 development packages. The nested backend needs a running Wayland or X11 session.
 
 ```sh
@@ -138,6 +138,36 @@ nix profile install .#default
 
 The package build is also checked by GitHub Actions. The first CI build for this
 flake is pending; nested runtime support still needs validation on the target.
+
+### Arch Linux
+
+`packaging/arch/PKGBUILD` builds a `veyron-wm-git` package from the default
+branch on GitHub. It runs the full test suite in `check()` and installs
+`veyron`, `veyronctl`, the README and a Wayland session file:
+
+```sh
+sudo pacman -S --needed base-devel git
+cd packaging/arch
+makepkg -si
+```
+
+To build with plain cargo instead, install the toolchain and the libraries the
+compositor loads at runtime (`libwayland-client`, `libxkbcommon` and `libEGL`
+are opened with `dlopen`), plus a Mesa driver for the nested renderer:
+
+```sh
+sudo pacman -S --needed base-devel rust pkgconf wayland libxkbcommon libglvnd libffi mesa
+cargo build --release --workspace --locked
+XDG_RUNTIME_DIR="$(mktemp -d)" cargo test --workspace --locked
+```
+
+Arch's `rust` package is recent enough for the 1.97 minimum. CI builds the
+PKGBUILD with `makepkg` in an `archlinux:latest` container on every push.
+
+The package installs `/usr/share/wayland-sessions/veyron.desktop`, but Veyron
+cannot be started from a display manager or a TTY yet: the only backend is the
+nested winit one, which needs a running Wayland or X11 session. Start it from
+inside your existing desktop as described under [Running](#running).
 
 ## Running
 

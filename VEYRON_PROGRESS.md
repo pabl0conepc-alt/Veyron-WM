@@ -56,6 +56,18 @@ Tests: core 136 unit tests (10 new) and all integration suites pass; 8
 headless real-client tests pass, including a new theme-over-IPC test.
 `material-colors` requires Rust 1.97; CI uses stable (1.99 at the time).
 
+### Arch Linux packaging (branch `claude/arch-linux-support`)
+
+- `packaging/arch/PKGBUILD` (`veyron-wm-git`) and a hand-written `.SRCINFO`;
+  `packaging/veyron.desktop` session file, which states that only the nested
+  backend exists (no DM/TTY session yet). Workspace `rust-version` is now 1.97.
+- CI job `arch-linux package`: `makepkg -s` with `check()` in an
+  `archlinux:latest` container against the commit under test, plus
+  `.SRCINFO` diff against `makepkg --printsrcinfo`, `desktop-file-validate`,
+  `namcap` (informational) and a `pacman -U` install smoke test.
+- Verified: CI result pending (no local `makepkg`; nothing run on a real Arch
+  machine). The repository has no LICENSE file, so the package ships none.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
