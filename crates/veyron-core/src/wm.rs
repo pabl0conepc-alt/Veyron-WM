@@ -1156,6 +1156,33 @@ impl Wm {
         changed
     }
 
+    /// Set fullscreen state for a specific managed window.
+    ///
+    /// A fullscreen request activates the window's output and workspace before
+    /// taking over that workspace's viewport. Leaving fullscreen only clears
+    /// the state when this window currently owns it.
+    pub fn set_window_fullscreen(&mut self, id: WindowId, fullscreen: bool) -> bool {
+        let Some((output_index, workspace_index, _)) = self.locate(id) else {
+            return false;
+        };
+
+        if fullscreen {
+            if self.outputs[output_index].workspaces[workspace_index].fullscreen == Some(id) {
+                return false;
+            }
+            self.focus_window(id);
+            self.outputs[output_index].workspaces[workspace_index].fullscreen = Some(id);
+        } else {
+            let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
+            if workspace.fullscreen != Some(id) {
+                return false;
+            }
+            workspace.fullscreen = None;
+        }
+
+        true
+    }
+
     /// Apply the next (`delta > 0`) or previous configured profile, wrapping
     /// around. Without an active profile this starts at the first (or last)
     /// one, so the default chord works before any profile is applied by hand.

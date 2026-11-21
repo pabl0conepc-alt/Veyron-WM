@@ -11,7 +11,7 @@ the prior flat prototype as the active implementation.
 
 - Active worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-current-main`
 - Branch: `codex/current-main-audit`, based on `origin/main` at `ed18b75`.
-- Latest pushed code commit: `85e5754 fix: reserve layer-shell exclusive work area`.
+- Latest pushed commit: `aa361d7 test: cover xdg fullscreen requests`.
 - Draft PR: none yet; create after implementation and checks are reviewed/green.
 - User instruction: **no agents**. Continue solo, only on Veyron-WM, and do not merge a PR.
 - Old checkouts remain preserved: `outputs/Veyron-WM` on `codex/engineering-audit`
@@ -26,9 +26,8 @@ nested Winit/GLES runtime, headless Wayland server and CLI). Detailed documents:
 `VEYRON_AUDIT.md`, `VEYRON_FEATURE_MATRIX.md` (187 rows),
 `VEYRON_IMPLEMENTATION_PLAN.md`, and this file.
 
-Current gaps include incomplete pointer/popup/layer routing, client fullscreen
-requests not applied,
-Recall not reconciling restored records with future real clients, reload IPC
+Current gaps include incomplete pointer/popup/layer routing and client
+fullscreen integration, Recall not reconciling restored records with future real clients, reload IPC
 reporting success on failure, protocol version not transmitted, uncapped IPC
 peer threads, no native graphical ecosystem/Studio/gesture recognizer/XWayland,
 and no target visual/performance evidence. See audit and matrix for details.
@@ -55,6 +54,14 @@ and no target visual/performance evidence. See audit and matrix for details.
   remains separate from its usable work area; Smithay's layer map supplies the
   non-exclusive zone; workspaces reflow and floating windows clamp when the
   area changes. Added a core regression for work-area updates.
+- Started xdg fullscreen integration. Added a real-client entry/exit regression
+  in `aa361d7`; run `44939749187` reached it in the Nix package test and failed
+  as intended: the configure stayed `fullscreen: false`, and the core report
+  was not changed. The standard job stopped earlier on a formatting difference;
+  that formatting has since been corrected locally. A new public
+  `Wm::set_window_fullscreen` method is now drafted in `wm.rs`, but the xdg
+  handlers and state configure path are not wired yet, and this draft has not
+  been compiled or validated.
 - Created current-tree audit, 187-row matrix, implementation plan, and progress
   checkpoint. Some matrix rows are generated from category-level evidence;
   refine per-feature module/test/next-action specificity before treating the
@@ -88,22 +95,32 @@ and no target visual/performance evidence. See audit and matrix for details.
   the work-area implementation, run `44937377591` passed both jobs: standard
   format, Clippy, build and tests, plus the reproducible Nix package build and
   tests.
+- Fullscreen regression: run `44939749187` failed on the expected behavior in
+  the Nix integration test (`fullscreen state never became true`, last
+  configure had width 620, height 776, fullscreen false). Standard CI stopped
+  at Format before Build/Test; the reported format-only diff is corrected in
+  the current unverified checkpoint.
 - The shell has Nix but no `cargo`/`rustc` on PATH. Do not fetch a large compiler
   closure onto the 4 GiB netbook; use GitHub Actions for full build/test/Clippy.
 - No nested visual session or target GPU/performance measurements were run.
 
-## Exact next work (checkpoint at `85e5754`)
+## Exact next work (fullscreen integration checkpoint; local draft not yet validated)
 
-1. Review/refine all 187 matrix entries against the latest source and tests.
-2. Improve compositor input routing for child, popup and layer surfaces; then
-   add popup grab/reposition and client fullscreen behavior with isolated
-   protocol regressions. The current pointer path targets toplevel roots only.
-3. Fix IPC reload error reporting, wire-level version negotiation and per-peer
+1. Finish xdg fullscreen integration: connect client enter/exit requests to
+   `Wm::set_window_fullscreen`, synchronize fullscreen state in xdg configures
+   for both client requests and compositor actions, and make the real-client
+   regression pass in standard and Nix CI. The current local draft is not yet
+   validated.
+2. Review/refine all 187 matrix entries against the latest source and tests.
+3. Improve compositor input routing for child, popup and layer surfaces; then
+   add popup grab/reposition with isolated protocol regressions. The current
+   pointer path targets toplevel roots only.
+4. Fix IPC reload error reporting, wire-level version negotiation and per-peer
    resource limits; add regression tests.
-4. Reconcile Recall restore state with later Wayland client surfaces; test actual
+5. Reconcile Recall restore state with later Wayland client surfaces; test actual
    client matching and document app limitations.
-5. Fix sparse overview coordinate/size overflow with boundary tests.
-6. Update `ROADMAP.md`, `DEVELOPMENT_LOG.md`, `KNOWN_ISSUES.md`, and this file as
+6. Fix sparse overview coordinate/size overflow with boundary tests.
+7. Update `ROADMAP.md`, `DEVELOPMENT_LOG.md`, `KNOWN_ISSUES.md`, and this file as
    work lands. Commit/push coherent increments and prepare a draft PR only after
    review; never merge without explicit user request.
 

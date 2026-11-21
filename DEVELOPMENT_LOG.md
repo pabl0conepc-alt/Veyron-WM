@@ -414,3 +414,20 @@
 - Next: review the 187-feature matrix; improve child/popup/layer input routing,
   popup grabs/reposition and client fullscreen. Then address IPC error/version/
   connection limits, Recall-client reconciliation, and overview bounds.
+
+
+## 2026-11-21 — xdg fullscreen regression checkpoint
+
+- Added `xdg_fullscreen_request_updates_client_and_window_model`, which uses a
+  real headless Wayland client to request fullscreen, verify the xdg configure
+  and core state, then leave fullscreen and verify restoration.
+- Test-first evidence: Nix job in Actions run `44939749187` reached the new test
+  and failed as expected because the configure remained fullscreen=false; the
+  standard CI job stopped earlier on one formatting difference. That formatting
+  difference is now corrected locally.
+- Drafted `Wm::set_window_fullscreen` in `crates/veyron-core/src/wm.rs` to set a
+  specific managed window's fullscreen state and activate its workspace. The
+  xdg callbacks and configure-state synchronization are not wired yet; this
+  code has not been compiled or tested.
+- Next: finish handler/configure integration, include fullscreen state for both
+  client requests and compositor actions, then pass standard and Nix CI.

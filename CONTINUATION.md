@@ -31,8 +31,8 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
 
 ## Branch and CI
 
-- Current active branch's latest pushed code commit: `85e5754`, which reserves
-  layer-shell exclusive zones in the usable output work area.
+- Current active branch's latest pushed commit: `aa361d7`, a real-client xdg
+  fullscreen regression that is red until the integration is implemented.
 - Nix runtime library lookup was fixed in `253a901`. Its package tests then
   reached all headless clients, where a parallel filename collision occurred.
 - Test-only commit `0eaa47d` added a deterministic repeated-clock regression;
@@ -47,10 +47,16 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
   work area and synchronizes it from Smithay's `non_exclusive_zone()` after
   layer changes and output resizing. Run `44937377591` passes both standard
   and Nix jobs, including the real-client regression.
+- Fullscreen regression run `44939749187`: the Nix integration test built and
+  failed as expected because xdg configure stayed non-fullscreen and core state
+  stayed false. Standard CI stopped at Format; the exact formatting diff is
+  corrected locally. `Wm::set_window_fullscreen` is a local draft, not yet
+  connected to xdg handlers or configure state, and not yet compiled. Finish
+  this path, then run standard and Nix CI before proceeding.
 - No PR for `codex/current-main-audit` has been created yet. Once implementation
   and checks are reviewed/green, create a draft PR and leave it unmerged.
 
-## Current implementation checkpoint (`85e5754`, CI green)
+## Current implementation checkpoint (`85e5754` layer zones green; fullscreen WIP)
 
 - Audit artifacts are being prepared in the active worktree:
   `VEYRON_AUDIT.md`, `VEYRON_FEATURE_MATRIX.md` (187 prompt rows),
@@ -80,15 +86,19 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
 
 1. Review all 187 feature rows against actual source and tests; refine generic
    file/test/next-action columns before committing the matrix.
-2. Continue phases in `VEYRON_IMPLEMENTATION_PLAN.md`; first address compositor
-   input routing for popup/subsurface/layer surfaces and client fullscreen,
-   adding focused real-client regressions for each behavior.
-3. Fix IPC reload error reporting, wire-level version negotiation and per-peer
+2. Finish fullscreen first: wire the local `Wm::set_window_fullscreen` draft to
+   xdg client enter/exit requests and make `sync_layout` include the xdg
+   Fullscreen state for client requests and compositor actions. Then pass the
+   real-client regression in standard and Nix CI.
+3. Review all 187 feature rows against concrete source/tests.
+4. Improve input routing for popup/subsurface/layer surfaces; implement popup
+   grabs/reposition with focused real-client tests.
+5. Fix IPC reload error reporting, wire-level version negotiation and per-peer
    resource limits, with tests.
-4. Reconcile Recall restore state with later Wayland client surfaces; test
+6. Reconcile Recall restore state with later Wayland client surfaces; test
    actual client matching and document application limitations.
-5. Fix sparse overview coordinate/size overflow with boundary tests.
-6. Do not call project complete while runtime, performance, or listed
+7. Fix sparse overview coordinate/size overflow with boundary tests.
+8. Do not call project complete while runtime, performance, or listed
    integration work is open.
-7. Commit/push coherent increments on `codex/current-main-audit`; prepare a
+9. Commit/push coherent increments on `codex/current-main-audit`; prepare a
    draft PR after CI is green. Never merge without explicit user request.

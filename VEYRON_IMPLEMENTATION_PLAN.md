@@ -14,7 +14,7 @@ evidence.
 |---|---|---|---|---|
 | 0 | Repository discovery and feature audit | Three crates, Smithay 0.7/calloop, docs and tests inventoried. | Keep audit, 187-row matrix, plan and progress aligned with updated `origin/main`; distinguish policy, protocol, visual and hardware evidence. | Active |
 | 1 | Core architecture | Protocol-free Wm/config/action/session plus compositor adapter exist. | Smart affinity now updates after manual workspace/output moves and late identity; standard CI passes. Still bound overview arithmetic and add edge tests; keep single source of truth for window/output state. | In progress |
-| 2 | Wayland protocol infrastructure | xdg-shell, SHM, seat, output globals, layer shell, data device, headless real clients. Exclusive zones now reserve usable area (`85e5754`, CI `44937377591`). | Route input to child/popup/layer surfaces; implement popup grabs/reposition and client fullscreen with real-client regressions. | Highest integration priority |
+| 2 | Wayland protocol infrastructure | xdg-shell, SHM, seat, output globals, layer shell, data device, headless real clients. Exclusive zones reserve usable area (`85e5754`, CI `44937377591`); a client fullscreen test is red (`44939749187`). | Finish xdg fullscreen model/configure integration, then route input to child/popup/layer surfaces and implement popup grabs/reposition with real-client regressions. | Highest integration priority |
 | 3 | Rendering infrastructure | Nested GLES scene graph, damage tracking, buffer-age fallback, event-driven redraw. | Verify resize/damage scheduling and idle wakeups; expose runtime evidence; apply alpha/opacity policy; only add GPU effects after a tested path. Keep headless renderer explicitly separate. | High |
 | 4 | Window management | Core supports strip, layouts, floating, rules, snap/PiP, groups, scratchpad, focus history; adapter configures snapshots. | Add client-level tests for more policies, client fullscreen/modal behavior, and input-driven move/resize; preserve constraints and focus invariants. | High |
 | 5 | Workspace management | Named and sparse 2D workspaces, transfer, output policy, overview geometry and CLI report. | Test named/persistent workspace lifecycle and resize; define visible overview interaction; verify output migration against backend events. | High |
@@ -39,12 +39,15 @@ evidence.
 3. **Done:** add core output work areas and synchronize Smithay layer-shell
    exclusive zones. The real mapped-panel regression and both CI jobs pass at
    `85e5754` (`44937377591`).
-4. Review and refine all 187 feature-matrix rows against concrete source/tests.
-5. Improve pointer routing for subsurface/popup/layer surfaces; implement popup
-   grabs/reposition and client fullscreen with focused real-client tests.
-6. Fix IPC reload errors, on-wire versioning and peer limits; reconcile Recall
+4. **In progress:** finish client xdg fullscreen. Test `aa361d7` failed in Nix
+   as expected (`44939749187`); `Wm::set_window_fullscreen` is drafted locally,
+   but the xdg callbacks/configure state are not integrated or verified.
+5. Review and refine all 187 feature-matrix rows against concrete source/tests.
+6. Improve pointer routing for subsurface/popup/layer surfaces; implement popup
+   grabs/reposition with focused real-client tests.
+7. Fix IPC reload errors, on-wire versioning and peer limits; reconcile Recall
    with future clients; fix overview arithmetic bounds.
-7. Continue remaining phases. Keep nested visual/performance evidence open
+8. Continue remaining phases. Keep nested visual/performance evidence open
    until measured on the target netbook.
 
 ## Project constraints

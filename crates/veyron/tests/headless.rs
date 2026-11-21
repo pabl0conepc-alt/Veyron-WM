@@ -682,7 +682,10 @@ fn xdg_fullscreen_request_updates_client_and_window_model() {
 
     let state = harness.state();
     let window = state.windows.first().expect("the window remains managed");
-    assert!(window.fullscreen, "the core model records client fullscreen");
+    assert!(
+        window.fullscreen,
+        "the core model records client fullscreen"
+    );
     assert_eq!(window.rect, [12, 12, 1256, 776]);
 
     toplevel.toplevel.unset_fullscreen();
