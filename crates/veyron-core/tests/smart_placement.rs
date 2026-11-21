@@ -83,6 +83,29 @@ fn smart_workspace_joins_the_app_workspace_without_switching() {
 }
 
 #[test]
+fn smart_workspace_follows_a_window_moved_manually() {
+    let mut wm = wm_with(true);
+    let first = open(&mut wm, "firefox");
+
+    assert!(
+        wm.dispatch(Action::MoveToWorkspace {
+            direction: veyron_core::Direction::Right,
+        })
+        .workspace_changed
+    );
+    assert_eq!(workspace_of(&wm, 2, first).as_deref(), Some("2"));
+
+    wm.dispatch(Action::Workspace { index: 3 });
+    let second = open(&mut wm, "firefox");
+
+    assert_eq!(
+        workspace_of(&wm, 3, second).as_deref(),
+        Some("2"),
+        "new windows should follow the app's latest manually chosen workspace"
+    );
+}
+
+#[test]
 fn unrelated_apps_are_not_affected_by_the_learning() {
     let mut wm = wm_with(true);
     wm.dispatch(Action::Workspace { index: 2 });
