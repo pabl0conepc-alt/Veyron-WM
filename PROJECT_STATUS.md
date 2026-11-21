@@ -1,6 +1,6 @@
 # Project status
 
-Last reviewed: 2026-11-20.
+Last reviewed: 2026-11-21.
 
 ## Current state
 
@@ -27,14 +27,18 @@ Last reviewed: 2026-11-20.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
   core, multi-output policy, named layout/motion profiles with `profile
-  next|prev` cycling, and window identity wiring are implemented and tested (111
-  core tests plus window-feature, multi-output, profile and headless integration
-  tests) with control-protocol version 3. The compositor forwards the app id and
+  next|prev` cycling, and window identity wiring are implemented and tested (120
+  core tests plus window-feature, multi-output, profile, launcher and headless
+  integration tests) with control-protocol version 3. The compositor forwards the app id and
   title a client announces on its first commit, so rules and `veyronctl state`
   use real metadata. The nested loop advances window transitions and bounds its
-  sleep to one frame while they run, with motion off by default and client sizes
-  still configured at their target; the renderer still ignores opacity/blur, the
-  backend still creates one output, and no nested runtime visual check exists. Gesture and
+  sleep to one frame while they run, per-window `animation = false` rules opt an
+  application out, and a workspace switch slides in from the direction of
+  travel, with motion off by default and client sizes still configured at their
+  target. `[[workspaces]]` predefines named workspaces, `workspace special`
+  toggles a scratch workspace, and `veyronctl launch` resolves XDG desktop
+  entries. The renderer still ignores opacity/blur, the backend still creates
+  one output, and no nested runtime visual check exists. Gesture and
   overview policy modules were removed before any consumer existed. See
   [ROADMAP.md](ROADMAP.md).
 - `cargo test --workspace` now runs in this environment, including the 7 headless

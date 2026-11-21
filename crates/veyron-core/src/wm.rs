@@ -193,6 +193,8 @@ pub struct PlacementInfo {
     pub opacity: f32,
     /// Whether the renderer should blur behind this window.
     pub blur: bool,
+    /// Whether this window's transitions should be animated.
+    pub animate: bool,
     /// Whether the window is docked in a picture-in-picture corner.
     pub pip: bool,
 }
@@ -250,6 +252,9 @@ impl Snapshot {
     }
 }
 
+/// Name of the workspace toggled by `workspace special`.
+const SPECIAL_WORKSPACE: &str = "special";
+
 /// The Veyron window manager.
 #[derive(Debug)]
 pub struct Wm {
@@ -271,6 +276,8 @@ pub struct Wm {
     pip: HashMap<WindowId, (PipCorner, Rect)>,
     /// Profile applied most recently, if any.
     active_profile: Option<String>,
+    /// Workspace the scratch workspace was opened from.
+    special_return: Option<usize>,
 }
 
 impl Wm {
@@ -304,10 +311,12 @@ impl Wm {
             focus_history: Vec::new(),
             pip: HashMap::new(),
             active_profile: None,
+            special_return: None,
         };
         if let Some(name) = wm.config.default_profile.clone() {
             wm.apply_profile(&name);
         }
+        wm.apply_workspace_presets();
         wm
     }
 
@@ -334,6 +343,7 @@ impl Wm {
         }
         self.clamp_floating_windows();
         self.refresh_tiled_rects();
+        self.apply_workspace_presets();
     }
 
     /// Name of the profile applied most recently, if any.
@@ -790,6 +800,7 @@ impl Wm {
         window.set_rules_applied(named);
         window.set_opacity(policy.opacity);
         window.set_blur(policy.blur);
+        window.set_animate(policy.animate);
         let viewport = self.viewport();
         let floating_size = window
             .min_size()
@@ -896,6 +907,7 @@ impl Wm {
         let policy = self.config.rules.resolve(app_id, title);
         window.set_opacity(policy.opacity);
         window.set_blur(policy.blur);
+        window.set_animate(policy.animate);
 
         if policy.scratchpad {
             self.park_window(id);
@@ -1106,6 +1118,11 @@ impl Wm {
                 effects.layout_changed = effects.workspace_changed;
                 effects.focus_changed = effects.workspace_changed;
             }
+            Action::WorkspaceSpecial => {
+                effects.workspace_changed = self.toggle_special_workspace();
+                effects.layout_changed = effects.workspace_changed;
+                effects.focus_changed = effects.workspace_changed;
+            }
             Action::OutputFocus { direction } => {
                 effects.focus_changed = self.focus_output_direction(direction);
                 effects.workspace_changed = effects.focus_changed;
@@ -1185,16 +1202,16 @@ impl Wm {
         let gap = smart_gap(&self.config.layout, workspace.layout.window_count());
 
         let mut placements = Vec::with_capacity(workspace.layout.window_count());
-        let visual = |window: WindowId| -> (f32, bool) {
+        let visual = |window: WindowId| -> (f32, bool, bool) {
             self.windows
                 .get(&window)
-                .map(|window| (window.opacity(), window.blur()))
-                .unwrap_or((1.0, false))
+                .map(|window| (window.opacity(), window.blur(), window.animate()))
+                .unwrap_or((1.0, false, true))
         };
 
         match workspace.fullscreen {
             Some(id) if self.windows.contains_key(&id) => {
-                let (opacity, blur) = visual(id);
+                let (opacity, blur, animate) = visual(id);
                 placements.push(PlacementInfo {
                     window: id,
                     rect: viewport,
@@ -1206,6 +1223,7 @@ impl Wm {
                     fullscreen: true,
                     opacity,
                     blur,
+                    animate,
                     pip: self.pip.contains_key(&id),
                 });
             }
@@ -1222,7 +1240,7 @@ impl Wm {
                     )
                 };
                 for Placement { window, rect } in tiled {
-                    let (opacity, blur) = visual(window);
+                    let (opacity, blur, animate) = visual(window);
                     placements.push(PlacementInfo {
                         window,
                         rect,
@@ -1230,6 +1248,7 @@ impl Wm {
                         fullscreen: false,
                         opacity,
                         blur,
+                        animate,
                         pip: false,
                     });
                 }
@@ -1242,6 +1261,7 @@ impl Wm {
                             fullscreen: false,
                             opacity: window.opacity(),
                             blur: window.blur(),
+                            animate: window.animate(),
                             pip: self.pip.contains_key(id),
                         });
                     }
@@ -1551,6 +1571,37 @@ impl Wm {
         true
     }
 
+    /// Show the scratch workspace, or return to the one it was opened from.
+    ///
+    /// The workspace is created on demand and named `special`, so rules can
+    /// route applications into it like any other named workspace.
+    fn toggle_special_workspace(&mut self) -> bool {
+        let output_index = self.active_output;
+        let active = self.outputs[output_index].active;
+        if self.outputs[output_index]
+            .names
+            .get(SPECIAL_WORKSPACE)
+            .copied()
+            == Some(active)
+        {
+            let target = self
+                .special_return
+                .filter(|index| {
+                    *index != active && *index < self.outputs[output_index].workspaces.len()
+                })
+                .unwrap_or(0);
+            self.special_return = None;
+            return self.switch_workspace(target);
+        }
+
+        let special = self.find_or_create_named_workspace(output_index, SPECIAL_WORKSPACE);
+        if special == active {
+            return false;
+        }
+        self.special_return = Some(active);
+        self.switch_workspace(special)
+    }
+
     fn next_linear_position(&self, output_index: usize) -> WorkspacePosition {
         let positions = &self.outputs[output_index].workspace_indices;
         let mut x = 0_i64;
@@ -1604,6 +1655,33 @@ impl Wm {
         }
         let position = self.next_linear_position(output_index);
         self.append_workspace_with_name(output_index, position, name.to_string())
+    }
+
+    /// Create the workspaces the configuration pins, on the primary output.
+    ///
+    /// A preset is a configuration concept, not a monitor one, so presets land
+    /// on the primary output; `move-output` and `workspace-output` move content
+    /// afterwards. Existing names are left alone, which makes this safe to run
+    /// again after a configuration reload. A pinned position already taken by
+    /// another workspace falls back to the next free horizontal slot.
+    fn apply_workspace_presets(&mut self) {
+        let presets = self.config.workspaces.clone();
+        for preset in presets {
+            if self.outputs[0].names.contains_key(&preset.name) {
+                continue;
+            }
+            let mut position = match preset.position() {
+                Some((x, y)) => WorkspacePosition { x, y },
+                None => self.next_linear_position(0),
+            };
+            if self.outputs[0].workspace_indices.contains_key(&position) {
+                position = self.next_linear_position(0);
+            }
+            let index = self.append_workspace_with_name(0, position, preset.name.clone());
+            if let Some(kind) = preset.layout {
+                self.outputs[0].workspaces[index].layout_mode = kind;
+            }
+        }
     }
 
     /// Select the tiling layout of the active workspace.
@@ -2809,6 +2887,70 @@ mod tests {
         assert!(
             !wm.dispatch(Action::ColumnWidth { delta: 20 })
                 .layout_changed
+        );
+    }
+
+    #[test]
+    fn configured_workspaces_exist_at_startup_with_their_position_and_layout() {
+        let config = Config::from_toml_str(
+            "[[workspaces]]\nname = \"code\"\nx = 2\ny = 0\nlayout = \"dwindle\"\n\n\
+             [[workspaces]]\nname = \"chat\"\n\n\
+             [[workspaces]]\nname = \"zero\"\nx = 0\ny = 0\n",
+        )
+        .expect("valid config");
+        let wm = Wm::new(config, "VEYRON-TEST", Size::new(1280, 800));
+        let output = wm.active_output();
+
+        assert_eq!(
+            output.workspaces().len(),
+            4,
+            "three presets plus workspace 1"
+        );
+        let code = output.workspace_index_by_name("code").expect("code preset");
+        assert_eq!(
+            output.workspaces()[code].position(),
+            WorkspacePosition { x: 2, y: 0 }
+        );
+        assert_eq!(output.workspaces()[code].layout_mode(), LayoutKind::Dwindle);
+
+        let chat = output.workspace_index_by_name("chat").expect("chat preset");
+        let zero = output.workspace_index_by_name("zero").expect("zero preset");
+        assert_ne!(
+            output.workspaces()[chat].position(),
+            output.workspaces()[zero].position(),
+            "a taken position is never reused"
+        );
+        assert_ne!(
+            output.workspaces()[zero].position(),
+            WorkspacePosition { x: 0, y: 0 },
+            "workspace 1 already sits at the origin"
+        );
+        assert_eq!(wm.active_output().active_workspace().name(), "1");
+    }
+
+    #[test]
+    fn the_special_workspace_toggles_back_to_where_the_user_came_from() {
+        let mut wm = wm();
+        wm.create_window(NewWindow::default());
+        assert!(
+            wm.dispatch(Action::Workspace { index: 2 })
+                .workspace_changed
+        );
+
+        let effects = wm.dispatch(Action::WorkspaceSpecial);
+        assert!(effects.workspace_changed);
+        assert_eq!(
+            wm.active_output().active_workspace().name(),
+            "special",
+            "the scratch workspace is created on demand"
+        );
+
+        let effects = wm.dispatch(Action::WorkspaceSpecial);
+        assert!(effects.workspace_changed);
+        assert_eq!(
+            wm.active_output().active_workspace().name(),
+            "2",
+            "toggling again returns to the previous workspace"
         );
     }
 }

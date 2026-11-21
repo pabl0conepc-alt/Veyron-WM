@@ -57,8 +57,8 @@ use smithay::{
     },
 };
 use veyron_core::{
-    Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session, Size as VSize,
-    WindowId, Wm,
+    workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session,
+    Size as VSize, WindowId, Wm, WorkspacePosition,
 };
 use veyron_ipc::{Response, StateReport, WindowReport, MAX_LINE_BYTES};
 
@@ -114,6 +114,8 @@ pub struct Veyron {
     /// In-flight window rectangles; the scene graph draws `current()`.
     animations: HashMap<WindowId, RectAnimator>,
     last_animation_frame: Instant,
+    /// Workspace drawn last, so a switch can slide in from the right side.
+    last_workspace_position: WorkspacePosition,
 
     pointer_location: Point<f64, Logical>,
     needs_redraw: bool,
@@ -226,6 +228,7 @@ impl Veyron {
             configured: HashMap::new(),
             animations: HashMap::new(),
             last_animation_frame: Instant::now(),
+            last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
             needs_redraw: true,
             exit: false,
@@ -493,6 +496,13 @@ impl Veyron {
                 }
                 Err(message) => Response::Error { message },
             },
+            veyron_ipc::Request::Launch { query } => match crate::apps::launch(&query) {
+                Ok(entry) => Response::Launched {
+                    command: entry.command(),
+                    name: entry.name,
+                },
+                Err(message) => Response::Error { message },
+            },
             veyron_ipc::Request::Reload => {
                 self.apply_action(Action::ReloadConfig);
                 Response::Ok
@@ -632,6 +642,12 @@ impl Veyron {
     fn sync_layout(&mut self) {
         let snapshot = self.wm.snapshot();
         let motion = self.wm.config().motion;
+        let slide = workspace_slide(
+            self.last_workspace_position,
+            snapshot.workspace_position,
+            snapshot.viewport,
+        );
+        self.last_workspace_position = snapshot.workspace_position;
 
         for placement in &snapshot.placements {
             let Some(window) = self.windows.get(&placement.window) else {
@@ -644,14 +660,24 @@ impl Veyron {
                     self.configured.get(&placement.window),
                 ) {
                     (Some((x, y)), Some((w, h))) => Rect::new(*x, *y, *w, *h),
+                    // A workspace that just became active slides in from the
+                    // direction the user travelled.
+                    _ if placement.animate && slide != (0, 0) => {
+                        Rect::new(target.x + slide.0, target.y + slide.1, target.w, target.h)
+                    }
                     _ => target,
                 };
                 RectAnimator::new(drawn, target, &motion)
             });
             if animator.target() != target {
                 // Restarting from what is on screen keeps a retile continuous;
-                // with motion disabled `new` snaps to the target instead.
-                *animator = RectAnimator::new(animator.current(), target, &motion);
+                // a window whose rules disable animation snaps instead.
+                let from = if placement.animate {
+                    animator.current()
+                } else {
+                    target
+                };
+                *animator = RectAnimator::new(from, target, &motion);
             }
             let animated = animator.current();
             let location = (animated.x, animated.y);

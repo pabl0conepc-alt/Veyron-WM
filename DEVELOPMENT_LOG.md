@@ -1,5 +1,34 @@
 # Development log
 
+## 2026-11-21 — Persistent workspaces, per-window motion and a launcher
+
+- `[[workspaces]]` predefines named workspaces on the primary output with an
+  optional sparse grid position and layout. A pinned position another workspace
+  already owns falls back to the next free horizontal slot, and a reload only
+  adds missing names, never removing a workspace in use.
+- `workspace special` shows a scratch workspace named `special` (created on
+  demand, so rules can route applications into it) and returns to the workspace
+  it was opened from.
+- Window rules gained `animation`. The resolved flag reaches `PlacementInfo`, and
+  a false value both skips the workspace slide and snaps layout changes for
+  that window.
+- Switching workspaces slides the new workspace in from the direction of
+  travel: `motion::workspace_slide` maps the sparse-grid delta to a viewport
+  offset and the compositor starts each newly mapped window from there.
+- `veyronctl launch <NAME>` starts an installed XDG application. The parser in
+  `veyron-core::launcher` is pure (Desktop Entry group only, `Exec` field codes
+  removed, quoted arguments honoured) and matching prefers an exact name or id,
+  then a prefix, then a substring. The compositor scans
+  `$XDG_DATA_HOME`/`$XDG_DATA_DIRS` application directories with depth, count and
+  file-size bounds, lets earlier directories win, and spawns without a shell.
+  `Terminal=true` entries are refused because Veyron assumes no terminal
+  emulator.
+- Verified with `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`
+  (120 core tests, 2 launcher unit tests in the binary, 5 window-feature,
+  9 multi-output, 10 profile, 1 README-config, 8 IPC and 7 headless
+  Wayland-client tests). No nested or visual check was performed.
+
 ## 2026-11-21 — Frame-scheduled transitions and a dead-API pass
 
 - The nested scene graph now drives the rectangle animator. Each mapped window

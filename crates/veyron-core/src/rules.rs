@@ -111,6 +111,8 @@ pub struct WindowRule {
     pub workspace: Option<String>,
     /// Layout applied to that workspace when the window is placed.
     pub layout: Option<LayoutKind>,
+    /// Animate this window's transitions. Defaults to on.
+    pub animation: Option<bool>,
 }
 
 impl WindowRule {
@@ -160,6 +162,7 @@ pub struct WindowPolicy {
     pub scratchpad: bool,
     pub workspace: Option<String>,
     pub layout: Option<LayoutKind>,
+    pub animate: bool,
 }
 
 impl Default for WindowPolicy {
@@ -171,6 +174,7 @@ impl Default for WindowPolicy {
             scratchpad: false,
             workspace: None,
             layout: None,
+            animate: true,
         }
     }
 }
@@ -221,6 +225,9 @@ impl RuleSet {
             }
             if let Some(layout) = rule.layout {
                 policy.layout = Some(layout);
+            }
+            if let Some(animation) = rule.animation {
+                policy.animate = animation;
             }
         }
         policy
@@ -315,6 +322,20 @@ mod tests {
         let other = rules.resolve("org.mozilla.firefox", "Mozilla Firefox");
         assert!(other.floating);
         assert_eq!(other.opacity, 0.9);
+    }
+
+    #[test]
+    fn animation_is_on_by_default_and_rules_can_turn_it_off() {
+        let rules = RuleSet::new(vec![WindowRule {
+            app_id: Some(glob("mpv")),
+            animation: Some(false),
+            ..WindowRule::default()
+        }])
+        .expect("valid rules");
+
+        assert!(!rules.resolve("mpv", "video").animate);
+        assert!(rules.resolve("alacritty", "shell").animate);
+        assert!(WindowPolicy::default().animate);
     }
 
     #[test]

@@ -85,6 +85,8 @@ scheduling, and measured behavior. Blur and transparency remain optional.
   errors; invalid reloads keep the last valid configuration.
 - [x] Provide a bounded, versioned Unix socket protocol and `veyronctl`.
 - [x] Expose actions, state, reload, ping and graceful shutdown over IPC.
+- [x] Resolve installed XDG desktop entries and launch them with
+  `veyronctl launch <NAME>`, refusing entries that need a terminal.
 - [x] Expose spatial workspace coordinates and window-transfer actions through
   the core action parser, default bindings and state IPC.
 - [x] Research Smithay's XWayland/XWM boundary and record an ADR.
@@ -151,14 +153,20 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Window identity: the app id and title a client announces on its first
   commit reach the core, applying the matching window rules exactly once;
   `veyronctl state` reports identity and rule opacity per window.
+- [x] Per-window motion policy: `[[rules]] animation = false` snaps one
+  application's transitions while the rest of the session keeps animating.
+- [x] Workspace transitions: activating a workspace slides its windows in from
+  the direction of travel on the sparse grid, using the same frame scheduler.
+- [x] Persistent named workspaces from `[[workspaces]]`, with an optional grid
+  position and layout, plus `workspace special` for a toggleable scratch
+  workspace that returns to where the user came from.
 - [x] Drive the animation core from the nested render loop: window positions
   interpolate between placements and the event loop sleeps at most one frame
   interval while a transition runs. Motion is off by default; client sizes still
   configure at their target, and no nested runtime visual check exists yet.
 - [ ] Apply per-window opacity/blur in the renderer (policy is already in the
   snapshot; no shader or scene-graph mutation is implemented).
-- [ ] Rounded corners, shadows, real GPU blur, workspace-transition effects and
-  per-window animation overrides.
+- [ ] Rounded corners, shadows, real GPU blur and opening/closing animations.
 - [ ] Veyron Studio (graphical configuration), native panel/launcher/OSD/
   notifications, plugin isolation, gesture input, HDR/VRR/fractional scaling,
   screencopy/screen sharing, XWayland and multi-GPU work.
@@ -174,7 +182,7 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test --workspace` (111 core tests, 5 window-feature
+**Evidence:** `cargo test --workspace` (120 core tests, 5 window-feature
 integration tests, 9 multi-output integration tests, 10 profile integration
 tests, 8 IPC tests and 7 headless Wayland-client integration tests) covers every
 implemented item above; `cargo clippy --workspace --all-targets -- -D warnings`

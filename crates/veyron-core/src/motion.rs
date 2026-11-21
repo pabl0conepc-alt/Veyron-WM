@@ -15,7 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::Rect;
+use crate::{geometry::Rect, wm::WorkspacePosition};
 
 /// Spring parameters for motion with inertia.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -191,6 +191,25 @@ impl MotionConfig {
     }
 }
 
+/// Pixels a window on a newly active workspace starts away from its target.
+///
+/// Spatial workspaces sit on a grid, so the direction the user travelled says
+/// where the new content comes from: moving one workspace to the right starts
+/// its windows one viewport to the right, sliding them into place.
+pub fn workspace_slide(
+    previous: WorkspacePosition,
+    current: WorkspacePosition,
+    viewport: Rect,
+) -> (i32, i32) {
+    if current.x != previous.x {
+        (viewport.w * (current.x - previous.x).signum() as i32, 0)
+    } else if current.y != previous.y {
+        (0, viewport.h * (current.y - previous.y).signum() as i32)
+    } else {
+        (0, 0)
+    }
+}
+
 /// A single animated scalar.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Animator {
@@ -352,6 +371,33 @@ mod tests {
                 previous = value;
             }
         }
+    }
+
+    #[test]
+    fn workspace_slides_follow_the_direction_of_travel() {
+        let viewport = Rect::new(0, 0, 1920, 1080);
+        let origin = WorkspacePosition::default();
+        assert_eq!(workspace_slide(origin, origin, viewport), (0, 0));
+        assert_eq!(
+            workspace_slide(origin, WorkspacePosition { x: 1, y: 0 }, viewport),
+            (1920, 0)
+        );
+        assert_eq!(
+            workspace_slide(origin, WorkspacePosition { x: -1, y: 0 }, viewport),
+            (-1920, 0)
+        );
+        assert_eq!(
+            workspace_slide(origin, WorkspacePosition { x: 0, y: 1 }, viewport),
+            (0, 1080)
+        );
+        assert_eq!(
+            workspace_slide(
+                WorkspacePosition { x: 3, y: 2 },
+                WorkspacePosition { x: 3, y: 1 },
+                viewport
+            ),
+            (0, -1080)
+        );
     }
 
     #[test]

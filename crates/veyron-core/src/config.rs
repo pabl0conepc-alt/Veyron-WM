@@ -4,7 +4,10 @@
 //! an unknown key is reported as an error instead of being silently ignored.
 //! Every value is validated before the compositor starts using it.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +17,7 @@ use crate::{
     motion::MotionConfig,
     profiles::{Profile, Profiles},
     rules::{RuleSet, WindowRule},
+    tiling::LayoutKind,
 };
 
 /// Modifiers that can be part of a keybinding chord.
@@ -29,6 +33,42 @@ impl Modifiers {
     /// Case-insensitive match used by the input layer.
     pub fn matches(&self, ctrl: bool, alt: bool, shift: bool, logo: bool) -> bool {
         self.ctrl == ctrl && self.alt == alt && self.shift == shift && self.logo == logo
+    }
+}
+
+/// A named workspace that exists as soon as the compositor starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkspacePreset {
+    /// Label also used by `workspace <name>` and window rules.
+    pub name: String,
+    /// Sparse grid coordinate. Set both `x` and `y`, or neither.
+    pub x: Option<i64>,
+    pub y: Option<i64>,
+    /// Layout selected when the workspace is created.
+    pub layout: Option<LayoutKind>,
+}
+
+impl WorkspacePreset {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("workspace name cannot be empty".to_string());
+        }
+        if self.name.len() > 64 {
+            return Err("workspace name cannot be longer than 64 bytes".to_string());
+        }
+        if self.x.is_some() != self.y.is_some() {
+            return Err(format!(
+                "workspace '{}' needs both x and y, or neither",
+                self.name
+            ));
+        }
+        Ok(())
+    }
+
+    /// Pinned grid position, when the preset sets one.
+    pub fn position(&self) -> Option<(i64, i64)> {
+        self.x.zip(self.y)
     }
 }
 
@@ -164,6 +204,8 @@ pub struct Config {
     pub profiles: Profiles,
     /// Profile applied when the compositor starts.
     pub default_profile: Option<String>,
+    /// Named workspaces created at startup on the primary output.
+    pub workspaces: Vec<WorkspacePreset>,
 }
 
 /// Default chords. Kept in one place so the documentation, the default config
@@ -240,6 +282,7 @@ impl Default for Config {
             startup: Vec::new(),
             profiles: Profiles::default(),
             default_profile: None,
+            workspaces: Vec::new(),
         };
         for (chord, action) in DEFAULT_BINDINGS {
             let binding = Binding::parse(
@@ -298,6 +341,23 @@ impl Config {
             None => bindings = Config::default().bindings,
         }
 
+        let workspaces = raw.workspaces.unwrap_or_default();
+        if workspaces.len() > 32 {
+            return Err(ConfigError::Invalid(
+                "at most 32 workspaces can be predefined".to_string(),
+            ));
+        }
+        let mut workspace_names = BTreeSet::new();
+        for preset in &workspaces {
+            preset.validate().map_err(ConfigError::Invalid)?;
+            if !workspace_names.insert(preset.name.clone()) {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate workspace name '{}'",
+                    preset.name
+                )));
+            }
+        }
+
         let profiles =
             Profiles::new(raw.profiles.unwrap_or_default()).map_err(ConfigError::Invalid)?;
         let default_profile = raw.default_profile;
@@ -319,6 +379,7 @@ impl Config {
             startup: raw.startup.unwrap_or_default(),
             profiles,
             default_profile,
+            workspaces,
         })
     }
 
@@ -377,6 +438,7 @@ impl Config {
             bindings: BTreeMap<String, String>,
             startup: &'a Vec<String>,
             profiles: &'a [Profile],
+            workspaces: &'a [WorkspacePreset],
         }
 
         let serializable = Serializable {
@@ -389,6 +451,7 @@ impl Config {
             bindings,
             startup: &self.startup,
             profiles: self.profiles.as_slice(),
+            workspaces: &self.workspaces,
         };
         Ok(toml::to_string_pretty(&serializable)?)
     }
@@ -421,6 +484,7 @@ struct RawConfig {
     startup: Option<Vec<String>>,
     profiles: Option<Vec<Profile>>,
     default_profile: Option<String>,
+    workspaces: Option<Vec<WorkspacePreset>>,
 }
 
 /// Configuration failures.
@@ -695,6 +759,28 @@ mod tests {
         let reparsed = Config::from_toml_str(&text).expect("reparse");
         assert_eq!(reparsed.bindings.len(), config.bindings.len());
         assert_eq!(reparsed.layout.gap, config.layout.gap);
+        assert_eq!(reparsed.workspaces, config.workspaces);
+    }
+
+    #[test]
+    fn workspace_presets_are_parsed_and_validated() {
+        let config = Config::from_toml_str(
+            "[[workspaces]]\nname = \"code\"\nx = 2\ny = 0\nlayout = \"dwindle\"\n\n\
+             [[workspaces]]\nname = \"chat\"\n",
+        )
+        .expect("valid config");
+        assert_eq!(config.workspaces.len(), 2);
+        assert_eq!(config.workspaces[0].position(), Some((2, 0)));
+        assert_eq!(config.workspaces[0].layout, Some(LayoutKind::Dwindle));
+        assert_eq!(config.workspaces[1].position(), None);
+
+        assert!(Config::from_toml_str("[[workspaces]]\nname = \"x\"\nx = 1\n").is_err());
+        assert!(Config::from_toml_str("[[workspaces]]\nname = \"  \"\n").is_err());
+        assert!(Config::from_toml_str(
+            "[[workspaces]]\nname = \"a\"\n\n[[workspaces]]\nname = \"a\"\n"
+        )
+        .is_err());
+        assert!(Config::from_toml_str("[[workspaces]]\nname = \"a\"\ncolour = 1\n").is_err());
     }
 
     #[test]

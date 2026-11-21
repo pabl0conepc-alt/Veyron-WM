@@ -113,6 +113,9 @@ pub enum Action {
     WorkspaceNext,
     /// Switch to the previous workspace.
     WorkspacePrev,
+    /// Show the scratch workspace, or return to the workspace it was opened
+    /// from.
+    WorkspaceSpecial,
     /// Move focus to the output (monitor) in that direction.
     OutputFocus { direction: Direction },
     /// Move the focused window to the output in that direction.
@@ -237,6 +240,7 @@ impl Action {
                 match value.as_str() {
                     "next" => Ok(Action::WorkspaceNext),
                     "prev" | "previous" => Ok(Action::WorkspacePrev),
+                    "special" => Ok(Action::WorkspaceSpecial),
                     "left" | "right" | "up" | "down" => {
                         if let Some(direction) = Direction::parse(&value) {
                             Ok(Action::WorkspaceNavigate { direction })
@@ -379,6 +383,7 @@ impl fmt::Display for Action {
             Action::MoveToWorkspace { direction } => write!(f, "move-workspace {direction}"),
             Action::WorkspaceNext => f.write_str("workspace next"),
             Action::WorkspacePrev => f.write_str("workspace prev"),
+            Action::WorkspaceSpecial => f.write_str("workspace special"),
             Action::OutputFocus { direction } => write!(f, "output {direction}"),
             Action::MoveToOutput { direction } => write!(f, "move-output {direction}"),
             Action::WorkspaceToOutput { direction } => {

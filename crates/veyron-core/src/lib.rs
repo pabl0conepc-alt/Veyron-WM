@@ -23,6 +23,7 @@ pub mod action;
 pub mod config;
 pub mod geometry;
 pub mod groups;
+pub mod launcher;
 pub mod layout;
 pub mod motion;
 pub mod profiles;
@@ -34,11 +35,14 @@ pub mod window;
 pub mod wm;
 
 pub use action::{Action, ActionParseError, Direction, ResizeAxis};
-pub use config::{Behavior, Binding, Config, ConfigError, Modifiers};
+pub use config::{Behavior, Binding, Config, ConfigError, Modifiers, WorkspacePreset};
 pub use geometry::{Point, Rect, Size};
 pub use groups::{GroupId, GroupSet, WindowGroup};
+pub use launcher::{best_match, parse_entry, split_exec, DesktopEntry};
 pub use layout::{LayoutConfig, Placement, ScrollLayout};
-pub use motion::{Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig};
+pub use motion::{
+    workspace_slide, Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig,
+};
 pub use profiles::{LayoutPatch, MotionPatch, Profile, Profiles};
 pub use rules::{Glob, RuleSet, WindowPolicy, WindowRule};
 pub use session::{Session, WindowRecord};

@@ -46,6 +46,8 @@ pub struct Window {
     opacity: f32,
     /// Whether a rule asked for a blurred backdrop behind this window.
     blur: bool,
+    /// Whether layout transitions animate this window.
+    animate: bool,
     /// Geometry used while the window floats. Tiled geometry is derived from
     /// the layout, never stored here, so the two can never disagree.
     floating_rect: Rect,
@@ -66,6 +68,7 @@ impl Window {
             floating: false,
             opacity: 1.0,
             blur: false,
+            animate: true,
             floating_rect: Rect::ZERO,
             last_tiled_rect: Rect::ZERO,
             rules_applied: false,
@@ -98,6 +101,10 @@ impl Window {
 
     pub fn blur(&self) -> bool {
         self.blur
+    }
+
+    pub fn animate(&self) -> bool {
+        self.animate
     }
 
     pub fn floating_rect(&self) -> Rect {
@@ -134,6 +141,10 @@ impl Window {
 
     pub(crate) fn set_blur(&mut self, blur: bool) {
         self.blur = blur;
+    }
+
+    pub(crate) fn set_animate(&mut self, animate: bool) {
+        self.animate = animate;
     }
 
     pub(crate) fn set_floating_rect(&mut self, rect: Rect) {

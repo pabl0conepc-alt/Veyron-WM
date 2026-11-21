@@ -15,9 +15,11 @@
   and per-app floating geometry memory exist in the core and are unit-tested.
   Rules now match the real app id and title the client announces on its first
   commit, but they have not been visually validated in a nested session.
-- The nested scene graph now uses the rectangle animator for window positions
-  and schedules frames until transitions finish. Client sizes still configure
-  at their target, and no visible nested-session check has been performed.
+- The nested scene graph animates window positions between layouts and slides a
+  newly active workspace in from the direction of travel, with a per-rule
+  `animation = false` opt-out. Client sizes still configure at their target,
+  opening and closing are not animated, and no visible nested-session check has
+  been performed.
 - Per-window opacity and blur reach the snapshot; the renderer still draws every
   window opaque and unblurred. Rounded corners and shadows are absent.
 - Snap zones, picture-in-picture, window groups and smart focus are implemented
@@ -28,6 +30,10 @@
 - Veyron Profiles are parsed, validated and applied by the core and accepted by
   the action/IPC grammar; `super+p` cycles them with `profile next`. The
   renderer still ignores the motion settings a profile can change.
+- The launcher resolves XDG desktop entries by name or id and starts the command
+  directly. It refuses `Terminal=true` entries, ignores desktop actions and does
+  not use D-Bus activation, so applications relying on either need an explicit
+  `spawn` binding.
 - Veyron Recall saves and restores validated TOML through `veyronctl session
   save|restore`. Restore recreates policy state in the core; it does not launch
   applications or reconnect restored records to future client surfaces.

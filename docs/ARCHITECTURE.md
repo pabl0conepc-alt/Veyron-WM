@@ -128,7 +128,8 @@ compositor draws and the geometry the user configured cannot disagree.
 
 `config.rules` is an ordered `RuleSet`. A rule matches `app_id` and/or `title`
 with a small glob language (`*`, `?`, no regex dependency) and contributes
-floating, opacity, blur, scratchpad, named workspace and layout policy. Later
+floating, opacity, blur, animation, scratchpad, named workspace and layout policy.
+Later
 rules override earlier ones per field. A window created with a known identity
 (core tests, session restore) gets its policy before it is inserted into a
 workspace, so a rule can never briefly show it in the wrong place. In the
@@ -142,6 +143,13 @@ from every workspace. Toggling the scratchpad shows them as cascading floating
 windows on the active workspace, or detaches them again. `behavior.remember_geometry`
 stores the last floating rectangle per app id and restores it on the next window
 of that application.
+
+`[[workspaces]]` presets are created on the primary output at startup, and
+idempotently again after a reload: a pinned grid position is honoured unless
+another workspace already owns it, and the preset's layout becomes that
+workspace's default. `workspace special` toggles a workspace named `special`,
+created on demand so rules can route applications into it, and returns to the
+workspace it was opened from.
 
 ### Profiles
 
@@ -167,9 +175,25 @@ and a reload clears it when the new configuration no longer defines that name.
 `motion.rs` provides a spring, easing curves and a rectangle animator that take
 `dt` from the caller: motion is a pure function of the elapsed time the event
 loop reports, so a slow or missed frame changes the speed, not the animation.
-The compositor does not yet own a frame clock for animations, so the module is
-wired into configuration and validated but not into rendering; see
-[ROADMAP](../ROADMAP.md) Phase 7.
+The compositor keeps one animator per mapped window, restarts it from the
+rectangle on screen, caps its sleep at one frame while a transition runs and
+draws the completing frame at the exact target. `workspace_slide` turns the
+sparse-grid delta between two workspaces into a viewport offset, so a newly
+active workspace starts off-screen in the direction of travel. Rules can opt a
+window out with `animation = false`. Client sizes still configure at their
+target; only positions interpolate.
+
+### Application launcher
+
+`launcher.rs` in the core parses one `.desktop` file into a `DesktopEntry`: only
+the `[Desktop Entry]` group is read, `Hidden`/`NoDisplay` and non-application
+types are rejected, and `Exec` is split with quoting and backslash escapes while
+desktop-entry field codes (`%f`, `%U`, …) are removed. `best_match` ranks an
+exact name or app id first, then a prefix, then a substring, breaking ties
+alphabetically. The compositor owns the filesystem side: it scans the XDG
+application directories with depth, count and file-size bounds, lets earlier
+directories win, refuses `Terminal=true` entries, and spawns the resolved argv
+without a shell.
 
 ### Snapping, groups and sessions
 

@@ -33,9 +33,9 @@ What works:
   column resizing, floating layer, fullscreen, on-demand workspaces.
 - Additional tiling layouts: `master-stack`, `dwindle` and `auto` (dynamic
   tiling that resolves from the window count), selectable per workspace.
-- Smart gaps, per-application window rules (float, opacity, blur, scratchpad,
-  named workspace, layout), scratchpad layer and per-app floating geometry
-  memory.
+- Smart gaps, per-application window rules (float, opacity, blur, animation,
+  scratchpad, named workspace, layout), scratchpad layer and per-app floating
+  geometry memory.
 - Snap zones (`snap left`, `snap center-third`, `snap maximize`, ...) and
   picture-in-picture docking (`pip top-right`), both on the focused window.
 - Window groups: `group` adds the focused window to the previous window's group
@@ -66,7 +66,16 @@ What works:
   until transitions finish; motion is off by default. XDG client sizes still
   configure at their target, and no visual nested-session check has been
   recorded yet.
-- Deterministic, unit-tested state machine (111 core tests plus integration
+- Per-window motion policy: `[[rules]] animation = false` snaps one
+  application's transitions, and switching workspaces slides the new one in
+  from the direction the user travelled.
+- Persistent workspaces: `[[workspaces]]` creates named workspaces with an
+  optional grid position and layout at startup; `workspace special` toggles a
+  scratch workspace and returns to the workspace it was opened from.
+- Application launcher: `veyronctl launch <NAME>` resolves an installed XDG
+  desktop entry by name or id, refuses entries that need a terminal, and starts
+  the rest directly without a shell.
+- Deterministic, unit-tested state machine (120 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
@@ -85,8 +94,9 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 - No DRM/KMS backend or session management; Veyron currently runs nested
   inside an existing session and still binds a single output. The core already
   models several outputs, so the backend only has to report them.
-- No client-side decorations drawn by the compositor, no cursor image, no
-  animated transitions.
+- No client-side decorations drawn by the compositor and no cursor image. Only
+  window positions animate: there are no opening/closing transitions, and client
+  sizes still jump to their target.
 - Popup grabs, layer-shell (bars/panels), screencopy, idle and input-method
   protocols are not implemented.
 - Window rules, opacity and Veyron Recall see the identity a client announces
@@ -213,10 +223,10 @@ master_ratio = 0.6           # master width in master-stack
 [appearance]
 background = "#101014"
 
-[motion]                     # parsed and validated; the renderer does not
-enabled = false              # animate frames yet (see KNOWN_ISSUES)
+[motion]                     # layout transitions; off by default
+enabled = false              # animate retiles and workspace switches
 duration_ms = 180
-reduce_motion = false
+reduce_motion = false        # snap instantly for reduced-motion preferences
 
 [behavior]
 remember_geometry = true     # restore floating geometry per app id
@@ -232,11 +242,24 @@ app_id = "mpv"
 floating = true
 opacity = 0.95
 blur = true
+animation = false            # do not animate this application
 
 [[rules]]
 app_id = "signal"
 workspace = "chat"
 layout = "dwindle"
+
+# Workspaces that exist when the compositor starts, on the primary output.
+# `x`/`y` pin a place on the sparse grid; without them the workspace is appended
+# after the existing ones. `workspace special` toggles a scratch workspace.
+[[workspaces]]
+name = "code"
+layout = "dwindle"
+
+[[workspaces]]
+name = "chat"
+x = 3
+y = 0
 
 # Named presets: only the fields listed here are overridden, everything else
 # keeps its current value. `profile <name>` applies one at runtime.
@@ -307,6 +330,8 @@ veyronctl profile coding
 veyronctl scratchpad
 veyronctl session save ~/.local/state/veyron/session.toml
 veyronctl session restore ~/.local/state/veyron/session.toml
+veyronctl launch firefox
+veyronctl workspace special
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit
@@ -322,7 +347,7 @@ Any other program can use the socket directly:
 Protocol version 3 includes the signed 2D workspace coordinate, the resolved
 layout name, the effective gap and, per window, the announced app id, title,
 rule opacity, geometry and state. Requests: `action`, `state`, `capture-session`,
-`restore-session`, `reload`, `quit`, `ping`. Session TOML and all other messages
+`restore-session`, `launch`, `reload`, `quit`, `ping`. Session TOML and all other messages
 are capped at 64 KiB; the socket is
 owner-only (`0600`), the server never deletes a non-socket file, and a crashed
 compositor's stale socket is safely replaced.

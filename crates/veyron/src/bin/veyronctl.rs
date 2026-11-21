@@ -11,6 +11,7 @@ Usage:
   veyronctl state [--json]        Show the current layout
   veyronctl session save <FILE>   Save the current session as TOML
   veyronctl session restore <FILE> Restore a session from TOML
+  veyronctl launch <NAME>         Start an installed application
   veyronctl ping                  Check the compositor is alive
   veyronctl reload                Reload the configuration
   veyronctl quit                  Ask the compositor to exit
@@ -70,6 +71,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             Request::RestoreSession { toml }
         }
         "session" => return Err("usage: veyronctl session save|restore <FILE>".into()),
+        "launch" if words.len() >= 2 => Request::Launch {
+            query: words[1..].join(" "),
+        },
+        "launch" => return Err("usage: veyronctl launch <NAME>".into()),
         "ping" if words.len() == 1 => Request::Ping,
         "reload" if words.len() == 1 => Request::Reload,
         "quit" if words.len() == 1 => Request::Quit,
@@ -95,6 +100,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             let path = save_session_to.ok_or("unexpected session response")?;
             std::fs::write(&path, toml)?;
             println!("saved session to {}", path.display());
+            Ok(())
+        }
+        Response::Launched { name, command } => {
+            println!("launched {name} ({command})");
             Ok(())
         }
         Response::State(report) => {

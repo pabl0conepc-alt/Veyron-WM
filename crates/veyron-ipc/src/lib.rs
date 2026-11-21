@@ -51,6 +51,8 @@ pub enum Request {
     CaptureSession,
     /// Restore a previously captured session from TOML.
     RestoreSession { toml: String },
+    /// Launch an installed XDG application by name.
+    Launch { query: String },
     /// Re-read the configuration file.
     Reload,
     /// Ask the compositor to exit.
@@ -71,6 +73,8 @@ pub enum Response {
     State(StateReport),
     /// Reply to [`Request::CaptureSession`].
     Session { toml: String },
+    /// Reply to [`Request::Launch`]: the application that was started.
+    Launched { name: String, command: String },
     /// The request was rejected. The message is meant for humans.
     Error { message: String },
 }
@@ -365,6 +369,9 @@ mod tests {
             Request::CaptureSession,
             Request::RestoreSession {
                 toml: "workspaces = []\nwindows = []\n".into(),
+            },
+            Request::Launch {
+                query: "editor".into(),
             },
             Request::Quit,
             Request::Action {
