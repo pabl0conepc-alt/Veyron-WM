@@ -36,7 +36,7 @@ use smithay::{
         Window, WindowSurfaceType,
     },
     input::{
-        keyboard::{xkb, FilterResult, KeyboardHandle, KeysymHandle},
+        keyboard::{xkb, FilterResult, KeyboardHandle},
         pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent, PointerHandle},
         Seat, SeatHandler, SeatState,
     },
@@ -368,15 +368,19 @@ impl Veyron {
                 if key_state != KeyState::Pressed {
                     return FilterResult::Forward;
                 }
-                let name = keysym_name(&keysym);
                 let modifiers = Modifiers {
                     ctrl: modifiers.ctrl,
                     alt: modifiers.alt,
                     shift: modifiers.shift,
                     logo: modifiers.logo,
                 };
-                match data.wm.config().lookup(modifiers, &name) {
-                    Some(action) => FilterResult::Intercept(action.clone()),
+                match binding_for(
+                    data.wm.config(),
+                    modifiers,
+                    keysym.raw_latin_sym_or_raw_current_sym(),
+                    keysym.modified_sym(),
+                ) {
+                    Some(action) => FilterResult::Intercept(action),
                     None => FilterResult::Forward,
                 }
             },
@@ -500,12 +504,12 @@ impl Veyron {
     {
         let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
         for axis in [Axis::Horizontal, Axis::Vertical] {
-            if let Some(steps) = event.amount_v120(axis) {
-                frame = frame
-                    .v120(axis, (steps / 120.0).round() as i32)
-                    .value(axis, steps / 120.0 * AXIS_STEP_PIXELS);
-            } else if let Some(amount) = event.amount(axis) {
-                frame = frame.value(axis, amount);
+            let (v120, value) = axis_values(event.amount_v120(axis), event.amount(axis));
+            if let Some(v120) = v120 {
+                frame = frame.v120(axis, v120);
+            }
+            if let Some(value) = value {
+                frame = frame.value(axis, value);
             }
         }
         let pointer = self.pointer.clone();
@@ -1312,25 +1316,75 @@ fn scene_elements(
     elements
 }
 
-/// Name of the key for binding lookup. The unmodified (level 1) symbol is used,
+/// The action bound to a key press. The unmodified (level 1) symbol is used,
 /// preferring a Latin layout, so `super+shift+1` matches the `1` key instead
 /// of `exclam`, `alt+shift+tab` matches `tab` instead of `iso_left_tab`, and
-/// bindings keep working on non-Latin layouts.
-fn keysym_name(handle: &KeysymHandle<'_>) -> String {
-    let sym = handle
-        .raw_latin_sym_or_raw_current_sym()
-        .unwrap_or_else(|| handle.modified_sym());
+/// bindings keep working on non-Latin layouts. A chord written with the typed
+/// symbol (`super+shift+plus`, as before raw symbols were used) still matches
+/// when no binding uses the unshifted key.
+fn binding_for(
+    config: &Config,
+    modifiers: Modifiers,
+    raw: Option<xkb::Keysym>,
+    modified: xkb::Keysym,
+) -> Option<Action> {
+    raw.into_iter()
+        .chain(std::iter::once(modified))
+        .find_map(|sym| config.lookup(modifiers, &keysym_name(sym)))
+        .cloned()
+}
+
+/// Lowercase keysym name, the form binding chords are stored in.
+fn keysym_name(sym: xkb::Keysym) -> String {
     xkb::keysym_get_name(sym).to_ascii_lowercase()
 }
 
-fn spawn(command: &str) {
+/// Discrete and continuous scroll amounts for one axis of a pointer-axis
+/// event: the `v120` value (120 per wheel notch) and the scroll distance.
+fn axis_values(v120: Option<f64>, amount: Option<f64>) -> (Option<i32>, Option<f64>) {
+    match v120 {
+        // Smithay expects the raw v120 value, not a notch count: passing
+        // notches made every wheel click 1/120 of a step for clients.
+        Some(v120) => (
+            Some(v120.round() as i32),
+            Some(v120 / 120.0 * AXIS_STEP_PIXELS),
+        ),
+        None => (None, amount),
+    }
+}
+
+/// Wait for a child on a small background thread. A dropped `Child` is never
+/// waited for, so every exited application stayed a zombie process until the
+/// compositor itself exited.
+pub(crate) fn reap(mut child: std::process::Child) {
+    let reaper = std::thread::Builder::new()
+        .name("veyron-reaper".to_string())
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    if let Err(error) = reaper {
+        tracing::warn!(%error, "could not start a thread to reap a child process");
+    }
+}
+
+/// Run a shell command, returning the child's process id.
+fn spawn(command: &str) -> Option<u32> {
     match std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .spawn()
     {
-        Ok(_) => tracing::info!(command, "spawned command"),
-        Err(error) => tracing::error!(%error, command, "could not spawn command"),
+        Ok(child) => {
+            tracing::info!(command, "spawned command");
+            let pid = child.id();
+            reap(child);
+            Some(pid)
+        }
+        Err(error) => {
+            tracing::error!(%error, command, "could not spawn command");
+            None
+        }
     }
 }
 
@@ -1620,3 +1674,75 @@ smithay::delegate_shm!(Veyron);
 smithay::delegate_seat!(Veyron);
 smithay::delegate_data_device!(Veyron);
 smithay::delegate_output!(Veyron);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_notches_are_reported_in_v120_units() {
+        // One notch is 120: clients divide by 120 themselves, and Smithay
+        // derives `axis_discrete` for older clients from whole multiples.
+        assert_eq!(
+            axis_values(Some(120.0), None),
+            (Some(120), Some(AXIS_STEP_PIXELS))
+        );
+        assert_eq!(
+            axis_values(Some(-240.0), None),
+            (Some(-240), Some(-2.0 * AXIS_STEP_PIXELS))
+        );
+        assert_eq!(axis_values(None, Some(3.5)), (None, Some(3.5)));
+        assert_eq!(axis_values(None, None), (None, None));
+    }
+
+    #[test]
+    fn bindings_match_the_unshifted_key_and_fall_back_to_the_typed_symbol() {
+        let config = Config::from_toml_str(
+            r#"
+            [bindings]
+            "super+shift+1" = "move-to-workspace 1"
+            "super+shift+plus" = "gaps 4"
+            "#,
+        )
+        .expect("valid config");
+        let shifted = Modifiers {
+            shift: true,
+            logo: true,
+            ..Modifiers::default()
+        };
+        // US layout: shift+1 types `exclam`, shift+equal types `plus`.
+        assert_eq!(
+            binding_for(&config, shifted, Some(xkb::Keysym::_1), xkb::Keysym::exclam),
+            Some(Action::MoveToWorkspaceIndex { index: 1 })
+        );
+        assert_eq!(
+            binding_for(
+                &config,
+                shifted,
+                Some(xkb::Keysym::equal),
+                xkb::Keysym::plus
+            ),
+            Some(Action::Gaps { delta: 4 }),
+            "a chord written with the shifted symbol keeps working"
+        );
+        assert_eq!(
+            binding_for(&config, shifted, Some(xkb::Keysym::_2), xkb::Keysym::at),
+            None
+        );
+    }
+
+    #[test]
+    fn spawned_commands_do_not_linger_as_zombies() {
+        let pid = spawn("exit 0").expect("sh is available");
+        let stat = PathBuf::from(format!("/proc/{pid}/stat"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // `/proc/<pid>` disappears once the exited child has been reaped.
+        while stat.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "child {pid} exited but was never reaped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
