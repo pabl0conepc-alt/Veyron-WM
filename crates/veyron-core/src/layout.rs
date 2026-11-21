@@ -24,6 +24,9 @@ use crate::{
     window::WindowId,
 };
 
+/// Largest accepted `gap` and `outer_margin`, in logical pixels.
+pub const MAX_SPACING: i32 = 4096;
+
 /// Tiling geometry and policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -66,12 +69,16 @@ impl LayoutConfig {
     /// Configuration errors are reported as strings so the caller decides how
     /// to present them (log, IPC error, exit message).
     pub fn validate(&self) -> Result<(), String> {
-        if self.gap < 0 {
-            return Err(format!("layout.gap must be >= 0 (got {})", self.gap));
-        }
-        if self.outer_margin < 0 {
+        // The upper bound keeps every gap and margin sum well inside i32.
+        if !(0..=MAX_SPACING).contains(&self.gap) {
             return Err(format!(
-                "layout.outer_margin must be >= 0 (got {})",
+                "layout.gap must be between 0 and {MAX_SPACING} (got {})",
+                self.gap
+            ));
+        }
+        if !(0..=MAX_SPACING).contains(&self.outer_margin) {
+            return Err(format!(
+                "layout.outer_margin must be between 0 and {MAX_SPACING} (got {})",
                 self.outer_margin
             ));
         }

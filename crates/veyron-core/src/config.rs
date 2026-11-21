@@ -627,6 +627,20 @@ mod tests {
     }
 
     #[test]
+    fn absurd_gaps_and_margins_are_rejected() {
+        // Such values overflowed the i32 geometry math (a panic in debug
+        // builds, wrapped garbage rectangles in release builds).
+        for text in [
+            "[layout]\ngap = 2000000000\n",
+            "[layout]\nouter_margin = 2000000000\n",
+        ] {
+            assert!(Config::from_toml_str(text).is_err(), "{text}");
+        }
+        Config::from_toml_str("[layout]\ngap = 64\nouter_margin = 64\n")
+            .expect("ordinary values stay valid");
+    }
+
+    #[test]
     fn bindings_replace_defaults_when_present() {
         let config = Config::from_toml_str(
             r#"
