@@ -772,9 +772,8 @@ impl Veyron {
             let fullscreen_changed = previous_fullscreen != Some(&placement.fullscreen);
             // Floating windows keep their client-chosen size except while
             // entering or leaving fullscreen, when they need the target size.
-            let should_configure_size = !placement.floating
-                || placement.fullscreen
-                || previous_fullscreen == Some(&true);
+            let should_configure_size =
+                !placement.floating || placement.fullscreen || previous_fullscreen == Some(&true);
             let size_changed = should_configure_size
                 && self.configured.get(&placement.window) != Some(&target_size);
             if !fullscreen_changed && !size_changed {
