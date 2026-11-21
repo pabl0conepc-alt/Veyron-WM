@@ -487,6 +487,7 @@ impl Wm {
             tiled.extend(workspace.layout.order());
             floating.extend(workspace.floating.iter().copied());
         }
+        let moved_windows: Vec<_> = tiled.iter().chain(&floating).copied().collect();
 
         let removed_active = self.active_output == index;
         self.outputs.remove(index);
@@ -499,29 +500,29 @@ impl Wm {
         let output_index = self.active_output;
         let workspace_index = self.outputs[output_index].active;
         let viewport = self.viewport();
-        for id in tiled {
+        for id in &tiled {
             self.outputs[output_index].workspaces[workspace_index]
                 .layout
-                .insert_window(id);
+                .insert_window(*id);
         }
-        for id in floating {
-            if let Some(window) = self.windows.get(&id) {
-                if let Some((corner, _)) = self.pip.get(&id).copied() {
+        for id in &floating {
+            if let Some(window) = self.windows.get(id) {
+                if let Some((corner, _)) = self.pip.get(id).copied() {
                     let rect = corner.rect(viewport, crate::snap::DEFAULT_PIP_RATIO, 0);
-                    if let Some(window) = self.windows.get_mut(&id) {
+                    if let Some(window) = self.windows.get_mut(id) {
                         window.set_floating_rect(rect);
                     }
                 } else {
                     let rect = clamp_into(window.floating_rect(), viewport);
-                    if let Some(window) = self.windows.get_mut(&id) {
+                    if let Some(window) = self.windows.get_mut(id) {
                         window.set_floating_rect(rect);
                     }
                 }
             }
             let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
-            workspace.floating.retain(|window| *window != id);
-            workspace.floating.push(id);
-            workspace.focused_floating = Some(id);
+            workspace.floating.retain(|window| window != id);
+            workspace.floating.push(*id);
+            workspace.focused_floating = Some(*id);
         }
 
         // The removed output took its workspaces with it, so affinity entries
@@ -541,6 +542,10 @@ impl Wm {
                 .iter()
                 .any(|(name, label)| name == output && label == workspace)
         });
+
+        for id in moved_windows {
+            self.note_affinity(id);
+        }
 
         self.refresh_tiled_rects();
         self.note_focus();
@@ -674,6 +679,7 @@ impl Wm {
         self.active_output = index;
         self.refresh_tiled_rects();
         self.note_focus();
+        self.note_affinity(id);
         true
     }
 
@@ -702,6 +708,8 @@ impl Wm {
         let mut workspace = self.outputs[source_output]
             .workspaces
             .remove(source_workspace);
+        let mut moved_windows = workspace.layout.order();
+        moved_windows.extend(workspace.floating.iter().copied());
         workspace.position = position;
         let viewport = self.viewport_of(index);
         workspace.layout.set_viewport(viewport);
@@ -728,6 +736,9 @@ impl Wm {
 
         self.refresh_tiled_rects();
         self.note_focus();
+        for id in moved_windows {
+            self.note_affinity(id);
+        }
         true
     }
 
@@ -987,6 +998,7 @@ impl Wm {
         if effects.layout_changed {
             self.note_focus();
         }
+        self.note_affinity(id);
         effects
     }
 
@@ -2033,6 +2045,7 @@ impl Wm {
         }
         output.active = destination_index;
         self.refresh_tiled_rects();
+        self.note_affinity(id);
         true
     }
 
