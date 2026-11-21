@@ -39,6 +39,10 @@ use wayland_protocols::xdg::shell::client::{
     xdg_surface, xdg_toplevel,
     xdg_wm_base::{self, XdgWmBase},
 };
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
+    zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
+};
 
 /// How long to wait for the compositor process to serve its sockets.
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -202,6 +206,7 @@ struct ClientState {
     configure_count: usize,
     buffer_releases: usize,
     ping_count: usize,
+    layer_configure: Option<(u32, u32, u32)>,
 }
 
 /// A minimal but genuine Wayland client.
@@ -212,6 +217,7 @@ struct Client {
     compositor: WlCompositor,
     wm_base: XdgWmBase,
     shm: WlShm,
+    layer_shell: ZwlrLayerShellV1,
     // Kept alive so the server-side globals stay bound for the whole test.
     _seat: WlSeat,
     _output: wl_output::WlOutput,
@@ -243,6 +249,9 @@ impl Client {
         let output = globals
             .bind::<wl_output::WlOutput, ClientState, ()>(&qh, 1..=4, ())
             .expect("wl_output");
+        let layer_shell = globals
+            .bind::<ZwlrLayerShellV1, ClientState, ()>(&qh, 1..=5, ())
+            .expect("zwlr_layer_shell_v1");
 
         let mut client = Self {
             queue,
@@ -251,6 +260,7 @@ impl Client {
             compositor,
             wm_base,
             shm,
+            layer_shell,
             _seat: seat,
             _output: output,
         };
@@ -321,6 +331,45 @@ impl Client {
             );
             self.roundtrip();
             std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn create_top_panel(&mut self, exclusive_zone: i32) -> LayerPanel {
+        let surface = self.compositor.create_surface(&self.qh, ());
+        let layer_surface = self.layer_shell.get_layer_surface(
+            &surface,
+            None,
+            zwlr_layer_shell_v1::Layer::Top,
+            "veyron-integration-panel".to_string(),
+            &self.qh,
+            (),
+        );
+        layer_surface.set_size(0, 24);
+        layer_surface.set_anchor(
+            zwlr_layer_surface_v1::Anchor::TOP
+                | zwlr_layer_surface_v1::Anchor::LEFT
+                | zwlr_layer_surface_v1::Anchor::RIGHT,
+        );
+        layer_surface.set_exclusive_zone(exclusive_zone);
+        surface.commit();
+
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        let serial = loop {
+            if let Some((serial, _, _)) = self.state.layer_configure {
+                break serial;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "layer shell did not receive configure"
+            );
+            self.roundtrip();
+        };
+        layer_surface.ack_configure(serial);
+        self.roundtrip();
+
+        LayerPanel {
+            _surface: surface,
+            _layer_surface: layer_surface,
         }
     }
 
@@ -404,6 +453,11 @@ struct Toplevel {
     file_path: PathBuf,
 }
 
+struct LayerPanel {
+    _surface: WlSurface,
+    _layer_surface: ZwlrLayerSurfaceV1,
+}
+
 impl Toplevel {
     fn destroy(self) {
         self.toplevel.destroy();
@@ -459,6 +513,38 @@ impl Dispatch<WlShm, ()> for ClientState {
     }
 }
 
+impl Dispatch<ZwlrLayerShellV1, ()> for ClientState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrLayerShellV1,
+        _event: zwlr_layer_shell_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
+            state.layer_configure = Some((serial, width, height));
+        }
+    }
+}
+
 impl Dispatch<WlShmPool, ()> for ClientState {
     fn event(
         _state: &mut Self,
@@ -491,6 +577,30 @@ fn shm_buffer_paths_are_unique_when_the_clock_value_repeats() {
     let timestamp = 123_456_789;
 
     assert_ne!(shm_buffer_path(timestamp), shm_buffer_path(timestamp));
+}
+
+#[test]
+fn layer_shell_exclusive_zone_reduces_tiled_client_height() {
+    let baseline_height = {
+        let harness = Harness::start("layer-baseline", 800, 600);
+        let mut client = Client::connect(&harness.wayland_socket);
+        let _window = client.create_toplevel("baseline");
+        client.configure().height
+    };
+
+    let panel_height = {
+        let harness = Harness::start("layer-exclusive-zone", 800, 600);
+        let mut client = Client::connect(&harness.wayland_socket);
+        let _panel = client.create_top_panel(24);
+        let _window = client.create_toplevel("below-panel");
+        client.configure().height
+    };
+
+    assert_eq!(
+        baseline_height - panel_height,
+        24,
+        "the tiled client should yield the panel's exclusive height"
+    );
 }
 
 impl Dispatch<WlSeat, ()> for ClientState {

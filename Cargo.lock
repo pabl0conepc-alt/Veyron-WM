@@ -1666,6 +1666,7 @@ dependencies = [
  "veyron-ipc",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
