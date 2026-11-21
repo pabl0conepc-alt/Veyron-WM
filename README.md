@@ -2,7 +2,7 @@
 
 Veyron is an independent Wayland compositor written in Rust. Its planned identity is a lightweight compositor with its own window-management model and an expandable spatial desktop.
 
-> **Status:** Phase 0 research is documented. The Phase 1 Smithay source passes `cargo check`, but building and running the executable has not been verified. Do not treat Veyron as a usable compositor yet.
+> **Status:** GitHub Actions run [44922775244](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44922775244) passed format, Clippy, all 25 tests and a release build on Ubuntu. Starting the executable in the target nested session and displaying a real client are still unverified; do not treat Veyron as a usable compositor yet.
 
 ## Development
 
@@ -19,7 +19,7 @@ nix shell nixpkgs#rustc nixpkgs#cargo nixpkgs#pkg-config nixpkgs#gcc -c cargo ch
 nix shell nixpkgs#rustc nixpkgs#cargo nixpkgs#pkg-config nixpkgs#gcc -c cargo run
 ```
 
-The Cargo configuration limits builds to one job because the inspected development machine has 4 GiB RAM. `cargo check` passed with a temporary Nix toolchain. A full `cargo build` reached severe host memory pressure and was stopped, so `cargo run` is not yet a verified recipe.
+The Cargo configuration limits builds to one job because the inspected development machine has 4 GiB RAM. GitHub Actions provides full build/test validation without putting the netbook under code-generation pressure. Earlier local full builds were stopped due to memory pressure, so `cargo run` is not yet a verified recipe on the target.
 
 The compositor uses socket `veyron-0` by default. To connect a client from another terminal while it runs, set `WAYLAND_DISPLAY=veyron-0` for that client. Set `VEYRON_WAYLAND_DISPLAY` before launch to choose another socket name. The nested compositor itself uses the current desktop session to open its window.
 

@@ -34,3 +34,10 @@
 - Attempted a full `cargo build` with the same cap. System swap fell to about 32 MiB during code generation, so the build was interrupted. The application has not yet been linked or run; no real client surface has been verified.
 - Retried with `CARGO_PROFILE_DEV_CODEGEN_UNITS=1` and a 700 MiB RAM / 96 MiB swap cap. The compiler reached about 676 MiB RSS as host available memory fell below 400 MiB; stopped the build. This slower codegen setting did not provide a safe path to a linked executable.
 - Phase 1 remains `IMPLEMENTING`; Phase 2/3 models remain unintegrated. A lower-memory executable-build strategy is needed before the nested runtime test.
+
+## 2026-11-21 — Updated repository audit and remote build gate
+
+- Audited the updated `Veyron-WM` worktree rather than the previous `Veyron-WM-finish` checkout. Preserved its README, Cargo package/lockfile, Smithay source, models, and Phase 0 docs on branch `codex/engineering-audit`.
+- Added `VEYRON_AUDIT.md`, `VEYRON_FEATURE_MATRIX.md` (187 individual feature rows), `VEYRON_IMPLEMENTATION_PLAN.md`, and `VEYRON_PROGRESS.md`; added GitHub Actions so full compilation occurs away from the 4 GiB target.
+- CI run `44922775244` passed format, Clippy, all 25 model tests, and release build on Ubuntu. Two earlier runs identified and fixed the `while_let_loop` lint, formatter indentation, and a test-fixture `field_reassign_with_default` lint.
+- Phase 1 remains open: the release binary has not been launched in the target nested session and no real client surface has been observed. The next implementation dependency is a correctly advertised virtual output before surface placement integration.

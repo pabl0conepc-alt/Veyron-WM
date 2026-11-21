@@ -42,10 +42,10 @@
 ### 1. Core Architecture and build gate
 
 - [x] Reconcile the updated source/docs into a reviewable branch commit `c3963c2` without dropping README edits; record the base and branch in progress.
-- [x] Add a safe CI build/test/fmt/clippy workflow so full Smithay compilation occurs away from the 4 GiB target. Runs 44921522852–44921896407 caught format/Clippy issues before tests/build; wait for a complete passing run before treating the build gate as verified.
-- [ ] Re-run current `cargo check`, model tests, then build under a measured safe limit; keep Phase 1 open until executable launch evidence exists.
+- [x] Add a safe CI build/test/fmt/clippy workflow so full Smithay compilation occurs away from the 4 GiB target. CI run 44922775244 passed all gates.
+- [x] Validate current source via format, Clippy, all 25 model tests and release build in CI run 44922775244. Phase 1 runtime acceptance remains open until a real client is displayed.
 
-### 2. Wayland Protocol Infrastructure and outputs
+### 2. Wayland Protocol Infrastructure and outputs — in progress
 
 - [ ] Add a single-output model initialized from nested winit output size/scale.
 - [ ] Advertise `wl_output` with coherent logical/physical metadata and update clients on resize.

@@ -74,4 +74,5 @@ The individual 187 requested product/ecosystem features are recorded in [`VEYRON
 - This audit is based on source/docs/file inventory in branch `codex/engineering-audit`, not the previous `Veyron-WM-finish` checkout.
 - Historical project record: `cargo check` succeeded for an earlier state; executable build did not complete safely; 25 pure model tests reportedly passed.
 - Current audit attempt to rerun standalone model tests: not completed. Temporary Nix shell estimated 558.5 MiB network transfer / 1.9 GiB unpacked; fetch was stopped before compilation. No current-pass claim is made.
+- Subsequent verification: GitHub Actions run [44922775244](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44922775244) on the audited branch passed format, Clippy, all 25 model tests, and release build. This does not validate a nested runtime or physical GPU acceleration.
 - Runtime, real client rendering, window arrangement, input behavior, GPU acceleration and desktop-service integrations remain unverified.

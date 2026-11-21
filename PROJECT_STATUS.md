@@ -1,12 +1,12 @@
 # Project status
 
-Last verified: 2026-11-19
+Last verified: 2026-11-21
 
 ## Current state
 
-- Repository: initial commit only before this Phase 0 documentation.
-- Current activity: Phase 1 nested compositor implementation and staged Phase 2/3 integration.
-- Status: Phase 0 is `VERIFIED`; Phase 1 is `IMPLEMENTING` (Cargo type-check passes; executable build and runtime are not verified); Phase 2 and Phase 3 models pass standalone tests but are not integrated.
+- Repository baseline: `main` at `1338ebb`; updated source and documentation preserved on `codex/engineering-audit` through `4577bfd`, draft PR #2.
+- Current activity: audit complete; Phase 1 build/test gate passes in GitHub Actions; output and real surface integration remain next.
+- Status: Phase 0 is `VERIFIED`; Phase 1 remains `IMPLEMENTING` (format, Clippy, 25 tests and release build pass remotely; nested runtime/client surface unverified); Phase 2 and Phase 3 models exist but remain disconnected from real Wayland surfaces.
 
 ## Development environment inspected
 
@@ -20,10 +20,11 @@ Last verified: 2026-11-19
 - A full `cargo build` was attempted under the same cap. The host reached about 32 MiB free swap during native code generation, so the build was stopped to protect the desktop. The executable has not been produced or run; Phase 1 is therefore still unverified. Partial build artifacts are retained in `target/`.
 - A second attempt used one codegen unit with a 700 MiB RAM / 96 MiB swap cap. It was stopped when the compiler reached about 676 MiB RSS and host available memory fell below 400 MiB. This did not complete the build.
 - The protocol-independent layout, window-manager, and spatial-desktop modules have 25 standalone Rust unit tests passing with warnings denied. These tests do not validate the Smithay compositor binary or its Wayland behavior.
+- GitHub Actions run [44922775244](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44922775244) passed format, Clippy, all-target tests (25 model tests), and `cargo build --locked --release` on the current audited branch. This confirms remote compilation, not target runtime behavior.
 
 ## Constraints and next action
 
-Keep compilation serial and avoid debug-heavy builds on the 4 GiB machine. Use temporary Nix shells; do not install a global toolchain. `cargo check` succeeds, but two guarded executable-build attempts caused severe host memory pressure. Phase 1 must not be considered functional until the binary builds and displays a real client surface. Further full-build attempts should wait for more host headroom or a demonstrably lower-memory build path. Do not move to direct DRM/KMS until the nested path is validated.
+Keep compilation serial and avoid debug-heavy builds on the 4 GiB machine. Use temporary Nix shells; do not install a global toolchain. CI now proves the release binary builds remotely. Earlier local full-build attempts caused severe memory pressure. Phase 1 must not be considered functionally verified until Veyron starts nested and displays a real client surface. Do not move to direct DRM/KMS until the nested path is validated.
 
 ## Evidence required to change status
 

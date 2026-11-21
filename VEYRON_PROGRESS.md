@@ -5,14 +5,14 @@ Last updated: 2026-11-21
 ## Current task state
 
 - **Current prompt:** complete engineering audit/development/implementation prompt supplied in the attachment referenced by this task.
-- **Current repository:** `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`, branch `codex/engineering-audit`, commit `c3963c2` (`docs: audit current Veyron WM implementation`), pushed to `origin`. Draft PR [#2](https://github.com/pabl0conepc-alt/Veyron-WM/pull/2).
+- **Current repository:** `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`, branch `codex/engineering-audit`, commit `4577bfd` (`test: fix desktop overflow test lint`), pushed to `origin`. Draft PR [#2](https://github.com/pabl0conepc-alt/Veyron-WM/pull/2).
 - **Do not confuse with:** `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-finish`, older branch `codex/finish-roadmap` at `70cdf85` and PR #1. Do not copy/reset/merge it into this worktree automatically.
 - **Working tree preservation:** the pre-existing README/source/docs from the updated checkout were captured in commit `c3963c2`; do not clean/reset or replace this branch with the older checkout.
 - **Last measured task action:** source/docs inventory and matrix generation. A test invocation tried `nix shell nixpkgs#rustc nixpkgs#gcc`; Nix estimated 558.5 MiB download and 1.9 GiB unpacked, so the command was interrupted before compilation to protect the 4 GiB netbook.
 
 ## Current phase
 
-**Phase 1 — Repository discovery, feature matrix and implementation plan.** The current code and documentation audit is recorded in `VEYRON_AUDIT.md`; all 187 requested feature rows are in `VEYRON_FEATURE_MATRIX.md`; dependency ordering is in `VEYRON_IMPLEMENTATION_PLAN.md`. GitHub Actions run 44921896407 passed format but caught one more Clippy lint; tests and release build have not yet run. A corrected test fixture is being pushed for another run.
+**Phase 2 — Wayland output/protocol foundation.** Discovery, audit, matrix (187 feature rows), and dependency plan are recorded. GitHub Actions run 44922775244 passed format, Clippy, all 25 tests, and a release build. Implement the nested virtual output with a valid `wl_output` global/mode/scale and resize updates, then map xdg toplevels into the window/workspace model.
 
 ## Implemented / evidence-backed
 
@@ -41,6 +41,7 @@ Last updated: 2026-11-21
 | CI run 44921522852 | Failed at Clippy | `clippy::while-let-loop` in `src/main.rs:188`; format passed; test and release build steps were skipped. Fixed in `73c18c2`. |
 | CI run 44921786860 | Failed at Format | Rustfmt requested standard indentation after the `while let` loop conversion; Clippy/tests/build were skipped. Formatting correction is in progress. |
 | CI run 44921896407 | Failed at Clippy | `field-reassign-with-default` in the overflow test at `src/window/desktop.rs:458`; format passed; test and release build were skipped. Test fixture correction is in progress. |
+| CI run 44922775244 | Passed | Format, Clippy, `cargo test --locked --all-targets` (25 tests), and `cargo build --locked --release`; GitHub-hosted Ubuntu runner. No nested runtime evidence. |
 
 ## Changed/created this task
 
@@ -48,7 +49,7 @@ Last updated: 2026-11-21
 - Created `VEYRON_FEATURE_MATRIX.md` with 187 requested features and explicit states/gaps/tests/actions.
 - Created `VEYRON_IMPLEMENTATION_PLAN.md` with prerequisite-ordered work packages.
 - This file records the stop point and resumption instructions.
-- Preserved the updated current tree, audit docs and CI in commit `c3963c2`; created draft PR #2.
+- Preserved the updated current tree, audit docs and CI in `c3963c2`; fixed CI lint/format issues in `73c18c2`, `b76474b`, and `4577bfd`; created draft PR #2.
 
 ## Known blockers/constraints
 
@@ -60,10 +61,10 @@ Last updated: 2026-11-21
 
 ## Exact next executable work
 
-1. Push the formatting correction, then inspect its CI run through Clippy, tests and release build.
-2. Verify the pinned Smithay 0.7 APIs; implement an output description and stable registry connecting mapped `ToplevelSurface`s to model IDs, arrangement/configure, and surface teardown. Add real-client integration evidence once CI can build the executable.
-3. Correct pointer focus to use real hit testing and then connect input actions to window/workspace state.
-4. Keep feature statuses truthful and update the audit/matrix/plan/progress together after each milestone.
-5. Keep this work separate from the older PR #1 until its changes are reconciled; do not merge either PR without the user's review.
+1. Add a real Smithay virtual `Output` and advertise the nested backend's current output mode/scale using Smithay 0.7's `OutputManagerState`/`delegate_output!`; synchronize mode on resize.
+2. Add test coverage for output state and, if feasible without a display, a Wayland client protocol test; verify with GitHub Actions.
+3. Integrate `ToplevelSurface` lifecycle with stable `WindowId`s and model geometry; configure mapped clients from the layout and clean up on destruction.
+4. Add nested smoke evidence from the target desktop after an executable is available; do not claim Phase 1 complete before a real surface is seen.
+5. Keep feature statuses truthful and update all four persistent docs at each milestone. Keep separate from older PR #1; do not merge without review.
 
-- Added `.github/workflows/ci.yml` on branch `codex/engineering-audit` as the first build-safety increment. Runs 44921522852–44921896407 validated workflow setup/format but exposed existing code/test lints; no test or release build has passed yet.
+- Added `.github/workflows/ci.yml` on branch `codex/engineering-audit` as the build-safety gate. Run 44922775244 passed formatting, Clippy, all 25 model tests, and a release build on Ubuntu. The two lint failures and one formatter failure in preceding runs were corrected without disabling checks.
