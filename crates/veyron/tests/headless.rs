@@ -562,8 +562,8 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
         } = event
         {
             // xdg-shell transports the state list as an array of u32 values.
-            let activated = states.chunks_exact(4).any(|chunk| {
-                let value = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let activated = states.as_chunks::<4>().0.iter().any(|chunk| {
+                let value = u32::from_ne_bytes(*chunk);
                 matches!(
                     xdg_toplevel::State::try_from(value),
                     Ok(xdg_toplevel::State::Activated)

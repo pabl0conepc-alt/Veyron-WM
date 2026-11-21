@@ -11,4 +11,3 @@ Name=Veyron (experimental)
 Comment=Scrollable tiling Wayland compositor. Nested backend only: no standalone session yet
 Exec=veyron
 TryExec=veyron
-DesktopNames=veyron
