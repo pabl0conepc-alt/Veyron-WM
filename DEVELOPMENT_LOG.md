@@ -1,5 +1,31 @@
 # Development log
 
+## 2026-11-21 — Frame-scheduled transitions and a dead-API pass
+
+- The nested scene graph now drives the rectangle animator. Each mapped window
+  keeps one animator; `tick` advances it by the measured frame delta and
+  `dispatch_wait` caps the event-loop sleep at 16 ms while a transition runs, so
+  a frame is produced until it settles. The frame that finishes a transition is
+  marked dirty too, so the last rectangle drawn is the exact target. Motion
+  stays off by default, which keeps a default session as static as before.
+- Client sizes still configure at their target; only the scene-graph position
+  interpolates. No nested-session visual check was performed.
+- Restarting a transition from the rectangle actually on screen is
+  `RectAnimator::new(current, target, &motion)`, which also keeps the
+  disabled-motion snap in one place. That made `retarget` (it did the same, but
+  only while motion was already active) and the `from()` accessor redundant;
+  both are gone, along with the `if`/`else` in the layout sync.
+- Removed public API no consumer called: `Rect::loc`,
+  `GroupSet::ordered_members`, `RectAnimator::with_easing`,
+  `Session::windows_on`, `Wm::active_workspace_index`,
+  `Workspace::fullscreen_window` and `Wm::output_rect`. The write-only
+  `Window::scratchpad` flag, its accessor and setter are gone too; the
+  window-manager scratchpad list is the single source of truth.
+- Verified with `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`
+  (111 core tests, 5 window-feature, 9 multi-output, 10 profile, 1 README-config,
+  8 IPC and 7 headless Wayland-client integration tests).
+
 ## 2026-11-20 — Recall over IPC
 
 - Added `veyronctl session save FILE` and `veyronctl session restore FILE`.

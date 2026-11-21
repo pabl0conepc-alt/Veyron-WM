@@ -15,9 +15,9 @@
   and per-app floating geometry memory exist in the core and are unit-tested.
   Rules now match the real app id and title the client announces on its first
   commit, but they have not been visually validated in a nested session.
-- The animation core (spring/easing/rect animator, duration, reduced motion) is
-  implemented and tested, but the nested renderer neither uses it nor schedules
-  frames for transitions yet, so nothing animates today.
+- The nested scene graph now uses the rectangle animator for window positions
+  and schedules frames until transitions finish. Client sizes still configure
+  at their target, and no visible nested-session check has been performed.
 - Per-window opacity and blur reach the snapshot; the renderer still draws every
   window opaque and unblurred. Rounded corners and shadows are absent.
 - Snap zones, picture-in-picture, window groups and smart focus are implemented

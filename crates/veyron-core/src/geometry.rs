@@ -93,10 +93,6 @@ impl Rect {
         Size::new(self.w, self.h)
     }
 
-    pub fn loc(&self) -> Point {
-        Point::new(self.x, self.y)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.w <= 0 || self.h <= 0
     }

@@ -84,10 +84,6 @@ impl Workspace {
         &self.floating
     }
 
-    pub fn fullscreen_window(&self) -> Option<WindowId> {
-        self.fullscreen
-    }
-
     /// The focused window of this workspace, taking fullscreen and floating
     /// layers into account.
     pub fn focused_window(&self) -> Option<WindowId> {
@@ -143,10 +139,6 @@ impl OutputState {
 
     pub fn workspaces(&self) -> &[Workspace] {
         &self.workspaces
-    }
-
-    pub fn active_workspace_index(&self) -> usize {
-        self.active
     }
 
     pub fn active_workspace_position(&self) -> WorkspacePosition {
@@ -412,10 +404,6 @@ impl Wm {
     pub fn output(&self, name: &str) -> Option<&OutputState> {
         let index = self.output_index(name)?;
         self.outputs.get(index)
-    }
-
-    pub fn output_rect(&self) -> Rect {
-        self.active_output().rect
     }
 
     /// Usable area of one output, inside the configured outer margin.
@@ -822,7 +810,6 @@ impl Wm {
         }
         if policy.scratchpad {
             window.set_floating(true);
-            window.set_scratchpad(true);
         }
         self.windows.insert(id, window);
 
@@ -1349,7 +1336,6 @@ impl Wm {
             self.scratchpad.push(id);
         }
         if let Some(window) = self.windows.get_mut(&id) {
-            window.set_scratchpad(true);
             window.set_floating(true);
         }
         self.refresh_tiled_rects();
@@ -1674,7 +1660,6 @@ impl Wm {
             self.detach_window(id);
             self.scratchpad.push(id);
             if let Some(window) = self.windows.get_mut(&id) {
-                window.set_scratchpad(true);
                 window.set_floating(true);
             }
             self.refresh_tiled_rects();

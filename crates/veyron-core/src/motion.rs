@@ -279,31 +279,12 @@ impl RectAnimator {
         }
     }
 
-    pub fn with_easing(mut self, easing: Easing) -> Self {
-        self.easing = easing;
-        self
-    }
-
-    pub fn from(&self) -> Rect {
-        self.from
-    }
-
     pub fn target(&self) -> Rect {
         self.to
     }
 
     pub fn is_running(&self) -> bool {
         self.running
-    }
-
-    /// Redirect the animation to a new target without snapping.
-    pub fn retarget(&mut self, to: Rect) {
-        if to == self.to {
-            return;
-        }
-        self.from = self.current();
-        self.to = to;
-        self.elapsed = 0.0;
     }
 
     /// Progress in `0..=1`.
@@ -438,22 +419,6 @@ mod tests {
         assert_eq!(animator.advance(0.1), to);
         assert!(!animator.is_running());
         assert_eq!(animator.current(), to);
-    }
-
-    #[test]
-    fn retargeting_a_rect_restarts_from_the_current_position() {
-        let config = MotionConfig {
-            enabled: true,
-            duration_ms: 100,
-            ..MotionConfig::default()
-        };
-        let mut animator =
-            RectAnimator::new(Rect::new(0, 0, 10, 10), Rect::new(100, 0, 10, 10), &config);
-        let current = animator.advance(0.05);
-        animator.retarget(Rect::new(0, 500, 10, 10));
-        assert_eq!(animator.from(), current);
-        assert!(animator.is_running());
-        assert_eq!(animator.advance(0.1), Rect::new(0, 500, 10, 10));
     }
 
     #[test]

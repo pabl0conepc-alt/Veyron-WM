@@ -27,15 +27,17 @@ Last reviewed: 2026-11-20.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
   core, multi-output policy, named layout/motion profiles with `profile
-  next|prev` cycling, and window identity wiring are implemented and tested (112
+  next|prev` cycling, and window identity wiring are implemented and tested (111
   core tests plus window-feature, multi-output, profile and headless integration
   tests) with control-protocol version 3. The compositor forwards the app id and
   title a client announces on its first commit, so rules and `veyronctl state`
-  use real metadata; the renderer still ignores opacity/blur, the backend still
-  creates one output, and no nested runtime visual check exists. Gesture and
+  use real metadata. The nested loop advances window transitions and bounds its
+  sleep to one frame while they run, with motion off by default and client sizes
+  still configured at their target; the renderer still ignores opacity/blur, the
+  backend still creates one output, and no nested runtime visual check exists. Gesture and
   overview policy modules were removed before any consumer existed. See
   [ROADMAP.md](ROADMAP.md).
-- `cargo test --workspace` now runs in this environment, including the 6 headless
+- `cargo test --workspace` now runs in this environment, including the 7 headless
 tests that drive the real compositor with genuine Wayland clients, using Wayland
 and XKB runtime libraries extracted to a local prefix (no system packages were
 installed). That is protocol-level evidence only: no GPU presentation, nested

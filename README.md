@@ -62,8 +62,11 @@ What works:
   metadata instead of empty strings.
 - Animation foundation: a `spring` and eased `RectAnimator` that integrate a
   `dt` supplied by the caller, plus duration and reduced-motion policy. The
-  renderer does not animate frames yet.
-- Deterministic, unit-tested state machine (112 core tests plus integration
+  nested scene graph now interpolates window positions and schedules frames
+  until transitions finish; motion is off by default. XDG client sizes still
+  configure at their target, and no visual nested-session check has been
+  recorded yet.
+- Deterministic, unit-tested state machine (111 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket

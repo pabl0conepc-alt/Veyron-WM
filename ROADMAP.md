@@ -151,9 +151,10 @@ Competitive window management features implemented as protocol-free policy in
 - [x] Window identity: the app id and title a client announces on its first
   commit reach the core, applying the matching window rules exactly once;
   `veyronctl state` reports identity and rule opacity per window.
-- [ ] Drive the animation core from the nested render loop (replace placement
-  rectangles with in-flight ones and request a frame while it reports work);
-  needs nested runtime validation on the target GPU.
+- [x] Drive the animation core from the nested render loop: window positions
+  interpolate between placements and the event loop sleeps at most one frame
+  interval while a transition runs. Motion is off by default; client sizes still
+  configure at their target, and no nested runtime visual check exists yet.
 - [ ] Apply per-window opacity/blur in the renderer (policy is already in the
   snapshot; no shader or scene-graph mutation is implemented).
 - [ ] Rounded corners, shadows, real GPU blur, workspace-transition effects and
@@ -173,9 +174,9 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test --workspace` (112 core tests, 5 window-feature
+**Evidence:** `cargo test --workspace` (111 core tests, 5 window-feature
 integration tests, 9 multi-output integration tests, 10 profile integration
-tests, 8 IPC tests and 6 headless Wayland-client integration tests) covers every
+tests, 8 IPC tests and 7 headless Wayland-client integration tests) covers every
 implemented item above; `cargo clippy --workspace --all-targets -- -D warnings`
 and `cargo fmt --all --check` pass. The compositor crate builds in this
 environment with locally extracted Wayland/XKB runtime libraries and its

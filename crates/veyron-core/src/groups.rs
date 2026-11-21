@@ -183,14 +183,6 @@ impl GroupSet {
         }
         self.groups.retain(|group| !group.members.is_empty());
     }
-
-    /// Members of every group, in group order. Used to build a strip order in
-    /// which grouped windows sit next to each other.
-    pub fn ordered_members(&self) -> impl Iterator<Item = (GroupId, &[WindowId])> {
-        self.groups
-            .iter()
-            .map(|group| (group.id, group.members.as_slice()))
-    }
 }
 
 #[cfg(test)]

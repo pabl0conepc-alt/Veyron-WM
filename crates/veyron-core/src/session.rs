@@ -96,16 +96,6 @@ impl Session {
         session
     }
 
-    /// Windows recorded on a given workspace.
-    pub fn windows_on<'a>(
-        &'a self,
-        workspace: &'a str,
-    ) -> impl Iterator<Item = &'a WindowRecord> + 'a {
-        self.windows
-            .iter()
-            .filter(move |record| record.workspace == workspace)
-    }
-
     pub fn validate(&self) -> Result<(), String> {
         if self.windows.len() > MAX_SESSION_WINDOWS {
             return Err(format!(

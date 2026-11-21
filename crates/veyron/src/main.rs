@@ -182,7 +182,7 @@ fn serve(
     wait: Option<Duration>,
 ) -> Result<(), Box<dyn Error>> {
     while !state.exit {
-        event_loop.dispatch(wait, state)?;
+        event_loop.dispatch(state.dispatch_wait(wait), state)?;
         display.dispatch_clients(state)?;
         state.tick()?;
         display.flush_clients()?;

@@ -5,7 +5,12 @@
 //! turns the resulting [`veyron_core::Snapshot`] into configures, focus and
 //! rendering.
 
-use std::{collections::HashMap, error::Error, path::PathBuf, time::Instant};
+use std::{
+    collections::HashMap,
+    error::Error,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use smithay::{
     backend::{
@@ -52,7 +57,8 @@ use smithay::{
     },
 };
 use veyron_core::{
-    Action, Config, Effects, Modifiers, NewWindow, Session, Size as VSize, WindowId, Wm,
+    Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session, Size as VSize,
+    WindowId, Wm,
 };
 use veyron_ipc::{Response, StateReport, WindowReport, MAX_LINE_BYTES};
 
@@ -105,6 +111,9 @@ pub struct Veyron {
     mapped: HashMap<WindowId, (i32, i32)>,
     /// Last size sent to each client, so configures are not flooded.
     configured: HashMap<WindowId, (i32, i32)>,
+    /// In-flight window rectangles; the scene graph draws `current()`.
+    animations: HashMap<WindowId, RectAnimator>,
+    last_animation_frame: Instant,
 
     pointer_location: Point<f64, Logical>,
     needs_redraw: bool,
@@ -215,6 +224,8 @@ impl Veyron {
             windows: HashMap::new(),
             mapped: HashMap::new(),
             configured: HashMap::new(),
+            animations: HashMap::new(),
+            last_animation_frame: Instant::now(),
             pointer_location: (0.0, 0.0).into(),
             needs_redraw: true,
             exit: false,
@@ -232,6 +243,23 @@ impl Veyron {
     /// Redraw if anything changed and push frame callbacks. Called once per
     /// event-loop iteration.
     pub fn tick(&mut self) -> Result<(), Box<dyn Error>> {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_animation_frame).as_secs_f64();
+        self.last_animation_frame = now;
+
+        // Draw the frame that finishes a transition too, so the last drawn
+        // rectangle is the exact target and not one frame short of it.
+        let mut animating = false;
+        for animator in self.animations.values_mut() {
+            if animator.is_running() {
+                animating = true;
+                animator.advance(dt);
+            }
+        }
+        if animating {
+            self.needs_redraw = true;
+        }
+
         if self.needs_redraw {
             self.needs_redraw = false;
             self.sync_layout();
@@ -239,6 +267,16 @@ impl Veyron {
             self.send_frame_callbacks();
         }
         Ok(())
+    }
+
+    /// Bound the event-loop sleep while an animation needs another frame.
+    pub fn dispatch_wait(&self, idle_wait: Option<Duration>) -> Option<Duration> {
+        const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+        if self.animations.values().any(RectAnimator::is_running) {
+            Some(idle_wait.map_or(FRAME_INTERVAL, |wait| wait.min(FRAME_INTERVAL)))
+        } else {
+            idle_wait
+        }
     }
 
     /// Handle an event from the nested winit backend.
@@ -593,26 +631,41 @@ impl Veyron {
     /// Match the scene graph to the layout snapshot and configure clients.
     fn sync_layout(&mut self) {
         let snapshot = self.wm.snapshot();
-        let mut visible = Vec::with_capacity(snapshot.placements.len());
+        let motion = self.wm.config().motion;
 
         for placement in &snapshot.placements {
             let Some(window) = self.windows.get(&placement.window) else {
                 continue;
             };
-            let location = (placement.rect.x, placement.rect.y);
+            let target = placement.rect;
+            let animator = self.animations.entry(placement.window).or_insert_with(|| {
+                let drawn = match (
+                    self.mapped.get(&placement.window),
+                    self.configured.get(&placement.window),
+                ) {
+                    (Some((x, y)), Some((w, h))) => Rect::new(*x, *y, *w, *h),
+                    _ => target,
+                };
+                RectAnimator::new(drawn, target, &motion)
+            });
+            if animator.target() != target {
+                // Restarting from what is on screen keeps a retile continuous;
+                // with motion disabled `new` snaps to the target instead.
+                *animator = RectAnimator::new(animator.current(), target, &motion);
+            }
+            let animated = animator.current();
+            let location = (animated.x, animated.y);
             if self.mapped.get(&placement.window) != Some(&location) {
                 self.space.map_element(window.clone(), location, false);
                 self.mapped.insert(placement.window, location);
             }
-            visible.push(placement.window);
-
             // Floating windows keep the size their client chose.
             if placement.floating {
                 continue;
             }
 
-            let target = (placement.rect.w, placement.rect.h);
-            if self.configured.get(&placement.window) == Some(&target) {
+            let target_size = (target.w, target.h);
+            if self.configured.get(&placement.window) == Some(&target_size) {
                 continue;
             }
             if let Some(toplevel) = window.toplevel() {
@@ -620,17 +673,22 @@ impl Veyron {
                 // by `Window::set_activated` in `sync_focus`, so a configure
                 // can never mark every tiled window as active.
                 toplevel.with_pending_state(|state| {
-                    state.size = Some((target.0, target.1).into());
+                    state.size = Some((target_size.0, target_size.1).into());
                 });
                 toplevel.send_configure();
-                self.configured.insert(placement.window, target);
+                self.configured.insert(placement.window, target_size);
             }
         }
 
         let stale: Vec<WindowId> = self
             .mapped
             .keys()
-            .filter(|id| !visible.contains(id))
+            .filter(|id| {
+                !snapshot
+                    .placements
+                    .iter()
+                    .any(|placement| placement.window == **id)
+            })
             .copied()
             .collect();
         for id in stale {
@@ -903,6 +961,7 @@ impl XdgShellHandler for Veyron {
             }
             self.mapped.remove(&id);
             self.configured.remove(&id);
+            self.animations.remove(&id);
             self.wm.remove_window(id);
             self.sync_layout();
             self.sync_focus();
