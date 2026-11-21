@@ -868,11 +868,10 @@ impl Veyron {
                 self.space.map_element(window.clone(), location, false);
                 self.mapped.insert(placement.window, location);
             }
-            // Floating windows keep the size their client chose.
-            if placement.floating {
-                continue;
-            }
-
+            // Floating windows are configured too: `resize`, snap zones,
+            // picture-in-picture and fullscreen change their rectangle, and
+            // only a configure makes the client follow. Unchanged sizes are
+            // skipped below, so a floating client is not resized needlessly.
             let target_size = (target.w, target.h);
             if self.configured.get(&placement.window) == Some(&target_size) {
                 continue;
@@ -1036,7 +1035,7 @@ impl Veyron {
         let time = self.start.elapsed().as_millis() as u32;
         for window in self.windows.values() {
             if let Some(toplevel) = window.toplevel() {
-                send_frames_surface_tree(toplevel.wl_surface(), time);
+                send_frames_surface_and_popups(toplevel.wl_surface(), time);
             }
         }
         // Panels and other layer clients animate on frame callbacks too.
@@ -1045,7 +1044,7 @@ impl Veyron {
             .cloned()
             .collect();
         for layer in layers {
-            send_frames_surface_tree(layer.wl_surface(), time);
+            send_frames_surface_and_popups(layer.wl_surface(), time);
         }
     }
 }
@@ -1335,6 +1334,15 @@ fn spawn(command: &str) {
     }
 }
 
+/// Deliver frame callbacks to a toplevel or layer surface tree and to its
+/// popups, which are separate surface trees.
+fn send_frames_surface_and_popups(surface: &WlSurface, time: u32) {
+    send_frames_surface_tree(surface, time);
+    for (popup, _) in PopupManager::popups_for_surface(surface) {
+        send_frames_surface_tree(popup.wl_surface(), time);
+    }
+}
+
 /// Deliver `wl_surface.frame` callbacks for a surface tree.
 fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
     with_surface_tree_downward(
@@ -1390,6 +1398,15 @@ impl CompositorHandler for Veyron {
             return;
         }
         self.popup_manager.commit(surface);
+        // A popup may not attach a buffer before its first configure, and
+        // nothing else sends one: without this, menus never appear.
+        if let Some(PopupKind::Xdg(popup)) = self.popup_manager.find_popup(surface) {
+            if !popup.is_initial_configure_sent() {
+                if let Err(error) = popup.send_configure() {
+                    tracing::warn!(?error, "could not configure a popup");
+                }
+            }
+        }
 
         let mut committed = None;
         for (id, window) in &self.windows {
@@ -1405,6 +1422,14 @@ impl CompositorHandler for Veyron {
 
         if let Some(id) = committed {
             self.sync_identity(id);
+            // `sync_layout` only configures windows that have a placement; one
+            // opened behind a fullscreen window has none yet, and a client
+            // may not draw before its first configure.
+            if let Some(toplevel) = self.windows.get(&id).and_then(Window::toplevel) {
+                if !toplevel.is_initial_configure_sent() {
+                    toplevel.send_configure();
+                }
+            }
         }
 
         self.needs_redraw = true;
