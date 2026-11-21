@@ -27,9 +27,9 @@ Last reviewed: 2026-11-21.
 - Phase 7 (window management depth) is IMPLEMENTING: master-stack/dwindle/auto
   layouts, smart gaps, window rules, scratchpad, geometry memory, a motion
   core, multi-output policy, named layout/motion profiles with `profile
-  next|prev` cycling, and window identity wiring are implemented and tested (122
-  core tests plus window-feature, multi-output, profile, launcher and headless
-  integration tests) with control-protocol version 3. The compositor forwards the app id and
+  next|prev` cycling, and window identity wiring are implemented and tested (125
+  core tests plus smart-placement, window-feature, multi-output, profile,
+  launcher and headless integration tests) with control-protocol version 3. The compositor forwards the app id and
   title a client announces on its first commit, so rules and `veyronctl state`
   use real metadata. The nested loop advances window transitions and bounds its
   sleep to one frame while they run, per-window `animation = false` rules opt an
@@ -38,8 +38,10 @@ Last reviewed: 2026-11-21.
   target. `[[workspaces]]` predefines named workspaces, `workspace special`
   toggles a scratch workspace, `veyronctl launch` resolves XDG desktop entries,
   `Wm::overview` lays every workspace on the sparse grid for `veyronctl
-  overview`, and `zwlr_layer_shell_v1` clients (bars, notifications, wallpapers,
-  OSDs) are mapped with their exclusive zones and frame callbacks. Pointer input
+  overview`, smart workspace placement (`behavior.smart_workspace`) reuses the
+  learned output/workspace of each app, `canvas <dx> <dy>` pans every floating
+  window at once, and `zwlr_layer_shell_v1` clients (bars, notifications,
+  wallpapers, OSDs) are mapped with their exclusive zones and frame callbacks. Pointer input
   still reaches toplevels only, so layer surfaces cannot be clicked yet. The
   renderer still ignores opacity/blur, the backend still creates one output, and
   no nested runtime visual check exists. Gesture and

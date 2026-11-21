@@ -206,6 +206,24 @@ which keeps the grid stable when the user navigates into negative coordinates.
 inspected without switching to them. The compositor exposes the same structure
 as `veyronctl overview [--json]`; drawing it is left to an overview client.
 
+### Smart placement and the canvas
+
+`smart::Affinities` is a small learned map from app id to the output and
+workspace where that application's windows were last placed or focused. Learning
+happens on every create and focus (including windows routed by a rule), so the
+history stays useful across a reload; whether the map is *consulted* is gated by
+`behavior.smart_workspace`, which keeps the default routing unchanged. The
+lookup path (`Wm::smart_target`) refuses entries whose output or workspace no
+longer exists, and removal of an output prunes the map. Priority is explicit: an
+explicit session target beats a rule, a rule beats affinity, affinity beats the
+active workspace.
+
+`Wm::canvas_pan(dx, dy)` implements the canvas gesture by translating every
+floating window of the active workspace and clamping each one into the viewport;
+the remembered floating geometry follows the move when `remember_geometry` is
+on. It reports whether anything moved, so a pan against an edge is a no-op frame
+instead of a redraw.
+
 ### Snapping, groups and sessions
 
 `snap.rs` owns the geometry of screen zones and picture-in-picture corners. Both

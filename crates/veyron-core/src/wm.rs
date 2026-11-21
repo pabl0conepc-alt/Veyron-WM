@@ -284,6 +284,8 @@ pub struct Wm {
     active_profile: Option<String>,
     /// Workspace the scratch workspace was opened from.
     special_return: Option<usize>,
+    /// Learned app -> output/workspace placement (smart workspace).
+    affinities: crate::smart::Affinities,
 }
 
 impl Wm {
@@ -318,6 +320,7 @@ impl Wm {
             pip: HashMap::new(),
             active_profile: None,
             special_return: None,
+            affinities: crate::smart::Affinities::new(),
         };
         if let Some(name) = wm.config.default_profile.clone() {
             wm.apply_profile(&name);
@@ -520,6 +523,24 @@ impl Wm {
             workspace.floating.push(id);
             workspace.focused_floating = Some(id);
         }
+
+        // The removed output took its workspaces with it, so affinity entries
+        // pointing at them can never be placed again.
+        let known: Vec<(String, String)> = self
+            .outputs
+            .iter()
+            .flat_map(|output| {
+                output
+                    .workspaces
+                    .iter()
+                    .map(move |workspace| (output.name.clone(), workspace.name.clone()))
+            })
+            .collect();
+        self.affinities.retain_workspaces(|output, workspace| {
+            known
+                .iter()
+                .any(|(name, label)| name == output && label == workspace)
+        });
 
         self.refresh_tiled_rects();
         self.note_focus();
@@ -802,6 +823,7 @@ impl Wm {
             WindowPolicy::default()
         };
 
+        let app_id = request.app_id.clone();
         let mut window = Window::new(id, request);
         window.set_rules_applied(named);
         window.set_opacity(policy.opacity);
@@ -830,10 +852,21 @@ impl Wm {
         }
         self.windows.insert(id, window);
 
-        let output_index = self.active_output;
-        let target = match workspace.or(policy.workspace.as_deref()) {
-            Some(name) => self.find_or_create_named_workspace(output_index, name),
-            None => self.outputs[output_index].active,
+        // A rule or an explicit session target wins; otherwise smart placement
+        // fills the gap with the workspace this application already lives on.
+        let requested = workspace
+            .or(policy.workspace.as_deref())
+            .map(str::to_string);
+        let (output_index, target) = match requested {
+            Some(name) => {
+                let output_index = self.active_output;
+                let target = self.find_or_create_named_workspace(output_index, &name);
+                (output_index, target)
+            }
+            None => match self.smart_target(&app_id) {
+                Some(target) => target,
+                None => (self.active_output, self.outputs[self.active_output].active),
+            },
         };
         let is_active = target == self.outputs[output_index].active;
         if let Some(kind) = policy.layout {
@@ -862,6 +895,7 @@ impl Wm {
 
         self.refresh_tiled_rects();
         self.note_focus();
+        self.note_affinity(id);
         id
     }
 
@@ -939,6 +973,8 @@ impl Wm {
 
         if let Some(name) = policy.workspace.as_deref() {
             effects.layout_changed |= self.route_window(id, name);
+        } else if let Some((output_index, workspace_index)) = self.smart_target(app_id) {
+            effects.layout_changed |= self.place_window(id, output_index, workspace_index);
         }
 
         if let Some(kind) = policy.layout {
@@ -957,15 +993,24 @@ impl Wm {
     /// Move a window to the named workspace, creating it on demand. Returns
     /// whether the window changed workspace.
     fn route_window(&mut self, id: WindowId, name: &str) -> bool {
-        let Some((output_index, current, floating)) = self.locate(id) else {
+        let Some((output_index, _, _)) = self.locate(id) else {
             return false;
         };
         let target = self.find_or_create_named_workspace(output_index, name);
-        if target == current {
+        self.place_window(id, output_index, target)
+    }
+
+    /// Move a window to an existing output and workspace. Returns whether it
+    /// actually moved.
+    fn place_window(&mut self, id: WindowId, output_index: usize, workspace_index: usize) -> bool {
+        let Some((current_output, current_workspace, floating)) = self.locate(id) else {
+            return false;
+        };
+        if current_output == output_index && current_workspace == workspace_index {
             return false;
         }
         self.detach_window(id);
-        let workspace = &mut self.outputs[output_index].workspaces[target];
+        let workspace = &mut self.outputs[output_index].workspaces[workspace_index];
         if floating {
             workspace.floating.push(id);
         } else {
@@ -973,6 +1018,95 @@ impl Wm {
         }
         self.refresh_tiled_rects();
         true
+    }
+
+    /// Output and workspace an application should open on, learned from where
+    /// its windows already live. `None` when smart placement is disabled, the
+    /// app is unknown, or the remembered places no longer exist.
+    fn smart_target(&self, app_id: &str) -> Option<(usize, usize)> {
+        if app_id.is_empty() || !self.config.behavior.smart_workspace {
+            return None;
+        }
+        let affinity = self.affinities.get(app_id)?;
+        let output_index = self.output_index(&affinity.output)?;
+        let workspace_index = self
+            .outputs
+            .get(output_index)?
+            .workspace_index_by_name(&affinity.workspace)?;
+        Some((output_index, workspace_index))
+    }
+
+    /// Remember where a window lives so the next window of the same app opens
+    /// there. Learning is unconditional; only `smart_target` reads the flag.
+    fn note_affinity(&mut self, id: WindowId) {
+        let Some((output_index, workspace_index, _)) = self.locate(id) else {
+            return;
+        };
+        let Some(app_id) = self
+            .windows
+            .get(&id)
+            .map(|window| window.app_id().to_string())
+        else {
+            return;
+        };
+        let Some(output) = self.outputs.get(output_index) else {
+            return;
+        };
+        let output_name = output.name.clone();
+        let Some(workspace) = output.workspaces.get(workspace_index) else {
+            return;
+        };
+        let workspace_name = workspace.name.clone();
+        self.affinities
+            .observe(&app_id, &output_name, &workspace_name);
+    }
+
+    /// Move every floating window of the active workspace together, stopping
+    /// each window at the output edges (the "canvas" gesture). Returns whether
+    /// any window moved.
+    pub fn canvas_pan(&mut self, dx: i32, dy: i32) -> bool {
+        if dx == 0 && dy == 0 {
+            return false;
+        }
+        let viewport = self.viewport();
+        let output_index = self.active_output;
+        let workspace_index = self.outputs[output_index].active;
+        let ids = self.outputs[output_index].workspaces[workspace_index]
+            .floating
+            .clone();
+        let mut moved = false;
+        for id in ids {
+            let Some(window) = self.windows.get(&id) else {
+                continue;
+            };
+            let rect = window.floating_rect();
+            let max_x = (viewport.right() - rect.w).max(viewport.x);
+            let max_y = (viewport.bottom() - rect.h).max(viewport.y);
+            let next = Rect::new(
+                rect.x.saturating_add(dx).clamp(viewport.x, max_x),
+                rect.y.saturating_add(dy).clamp(viewport.y, max_y),
+                rect.w,
+                rect.h,
+            );
+            if next == rect {
+                continue;
+            }
+            let app_id = window.app_id().to_string();
+            if let Some(window) = self.windows.get_mut(&id) {
+                window.set_floating_rect(next);
+            }
+            // Window memory follows the canvas, otherwise the next window of
+            // the app would jump back to the old spot.
+            if self.config.behavior.remember_geometry && !app_id.is_empty() {
+                self.remembered.insert(app_id, next);
+            }
+            moved = true;
+        }
+        if moved {
+            self.refresh_tiled_rects();
+            self.note_focus();
+        }
+        moved
     }
 
     /// Focus a window, activating its workspace and output if necessary.
@@ -1001,6 +1135,7 @@ impl Wm {
 
         let changed = previous != self.focused_window();
         self.note_focus();
+        self.note_affinity(id);
         changed
     }
 
@@ -1049,6 +1184,9 @@ impl Wm {
             }
             Action::MoveFloating { direction, delta } => {
                 effects.layout_changed = self.move_focused_floating(direction, delta);
+            }
+            Action::CanvasPan { dx, dy } => {
+                effects.layout_changed = self.canvas_pan(dx, dy);
             }
             Action::ColumnWidth { delta } => {
                 let workspace = self.active_workspace_mut();

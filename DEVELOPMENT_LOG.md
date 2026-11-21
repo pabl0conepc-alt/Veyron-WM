@@ -1,5 +1,23 @@
 # Development log
 
+## 2026-11-21 — Smart workspace and the canvas gesture
+
+- `veyron_core::smart::Affinities` learns `app id -> output/workspace` from the
+  windows the core places and focuses. With `behavior.smart_workspace` enabled a
+  new window whose app is already known opens next to its siblings on that
+  output and workspace, without switching the user away. A rule that pins a
+  workspace, or an explicit session-restore target, always wins. Learning is
+  unconditional and cheap, so enabling the flag does not start from an empty
+  history.
+- Affinity entries are pruned when an output goes away, so a removed workspace
+  cannot keep attracting windows.
+- `canvas <dx> <dy>` (the "Veyron Canvas" gesture) moves every floating window of
+  the active workspace together, clamping each window to the output. Window
+  memory follows the move so the next window of the app does not jump back.
+- Verified with `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`
+  (125 core unit tests, 7 new smart-placement integration tests).
+
 ## 2026-11-21 — Workspace overview and layer-shell
 
 - `Wm::overview(tile, gap)` lays every workspace of the active output on the

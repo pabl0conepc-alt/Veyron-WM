@@ -179,12 +179,16 @@ pub struct Behavior {
     /// Remember the last floating geometry per app id and restore it for the
     /// next window of that application.
     pub remember_geometry: bool,
+    /// Open a new window on the output and workspace where the same application
+    /// already lives. Rules that pin a workspace always win over it.
+    pub smart_workspace: bool,
 }
 
 impl Default for Behavior {
     fn default() -> Self {
         Self {
             remember_geometry: true,
+            smart_workspace: false,
         }
     }
 }

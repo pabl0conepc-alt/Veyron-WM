@@ -91,6 +91,10 @@ scheduling, and measured behavior. Blur and transparency remain optional.
   OSDs are ordinary clients with exclusive zones and frame callbacks.
 - [x] Workspace overview geometry: every workspace on the sparse grid with its
   windows scaled into a tile, exposed as `veyronctl overview [--json]`.
+- [x] Smart workspace: learned `app id -> output/workspace` affinity
+  (`behavior.smart_workspace`), with rules keeping their priority.
+- [x] Veyron Canvas: `canvas <dx> <dy>` pans every floating window of the
+  workspace at once, stopping each one at the output edge.
 - [x] Expose spatial workspace coordinates and window-transfer actions through
   the core action parser, default bindings and state IPC.
 - [x] Research Smithay's XWayland/XWM boundary and record an ADR.
@@ -186,7 +190,7 @@ Competitive window management features implemented as protocol-free policy in
 - [ ] Backend wiring for multiple outputs: the nested backend still creates one
   output, so per-monitor rendering and hotplug need compositor work.
 
-**Evidence:** `cargo test --workspace` (122 core tests, 5 window-feature
+**Evidence:** `cargo test --workspace` (125 core tests, 7 smart-placement, 5 window-feature
 integration tests, 9 multi-output integration tests, 10 profile integration
 tests, 8 IPC tests and 7 headless Wayland-client integration tests) covers every
 implemented item above; `cargo clippy --workspace --all-targets -- -D warnings`

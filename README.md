@@ -81,6 +81,11 @@ What works:
 - Layer-shell: `zwlr_layer_shell_v1` clients (waybar, notification daemons,
   wallpapers, OSDs) are mapped on the output with their exclusive zones, and
   their frame callbacks are delivered.
+- Smart workspace: with `behavior.smart_workspace`, every window the core places
+  teaches it where that app lives, and its next window opens on the same output
+  and workspace without switching the user away. Rules still win.
+- Veyron Canvas: `canvas <dx> <dy>` moves every floating window of the workspace
+  together, stopping each one at the output edge.
 - Deterministic, unit-tested state machine (122 core tests plus integration
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
@@ -237,6 +242,7 @@ reduce_motion = false        # snap instantly for reduced-motion preferences
 
 [behavior]
 remember_geometry = true     # restore floating geometry per app id
+smart_workspace = false      # new windows open where their app already lives
 
 # Per-application rules, evaluated in order; later fields win.
 [[rules]]
@@ -354,7 +360,8 @@ Any other program can use the socket directly:
 
 Protocol version 3 includes the signed 2D workspace coordinate, the resolved
 layout name, the effective gap and, per window, the announced app id, title,
-rule opacity, geometry and state. Requests: `action`, `state`, `overview`,
+rule opacity, geometry and state. `canvas <dx> <dy>` is an action like any
+other, so it works as a keybinding and over IPC. Requests: `action`, `state`, `overview`,
 `capture-session`, `restore-session`, `launch`, `reload`, `quit`, `ping`. Session TOML and all other messages
 are capped at 64 KiB; the socket is
 owner-only (`0600`), the server never deletes a non-socket file, and a crashed

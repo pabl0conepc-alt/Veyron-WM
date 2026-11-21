@@ -40,6 +40,13 @@
   surfaces is not implemented either.
 - The workspace overview is geometry plus IPC (`veyronctl overview`); the
   compositor does not draw an overview surface, and no gesture input is wired.
+- Smart workspace placement is off by default (`behavior.smart_workspace`). It
+  learns from windows the core itself places and focuses, keeps one entry per
+  app id (no title granularity), and never overrides a rule that pins a
+  workspace.
+- `canvas <dx> <dy>` only moves floating windows of the active workspace; tiled
+  windows are untouched and each window stops at the output edge, so a canvas
+  with windows already against both edges does not move.
 - Veyron Recall saves and restores validated TOML through `veyronctl session
   save|restore`. Restore recreates policy state in the core; it does not launch
   applications or reconnect restored records to future client surfaces.

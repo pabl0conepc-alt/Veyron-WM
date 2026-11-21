@@ -141,6 +141,9 @@ pub enum Action {
     ToggleFloating,
     /// Scroll the focused column into the center of the viewport.
     CenterColumn,
+    /// Move every floating window of the active workspace together, stopping
+    /// each one at the output edges (the "canvas" gesture).
+    CanvasPan { dx: i32, dy: i32 },
     /// Snap the focused window to a screen zone, floating it when needed.
     Snap { zone: SnapZone },
     /// Toggle picture-in-picture for the focused window.
@@ -173,6 +176,36 @@ impl Action {
         };
 
         match head.to_ascii_lowercase().as_str() {
+            "canvas" | "canvas-pan" => {
+                let mut parts = rest.split_whitespace();
+                let dx = parts
+                    .next()
+                    .ok_or_else(|| ActionParseError::new("canvas needs a horizontal offset"))?
+                    .parse::<i32>()
+                    .map_err(|_| {
+                        ActionParseError::new(format!(
+                            "canvas needs an integer x offset, got '{rest}'"
+                        ))
+                    })?;
+                let dy = parts
+                    .next()
+                    .ok_or_else(|| ActionParseError::new("canvas needs a vertical offset"))?
+                    .parse::<i32>()
+                    .map_err(|_| {
+                        ActionParseError::new(format!(
+                            "canvas needs an integer y offset, got '{rest}'"
+                        ))
+                    })?;
+                if parts.next().is_some() {
+                    return Err(ActionParseError::new(
+                        "canvas takes exactly two offsets: canvas <dx> <dy>",
+                    ));
+                }
+                if dx == 0 && dy == 0 {
+                    return Err(ActionParseError::new("canvas offsets cannot both be zero"));
+                }
+                Ok(Action::CanvasPan { dx, dy })
+            }
             "close" | "close-window" => without_argument(rest, Action::Close),
             "focus" => {
                 let value = rest.to_ascii_lowercase();
@@ -371,6 +404,7 @@ impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Action::Close => f.write_str("close"),
+            Action::CanvasPan { dx, dy } => write!(f, "canvas {dx} {dy}"),
             Action::Focus { direction } => write!(f, "focus {direction}"),
             Action::Move { direction } => write!(f, "move {direction}"),
             Action::MoveFloating { direction, delta } => {
@@ -427,6 +461,7 @@ mod tests {
     fn every_action_round_trips_through_text() {
         let actions = vec![
             Action::Close,
+            Action::CanvasPan { dx: 40, dy: -20 },
             Action::Focus {
                 direction: Direction::Left,
             },
