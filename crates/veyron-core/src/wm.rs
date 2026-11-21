@@ -1735,9 +1735,7 @@ impl Wm {
 
     fn switch_workspace(&mut self, index: usize) -> bool {
         let output_index = self.active_output;
-        if index >= MAX_INDEXED_WORKSPACES
-            && index >= self.outputs[output_index].workspaces.len()
-        {
+        if index >= MAX_INDEXED_WORKSPACES && index >= self.outputs[output_index].workspaces.len() {
             return false;
         }
         // Workspaces are created on demand up to the index (bounded above so a
@@ -2026,9 +2024,7 @@ impl Wm {
             return false;
         }
         let output_index = self.active_output;
-        if index >= MAX_INDEXED_WORKSPACES
-            && index >= self.outputs[output_index].workspaces.len()
-        {
+        if index >= MAX_INDEXED_WORKSPACES && index >= self.outputs[output_index].workspaces.len() {
             return false;
         }
         while self.outputs[output_index].workspaces.len() <= index {
@@ -2821,7 +2817,10 @@ mod tests {
         assert_eq!(wm.workspace_count(), 1);
         assert_eq!(wm.focused_window(), Some(id));
         // Ordinary indexes keep working.
-        assert!(wm.dispatch(Action::Workspace { index: 9 }).workspace_changed);
+        assert!(
+            wm.dispatch(Action::Workspace { index: 9 })
+                .workspace_changed
+        );
         assert_eq!(wm.workspace_count(), 9);
     }
 

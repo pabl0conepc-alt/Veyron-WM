@@ -1014,7 +1014,10 @@ fn a_window_opened_behind_a_fullscreen_window_is_still_configured() {
     let configure = second.wait_for_configure();
     let state = harness.state();
     let window = state.windows.last().expect("the second window is tiled");
-    assert_eq!([configure.width, configure.height], [window.rect[2], window.rect[3]]);
+    assert_eq!(
+        [configure.width, configure.height],
+        [window.rect[2], window.rect[3]]
+    );
 }
 
 #[test]
