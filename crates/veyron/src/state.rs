@@ -86,6 +86,9 @@ use crate::{
     ipc::Job,
 };
 
+/// Linux input event code of the left mouse button.
+const BTN_LEFT: u32 = 0x110;
+
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
 
@@ -435,11 +438,22 @@ impl Veyron {
     where
         E: PointerButtonEvent<WinitInput>,
     {
-        if event.state() == ButtonState::Released && self.drag.take().is_some() {
-            // The press that started the drag was never sent to the client.
+        // Only the left button ends a drag: the press that started it was never
+        // sent to the client, while other buttons pressed meanwhile were, and
+        // swallowing their release would leave them stuck in that client.
+        if event.state() == ButtonState::Released
+            && event.button_code() == BTN_LEFT
+            && self.drag.take().is_some()
+        {
             return;
         }
-        if event.state() == ButtonState::Pressed {
+        // A click on a panel, OSD or notification above the windows belongs
+        // to that layer surface; it must not focus, raise or drag the window
+        // underneath.
+        let over_layer = self
+            .layer_surface_under(self.pointer_location, &[Layer::Overlay, Layer::Top])
+            .is_some();
+        if event.state() == ButtonState::Pressed && !over_layer {
             if let Some(drag) = self.begin_drag(event.button_code()) {
                 self.drag = Some(drag);
                 return;
@@ -479,7 +493,6 @@ impl Veyron {
     /// button is pressed with `super` held. Tiled windows are left to the
     /// layout, so the press is forwarded to them as usual.
     fn begin_drag(&mut self, button: u32) -> Option<(WindowId, Point<f64, Logical>)> {
-        const BTN_LEFT: u32 = 0x110;
         if button != BTN_LEFT || !self.keyboard.modifier_state().logo {
             return None;
         }
