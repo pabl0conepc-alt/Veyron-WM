@@ -38,7 +38,8 @@ Last updated: 2026-11-21
 | Current standalone tests | Not run | Nix toolchain fetch estimated 558.5 MiB download/1.9 GiB unpacked and was interrupted before rustc started. |
 | Full executable build | Not verified | Prior attempts were stopped due memory/swap pressure. |
 | Nested compositor / real client | Not verified | No executable/runtime evidence. |
-| CI run 44921522852 | Failed at Clippy | `clippy::while-let-loop` in `src/main.rs:188`; format passed; test and release build steps were skipped. The lint fix is in progress. |
+| CI run 44921522852 | Failed at Clippy | `clippy::while-let-loop` in `src/main.rs:188`; format passed; test and release build steps were skipped. Fixed in `73c18c2`. |
+| CI run 44921786860 | Failed at Format | Rustfmt requested standard indentation after the `while let` loop conversion; Clippy/tests/build were skipped. Formatting correction is in progress. |
 
 ## Changed/created this task
 
@@ -58,7 +59,7 @@ Last updated: 2026-11-21
 
 ## Exact next executable work
 
-1. Inspect CI run 44921522852 to completion and fix current-source failures.
+1. Push the formatting correction, then inspect its CI run through Clippy, tests and release build.
 2. Verify the pinned Smithay 0.7 APIs; implement an output description and stable registry connecting mapped `ToplevelSurface`s to model IDs, arrangement/configure, and surface teardown. Add real-client integration evidence once CI can build the executable.
 3. Correct pointer focus to use real hit testing and then connect input actions to window/workspace state.
 4. Keep feature statuses truthful and update the audit/matrix/plan/progress together after each milestone.

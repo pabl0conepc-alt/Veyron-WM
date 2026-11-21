@@ -186,31 +186,29 @@ fn run_nested() -> Result<(), Box<dyn Error>> {
     tracing::info!("Connect a Wayland client with WAYLAND_DISPLAY={socket_name}");
 
     while let PumpStatus::Continue = event_loop.dispatch_new_events(|event| match event {
-            WinitEvent::Input(InputEvent::Keyboard { event }) => {
-                keyboard.input::<(), _>(
-                    &mut state,
-                    event.key_code(),
-                    event.state(),
-                    0.into(),
-                    0,
-                    |_, _, _| FilterResult::Forward,
-                );
+        WinitEvent::Input(InputEvent::Keyboard { event }) => {
+            keyboard.input::<(), _>(
+                &mut state,
+                event.key_code(),
+                event.state(),
+                0.into(),
+                0,
+                |_, _, _| FilterResult::Forward,
+            );
+        }
+        WinitEvent::Input(InputEvent::PointerMotionAbsolute { .. }) => {
+            let focus = state
+                .xdg_shell_state
+                .toplevel_surfaces()
+                .iter()
+                .next()
+                .map(|surface| surface.wl_surface().clone());
+            if let Some(focus) = focus {
+                keyboard.set_focus(&mut state, Some(focus), 0.into());
             }
-            WinitEvent::Input(InputEvent::PointerMotionAbsolute { .. }) => {
-                let focus = state
-                    .xdg_shell_state
-                    .toplevel_surfaces()
-                    .iter()
-                    .next()
-                    .map(|surface| surface.wl_surface().clone());
-                if let Some(focus) = focus {
-                    keyboard.set_focus(&mut state, Some(focus), 0.into());
-                }
-            }
-            _ => {}
-        })
-    {
-
+        }
+        _ => {}
+    }) {
         let size = backend.window_size();
         let damage = Rectangle::from_size(size);
         {
