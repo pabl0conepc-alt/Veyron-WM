@@ -2,11 +2,11 @@
 
 Audit date: 2026-11-21
 Audited worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM`
-Branch/commit: `main` at `1338ebb` (`Initial commit`). The source, architecture notes and README changes in this worktree are currently uncommitted/untracked; they are treated as the authoritative user-provided working state and have been preserved.
+Audited snapshot: branch `codex/engineering-audit` at `c3963c2`; source/docs from the updated worktree are now preserved in that commit. The branch is based on `main` at `1338ebb` (`Initial commit`).
 
 ## Executive finding
 
-The current tree is an early Smithay prototype, not yet a functional desktop compositor. It has a real Rust binary entry point and nested winit/GLES initialization code, xdg-shell/SHM/seat protocol setup, a renderer loop, and separate tested Rust models for split layout, tiled/floating window state, and sparse 2D workspaces. The pure models are not connected to the xdg-shell surfaces. The only checked-in commit contains the original README; the current source and most project documents are untracked. Do not switch to, reset, or merge in the older `Veyron-WM-finish` worktree without reconciling these changes.
+The current tree is an early Smithay prototype, not yet a functional desktop compositor. It has a real Rust binary entry point and nested winit/GLES initialization code, xdg-shell/SHM/seat protocol setup, a renderer loop, and separate tested Rust models for split layout, tiled/floating window state, and sparse 2D workspaces. The pure models are not connected to the xdg-shell surfaces. The updated source and docs, which had been untracked in the previous checkout, have been preserved in commit `c3963c2` on the dedicated branch. Do not switch to, reset, or merge in the older `Veyron-WM-finish` worktree without reconciling these changes.
 
 No runtime claim is made from source inspection. The repository's own status notes record a successful Smithay `cargo check`, 25 standalone model tests, and two full-build attempts stopped under memory pressure. Those are historical records in the current tree, not rerun in this audit. The test rerun was attempted through a temporary Nix shell; Nix estimated 558.5 MiB download and 1.9 GiB unpacked, so that fetch was interrupted to protect the 4 GiB host.
 
@@ -31,7 +31,7 @@ No runtime claim is made from source inspection. The repository's own status not
 | Persistence | Inventory / `rg` | No serialized session/workspace/configuration state found. Wayland app relaunch identity is a known limitation that must be stated rather than inferred. |
 | UI/ecosystem | Inventory / `rg` | No panel, launcher, notifications, settings app, plugin manager, or integrated desktop service found. |
 | Tests | source `#[test]` inventory and current docs | 10 layout + 6 window-manager + 9 spatial-desktop = 25 model tests. They are embedded in source modules and do not exercise Smithay. No Rust integration-test directory or CI workflow found. |
-| Tooling/package | file inventory | No Nix flake/package, reproducible runtime package, CI workflow, benchmark harness, dependency audit, or license audit found in this current checkout. |
+| Tooling/package | file inventory and `.github/workflows/ci.yml` | A GitHub CI workflow now runs fmt/Clippy/tests/release build; its first runs are fixing pre-existing source/test issues. No Nix package, benchmark harness, dependency audit, or license audit exists. |
 | Documentation | README, ARCHITECTURE, ROADMAP, PROJECT_STATUS, KNOWN_ISSUES, PERFORMANCE, DEVELOPMENT_LOG, PHASE0 report, ADR | Phase 0 research exists. Phase notes contain build and resource constraints. New audit/matrix/plan/progress documents are being added by this task. |
 
 ## Module map and actual responsibilities
@@ -71,7 +71,7 @@ The individual 187 requested product/ecosystem features are recorded in [`VEYRON
 
 ## Validation record
 
-- This audit is based on source/docs/file inventory in the current local worktree, not the previous `Veyron-WM-finish` checkout.
+- This audit is based on source/docs/file inventory in branch `codex/engineering-audit`, not the previous `Veyron-WM-finish` checkout.
 - Historical project record: `cargo check` succeeded for an earlier state; executable build did not complete safely; 25 pure model tests reportedly passed.
 - Current audit attempt to rerun standalone model tests: not completed. Temporary Nix shell estimated 558.5 MiB network transfer / 1.9 GiB unpacked; fetch was stopped before compilation. No current-pass claim is made.
 - Runtime, real client rendering, window arrangement, input behavior, GPU acceleration and desktop-service integrations remain unverified.

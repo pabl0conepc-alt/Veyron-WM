@@ -12,7 +12,7 @@ Last updated: 2026-11-21
 
 ## Current phase
 
-**Phase 1 — Repository discovery, feature matrix and implementation plan.** The current code and documentation audit is recorded in `VEYRON_AUDIT.md`; all 187 requested feature rows are in `VEYRON_FEATURE_MATRIX.md`; dependency ordering is in `VEYRON_IMPLEMENTATION_PLAN.md`. GitHub Actions run 44921522852 is validating the current source. After it completes, use that result as build/test evidence, fix failures, then start the core surface/output integration.
+**Phase 1 — Repository discovery, feature matrix and implementation plan.** The current code and documentation audit is recorded in `VEYRON_AUDIT.md`; all 187 requested feature rows are in `VEYRON_FEATURE_MATRIX.md`; dependency ordering is in `VEYRON_IMPLEMENTATION_PLAN.md`. GitHub Actions run 44921896407 passed format but caught one more Clippy lint; tests and release build have not yet run. A corrected test fixture is being pushed for another run.
 
 ## Implemented / evidence-backed
 
@@ -40,6 +40,7 @@ Last updated: 2026-11-21
 | Nested compositor / real client | Not verified | No executable/runtime evidence. |
 | CI run 44921522852 | Failed at Clippy | `clippy::while-let-loop` in `src/main.rs:188`; format passed; test and release build steps were skipped. Fixed in `73c18c2`. |
 | CI run 44921786860 | Failed at Format | Rustfmt requested standard indentation after the `while let` loop conversion; Clippy/tests/build were skipped. Formatting correction is in progress. |
+| CI run 44921896407 | Failed at Clippy | `field-reassign-with-default` in the overflow test at `src/window/desktop.rs:458`; format passed; test and release build were skipped. Test fixture correction is in progress. |
 
 ## Changed/created this task
 
@@ -65,4 +66,4 @@ Last updated: 2026-11-21
 4. Keep feature statuses truthful and update the audit/matrix/plan/progress together after each milestone.
 5. Keep this work separate from the older PR #1 until its changes are reconciled; do not merge either PR without the user's review.
 
-- Added `.github/workflows/ci.yml` on branch `codex/engineering-audit` as the first build-safety increment. GitHub-hosted CI runs formatting, Clippy, all-target tests, and a release build outside the memory-constrained netbook.
+- Added `.github/workflows/ci.yml` on branch `codex/engineering-audit` as the first build-safety increment. Runs 44921522852–44921896407 validated workflow setup/format but exposed existing code/test lints; no test or release build has passed yet.

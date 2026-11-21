@@ -296,6 +296,6 @@ Each feature row names its current code owner, concrete gap, proving test, and n
 
 - Files inspected: `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml`, `src/main.rs`, `src/window/{layout,manager,desktop}.rs`, `README.md`, `ARCHITECTURE.md`, `ROADMAP.md`, `PROJECT_STATUS.md`, `KNOWN_ISSUES.md`, `PERFORMANCE.md`, `DEVELOPMENT_LOG.md`, `docs/PHASE0_RESEARCH.md`, `docs/decisions/0001-compositor-foundation.md`.
 - Existing source tests: 10 layout + 6 window-manager + 9 spatial-desktop = 25 pure-model tests. They do not exercise Smithay integration.
-- No Cargo integration tests, CI workflow, flake/package, config schema, IPC, output management, input device management, animation/effects pipeline, shell UI, or plugin framework were found in the current worktree inventory.
+- No Cargo integration tests, flake/package, config schema, IPC, output management, input device management, animation/effects pipeline, shell UI, or plugin framework were found. A GitHub workflow for fmt/Clippy/tests/release build was added in commit `c3963c2`; its first runs are fixing existing gates, so no successful full run is recorded yet.
 - Phase 0 research/ADR are documented; Phase 1 executable/runtime smoke is still open. Renderer backend selection is source evidence only; physical GLES acceleration is unverified.
 - Architecture-specific module audit and prioritized dependencies are in `VEYRON_AUDIT.md` and `VEYRON_IMPLEMENTATION_PLAN.md`.

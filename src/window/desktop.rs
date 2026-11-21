@@ -455,8 +455,10 @@ mod tests {
 
     #[test]
     fn coordinate_overflow_does_not_change_active_position() {
-        let mut desktop = SpatialDesktop::default();
-        desktop.active = position(i32::MAX, 0);
+        let mut desktop = SpatialDesktop {
+            active: position(i32::MAX, 0),
+            ..SpatialDesktop::default()
+        };
         let before = desktop.active_position();
 
         assert_eq!(

@@ -41,8 +41,8 @@
 
 ### 1. Core Architecture and build gate
 
-- [ ] Reconcile the untracked current source into a reviewable versioned baseline without dropping README edits; record exact `git status` and base commit in progress.
-- [ ] Establish a safe CI build/test/fmt/clippy workflow so full Smithay compilation occurs away from the 4 GiB target.
+- [x] Reconcile the updated source/docs into a reviewable branch commit `c3963c2` without dropping README edits; record the base and branch in progress.
+- [x] Add a safe CI build/test/fmt/clippy workflow so full Smithay compilation occurs away from the 4 GiB target. Runs 44921522852–44921896407 caught format/Clippy issues before tests/build; wait for a complete passing run before treating the build gate as verified.
 - [ ] Re-run current `cargo check`, model tests, then build under a measured safe limit; keep Phase 1 open until executable launch evidence exists.
 
 ### 2. Wayland Protocol Infrastructure and outputs
