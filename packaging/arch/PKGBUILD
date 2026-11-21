@@ -18,7 +18,7 @@ url='https://github.com/pabl0conepc-alt/Veyron-WM'
 license=('MIT')
 # libwayland-client, libxkbcommon and libEGL are loaded with dlopen at runtime,
 # so they are runtime dependencies even though the binary does not link them.
-depends=('gcc-libs' 'glibc' 'libffi' 'libglvnd' 'libxkbcommon' 'wayland')
+depends=('glibc' 'libffi' 'libgcc' 'libglvnd' 'libxkbcommon' 'wayland')
 makedepends=('cargo' 'git' 'pkgconf')
 optdepends=('mesa: EGL/GLES driver for the nested renderer')
 provides=('veyron-wm')

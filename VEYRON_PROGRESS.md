@@ -65,8 +65,16 @@ headless real-client tests pass, including a new theme-over-IPC test.
   `archlinux:latest` container against the commit under test, plus
   `.SRCINFO` diff against `makepkg --printsrcinfo`, `desktop-file-validate`,
   `namcap` (informational) and a `pacman -U` install smoke test.
-- Verified: CI result pending (no local `makepkg`; nothing run on a real Arch
-  machine). The repository has no LICENSE file, so the package ships none.
+  Raising the MSRV enabled clippy's `chunks_exact_to_as_chunks` lint; the
+  headless test now uses `as_chunks`.
+- Verified in CI only (no local `makepkg`, no real Arch machine): the Arch job
+  passes; `.SRCINFO` matches `makepkg --printsrcinfo`, the release build and
+  all workspace tests (including the 8 headless real-client tests) pass in
+  `check()`, and the installed package runs `veyron --version`/`--help`.
+  Not verified: running the nested compositor on an Arch desktop.
+- namcap reports the missing license file (the repository has no LICENSE,
+  so the package ships none) and flags the dlopen'ed libraries as "may not
+  be needed", which is expected.
 
 ## Feature matrix (summary)
 
