@@ -11,7 +11,7 @@ the prior flat prototype as the active implementation.
 
 - Active worktree: `/home/pablo/Documents/Codex/2026-11-19/lsi/outputs/Veyron-WM-current-main`
 - Branch: `codex/current-main-audit`, based on `origin/main` at `ed18b75`.
-- Latest pushed commit: `70bc7d1 test: use generated layer anchor names`.
+- Latest pushed code commit: `85e5754 fix: reserve layer-shell exclusive work area`.
 - Draft PR: none yet; create after implementation and checks are reviewed/green.
 - User instruction: **no agents**. Continue solo, only on Veyron-WM, and do not merge a PR.
 - Old checkouts remain preserved: `outputs/Veyron-WM` on `codex/engineering-audit`
@@ -26,8 +26,8 @@ nested Winit/GLES runtime, headless Wayland server and CLI). Detailed documents:
 `VEYRON_AUDIT.md`, `VEYRON_FEATURE_MATRIX.md` (187 rows),
 `VEYRON_IMPLEMENTATION_PLAN.md`, and this file.
 
-Current gaps include layer exclusive zones not reducing tiled usable area,
-incomplete pointer/popup/layer routing, client fullscreen requests not applied,
+Current gaps include incomplete pointer/popup/layer routing, client fullscreen
+requests not applied,
 Recall not reconciling restored records with future real clients, reload IPC
 reporting success on failure, protocol version not transmitted, uncapped IPC
 peer threads, no native graphical ecosystem/Studio/gesture recognizer/XWayland,
@@ -49,10 +49,12 @@ and no target visual/performance evidence. See audit and matrix for details.
   expected executable at that path. The Wayland runtime wrappers remain in
   `postInstall`.
 - Added `wayland-protocols-wlr` as a test dependency and a real Wayland-client
-  regression for a top layer surface with a 24 px exclusive zone. The client
-  test creates a panel, maps a toplevel, and compares the configured height.
-  Test scaffolding is committed in `e46bc78`/`70bc7d1`; no compositor or core
-  implementation change has been made for this behavior yet.
+  regression for a mapped top layer surface with a 24 px exclusive zone. Test
+  scaffolding is in `e46bc78`, `70bc7d1`, and `353eb1f`.
+- Implemented output work areas in `85e5754`: the physical output rectangle
+  remains separate from its usable work area; Smithay's layer map supplies the
+  non-exclusive zone; workspaces reflow and floating windows clamp when the
+  area changes. Added a core regression for work-area updates.
 - Created current-tree audit, 187-row matrix, implementation plan, and progress
   checkpoint. Some matrix rows are generated from category-level evidence;
   refine per-feature module/test/next-action specificity before treating the
@@ -81,23 +83,21 @@ and no target visual/performance evidence. See audit and matrix for details.
   the custom install phase could not find `target/release/veyron`.
 - Commit `f9f2105` passed both jobs in run `44932470919`: standard format,
   Clippy, build and tests, plus the reproducible Nix package build and tests.
-- Layer-shell regression currently supplies red evidence: Actions run
-  `44936140199` passed format, Clippy, and build, then failed the headless test
-  in both standard and Nix jobs. The measured configured-height difference is
-  0 px instead of the expected 24 px. This confirms that layer exclusive zones
-  are not reaching the core layout viewport.
+- Layer-shell test-first evidence: run `44937098387` failed in both standard
+  and Nix tests; the mapped 24 px panel reduced toplevel height by 0 px. After
+  the work-area implementation, run `44937377591` passed both jobs: standard
+  format, Clippy, build and tests, plus the reproducible Nix package build and
+  tests.
 - The shell has Nix but no `cargo`/`rustc` on PATH. Do not fetch a large compiler
   closure onto the 4 GiB netbook; use GitHub Actions for full build/test/Clippy.
 - No nested visual session or target GPU/performance measurements were run.
 
-## Exact next work
+## Exact next work (checkpoint at `85e5754`)
 
 1. Review/refine all 187 matrix entries against the latest source and tests.
-2. Implement a core output work-area API and synchronize Smithay's
-   `LayerMap::non_exclusive_zone()` after layer commits, creation/destruction,
-   and output resize. Keep the physical output rectangle separate. Make the
-   real-client test in run `44936140199` green before proceeding to pointer
-   routing/popup grabs/client fullscreen in separate steps.
+2. Improve compositor input routing for child, popup and layer surfaces; then
+   add popup grab/reposition and client fullscreen behavior with isolated
+   protocol regressions. The current pointer path targets toplevel roots only.
 3. Fix IPC reload error reporting, wire-level version negotiation and per-peer
    resource limits; add regression tests.
 4. Reconcile Recall restore state with later Wayland client surfaces; test actual

@@ -31,8 +31,8 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
 
 ## Branch and CI
 
-- Current active branch's latest pushed commit: `70bc7d1`, which corrects
-  generated layer-shell anchor names in the integration test.
+- Current active branch's latest pushed code commit: `85e5754`, which reserves
+  layer-shell exclusive zones in the usable output work area.
 - Nix runtime library lookup was fixed in `253a901`. Its package tests then
   reached all headless clients, where a parallel filename collision occurred.
 - Test-only commit `0eaa47d` added a deterministic repeated-clock regression;
@@ -41,16 +41,16 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
   passed headless tests but failed at the custom `target/release/veyron` install
   path. Commit `f9f2105` switches to Cargo's install hook; run `44932470919`
   passed both standard CI and the Nix package job.
-- Layer-shell test scaffolding is in `e46bc78` and `70bc7d1`. Run
-  `44936140199` passes Format, Clippy, and Build, but both standard and Nix test
-  jobs fail the new real-client test: a 24 px top exclusive zone changes the
-  toplevel height by 0 px. No compositor/core implementation change has been
-  made yet. The next step is a core output work-area API synchronized from
-  Smithay `LayerMap::non_exclusive_zone()` on layer commit/map/unmap and resize.
+- Layer-shell test scaffolding is in `e46bc78`, `70bc7d1` and `353eb1f`.
+  Run `44937098387` proved the bug: a mapped 24 px top exclusive zone changed
+  the toplevel height by 0 px. Commit `85e5754` adds a separate core output
+  work area and synchronizes it from Smithay's `non_exclusive_zone()` after
+  layer changes and output resizing. Run `44937377591` passes both standard
+  and Nix jobs, including the real-client regression.
 - No PR for `codex/current-main-audit` has been created yet. Once implementation
   and checks are reviewed/green, create a draft PR and leave it unmerged.
 
-## Current implementation checkpoint
+## Current implementation checkpoint (`85e5754`, CI green)
 
 - Audit artifacts are being prepared in the active worktree:
   `VEYRON_AUDIT.md`, `VEYRON_FEATURE_MATRIX.md` (187 prompt rows),
@@ -61,8 +61,7 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
   Wayland client tests, CLI/IPC, layer shell, smart workspace, canvas action,
   profiles, motion, overview reporting and session export/import.
 - Known gaps are listed in `VEYRON_AUDIT.md` and `VEYRON_PROGRESS.md`. Highest
-  code priorities are: apply layer exclusive zones to the
-  usable viewport; improve popup/subsurface/layer input and client fullscreen;
+  code priorities are: improve popup/subsurface/layer input and client fullscreen;
   reconcile session restore to actual clients; fix reload error response and
   on-wire IPC versioning/concurrency cap.
 
@@ -79,12 +78,17 @@ engineering prompt and `VEYRON_PROGRESS.md` before resuming.
 
 ## Exact next steps
 
-1. Implement the layer-shell output work-area bridge described above. Keep the
-   physical output bounds intact and reflow tiled clients inside the usable
-   rectangle. Make the failing real-client regression pass in full CI.
-2. Review all 187 feature rows against actual source and tests; refine generic
+1. Review all 187 feature rows against actual source and tests; refine generic
    file/test/next-action columns before committing the matrix.
-3. Continue phases in `VEYRON_IMPLEMENTATION_PLAN.md`; do not call project
-   complete while runtime, performance, or listed integration work is open.
-4. Commit/push coherent increments on `codex/current-main-audit`; prepare a
-   draft PR after CI is green. Never merge without explicit request.
+2. Continue phases in `VEYRON_IMPLEMENTATION_PLAN.md`; first address compositor
+   input routing for popup/subsurface/layer surfaces and client fullscreen,
+   adding focused real-client regressions for each behavior.
+3. Fix IPC reload error reporting, wire-level version negotiation and per-peer
+   resource limits, with tests.
+4. Reconcile Recall restore state with later Wayland client surfaces; test
+   actual client matching and document application limitations.
+5. Fix sparse overview coordinate/size overflow with boundary tests.
+6. Do not call project complete while runtime, performance, or listed
+   integration work is open.
+7. Commit/push coherent increments on `codex/current-main-audit`; prepare a
+   draft PR after CI is green. Never merge without explicit user request.

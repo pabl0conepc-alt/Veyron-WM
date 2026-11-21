@@ -1,7 +1,7 @@
 # Veyron WM engineering audit
 
 Audit started at `ed18b75` on 2026-11-21 and was refreshed on branch
-`codex/current-main-audit` through `70bc7d1`. The repository had advanced well
+`codex/current-main-audit` through `85e5754`. The repository had advanced well
 beyond the earlier flat prototype: the current source is a three-crate Rust
 workspace. This document records code-backed behavior, not feature names or
 README claims.
@@ -51,10 +51,11 @@ README claims.
 3. `crates/veyron-core/src/overview.rs`: sparse `i64` workspace-coordinate
    deltas are cast to `i32`, and `tile.w + gap` / `tile.h + gap` can overflow at
    extreme input sizes. This needs bounded/saturating arithmetic and edge tests.
-4. `crates/veyron/src/state.rs`: layer exclusive zones do not reduce the core
-   usable viewport; pointer hit testing misses child/popup surfaces and layer
-   surfaces; popup grab/reposition handlers are no-ops; client fullscreen
-   requests are accepted without applying a fullscreen state change.
+4. `crates/veyron/src/state.rs`: layer exclusive zones now reduce the core
+   usable viewport (`85e5754`); pointer hit testing still misses child/popup
+   surfaces and layer surfaces; popup grab/reposition handlers are no-ops;
+   client fullscreen requests are accepted without applying a fullscreen state
+   change.
 5. Session restore has no pending-client match/reconciliation, so restored
    metadata can become ghost windows or duplicate later client surfaces.
 6. IPC's declared version is a constant only, not a wire-level handshake;
@@ -93,9 +94,11 @@ README claims.
    installation before failing on the custom `target/release/veyron` path.
    Commit `f9f2105` replaces that install phase with the Cargo install hook;
    run `44932470919` passed both standard and Nix jobs.
-- A real-client top-panel regression in `e46bc78`/`70bc7d1` fails in both CI
-  jobs at `44936140199`: a 24 px exclusive zone changes client height by 0 px.
-  This is the current red test; the core usable-area bridge is not implemented.
+- A real-client top-panel regression in `e46bc78`/`70bc7d1`/`353eb1f` first
+  failed at `44937098387`: a mapped 24 px exclusive zone changed client height
+  by 0 px. The core usable-area bridge landed in `85e5754`; run `44937377591`
+  passed standard and Nix jobs. Child/popup/layer input and fullscreen remain
+  open integration gaps.
 
 ## Audit conclusion
 

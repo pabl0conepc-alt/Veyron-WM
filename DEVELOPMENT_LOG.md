@@ -5,14 +5,12 @@
 - Added `wayland-protocols-wlr` to the `veyron` integration-test dependencies
   and a real Wayland client that creates a top panel with a 24 px exclusive
   zone, then maps a tiled toplevel.
-- Actions run `44936140199` confirms the current defect in both standard and
-  Nix test jobs: configured client height changes by 0 px instead of 24 px.
-  Format, Clippy, and Build pass. The red test is committed in `e46bc78` and
-  protocol naming correction in `70bc7d1`.
-- No compositor/core behavior has been changed yet. Next implement output
-  work-area state separately from physical output bounds, synchronize it from
-  Smithay `LayerMap::non_exclusive_zone()` on layer lifecycle/commits and
-  resize, and make this real-client test green.
+- Test-first evidence: Actions run `44937098387` failed the real-client test in
+  standard and Nix jobs; configured client height changed by 0 px instead of
+  24 px. The test setup was corrected in `e46bc78`, `70bc7d1` and `353eb1f`.
+- Resolved by `85e5754`: output work-area state stays separate from physical
+  bounds and synchronizes from Smithay `LayerMap::non_exclusive_zone()` across
+  layer lifecycle/commits and resize. Run `44937377591` passed both CI jobs.
 
 ## 2026-11-21 — Nix headless test runtime and SHM collision
 
@@ -403,3 +401,16 @@
   `Wm::config().profiles`.
 - `Profile::validate` now rejects whitespace with a single check; the separate
   leading/trailing-whitespace branch could never fire after it.
+
+## 2026-11-21 — Layer-shell exclusive work area
+
+- Added a regression using a mapped 24 px top panel; before the fix, the real
+  toplevel received no height reduction (CI run `44937098387`).
+- Added an output work area separate from physical output bounds. Layer map
+  non-exclusive zones now update core workspaces, reflow tiled windows and
+  clamp floating geometry after layer changes and output resize (`85e5754`).
+- Verification: GitHub Actions run `44937377591` passed standard format,
+  Clippy, build and tests, and passed the reproducible Nix package job/tests.
+- Next: review the 187-feature matrix; improve child/popup/layer input routing,
+  popup grabs/reposition and client fullscreen. Then address IPC error/version/
+  connection limits, Recall-client reconciliation, and overview bounds.

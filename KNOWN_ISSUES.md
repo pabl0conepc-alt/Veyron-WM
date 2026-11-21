@@ -35,9 +35,9 @@
   directly. It refuses `Terminal=true` entries, ignores desktop actions and does
   not use D-Bus activation, so applications relying on either need an explicit
   `spawn` binding.
-- `zwlr_layer_shell_v1` surfaces render with their exclusive zones and receive
-  frame callbacks, but their exclusive zones do not reduce the core tiled
-  viewport. Pointer input is routed to toplevel roots only: panels, popups,
+- `zwlr_layer_shell_v1` exclusive zones reduce the core tiled viewport and
+  reflow windows (`85e5754`, Actions run `44937377591`). Pointer input is routed
+  to toplevel roots only: panels, popups,
   subsurfaces, OSDs and notifications cannot receive normal pointer targeting.
   Keyboard interactivity on layer surfaces is not implemented.
 - The workspace overview is geometry plus IPC (`veyronctl overview`); the

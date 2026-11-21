@@ -1,7 +1,7 @@
 # Veyron WM feature matrix
 
 Source inventory baseline: `ed18b75` (2026-11-21), refreshed on active branch
-`codex/current-main-audit` through `70bc7d1`. The prior flat-prototype matrix was
+`codex/current-main-audit` through `85e5754`. The prior flat-prototype matrix was
 not reused as evidence; only its prompt-derived feature names were carried
 forward. `IMPLEMENTED` requires code, real integration, and relevant validation.
 Headless protocol evidence is identified separately from visible/GPU runtime evidence.
@@ -18,11 +18,11 @@ Headless protocol evidence is identified separately from visible/GPU runtime evi
 Validation note: standard CI passed at `ed18b75`; affinity regressions passed on
 `de011c3`. Nix dynamic library lookup, the parallel SHM filename collision, and
 the package install hook were fixed in `253a901`, `bf79323`, and `f9f2105`.
-Both jobs passed in run `44932470919`. The new layer-shell client regression in
-`44936140199` fails in both standard and Nix test jobs (0 px height change for a
-24 px zone), exposing missing compositor/core work-area synchronization. No
-local Rust build or nested GPU session was run. The target runtime/GPU remains
-unverified.
+Both jobs passed in run `44932470919`. A mapped layer-shell client regression
+first failed in `44937098387` (0 px height change for a 24 px zone). The fix in
+`85e5754` adds core work-area synchronization; run `44937377591` passes standard
+and Nix jobs. No local Rust build or nested GPU session was run. The target
+runtime/GPU remains unverified.
 
 ## 3.1 Window Management
 

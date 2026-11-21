@@ -1,7 +1,7 @@
 # Veyron WM implementation plan
 
 Plan target: updated repository baseline `ed18b75` and active work branch
-`codex/current-main-audit` through `70bc7d1`. This worktree is based on the updated three-crate
+`codex/current-main-audit` through `85e5754`. This worktree is based on the updated three-crate
 workspace. The older flat-prototype branch is preserved separately and is not
 the implementation base.
 
@@ -14,7 +14,7 @@ evidence.
 |---|---|---|---|---|
 | 0 | Repository discovery and feature audit | Three crates, Smithay 0.7/calloop, docs and tests inventoried. | Keep audit, 187-row matrix, plan and progress aligned with updated `origin/main`; distinguish policy, protocol, visual and hardware evidence. | Active |
 | 1 | Core architecture | Protocol-free Wm/config/action/session plus compositor adapter exist. | Smart affinity now updates after manual workspace/output moves and late identity; standard CI passes. Still bound overview arithmetic and add edge tests; keep single source of truth for window/output state. | In progress |
-| 2 | Wayland protocol infrastructure | xdg-shell, SHM, seat, output globals, layer shell, data device, headless real clients. A top-panel test now fails with 0 px reserved for its 24 px exclusive zone. | Add core work-area state and sync Smithay `non_exclusive_zone` on commits, layer lifecycle, and output resize; then route input to child/popup/layer surfaces and implement popup grabs/reposition and client fullscreen. | Highest integration priority |
+| 2 | Wayland protocol infrastructure | xdg-shell, SHM, seat, output globals, layer shell, data device, headless real clients. Exclusive zones now reserve usable area (`85e5754`, CI `44937377591`). | Route input to child/popup/layer surfaces; implement popup grabs/reposition and client fullscreen with real-client regressions. | Highest integration priority |
 | 3 | Rendering infrastructure | Nested GLES scene graph, damage tracking, buffer-age fallback, event-driven redraw. | Verify resize/damage scheduling and idle wakeups; expose runtime evidence; apply alpha/opacity policy; only add GPU effects after a tested path. Keep headless renderer explicitly separate. | High |
 | 4 | Window management | Core supports strip, layouts, floating, rules, snap/PiP, groups, scratchpad, focus history; adapter configures snapshots. | Add client-level tests for more policies, client fullscreen/modal behavior, and input-driven move/resize; preserve constraints and focus invariants. | High |
 | 5 | Workspace management | Named and sparse 2D workspaces, transfer, output policy, overview geometry and CLI report. | Test named/persistent workspace lifecycle and resize; define visible overview interaction; verify output migration against backend events. | High |
@@ -33,20 +33,19 @@ evidence.
 ## Immediate execution queue
 
 1. **Done:** fix smart workspace affinity after manual workspace/output moves
-   and late identity routing. Standard CI passed at `de011c3`.
-2. **Under verification:** fix Nix test/runtime dynamic-library lookup from the
-   `NoWaylandLib` failure; inspect run `44926821591`.
-3. Update `PROJECT_STATUS.md`, this plan, the feature matrix, `VEYRON_AUDIT.md`,
-   and `VEYRON_PROGRESS.md` for the active branch at `253a901`.
-4. Implement layer-exclusive usable area and add a headless real-client test;
-   then tackle pointer routing/popups and client fullscreen.
-5. Add structured config-reload error responses, wire-level IPC versioning, and
-   a bounded IPC connection policy with regression tests.
-6. Fix session restore/client matching and test the restored state against real
-   clients; retain the documented limitation that the compositor cannot force
-   arbitrary Wayland apps to restore private session state.
-7. Continue through the remaining phases in dependency order. Keep target GPU
-   visual/performance requirements open until measured on the netbook.
+   and late identity routing; standard CI passed at `de011c3`.
+2. **Done:** fix Nix runtime library discovery, SHM path collisions and install
+   hook; standard and Nix jobs passed at `f9f2105`.
+3. **Done:** add core output work areas and synchronize Smithay layer-shell
+   exclusive zones. The real mapped-panel regression and both CI jobs pass at
+   `85e5754` (`44937377591`).
+4. Review and refine all 187 feature-matrix rows against concrete source/tests.
+5. Improve pointer routing for subsurface/popup/layer surfaces; implement popup
+   grabs/reposition and client fullscreen with focused real-client tests.
+6. Fix IPC reload errors, on-wire versioning and peer limits; reconcile Recall
+   with future clients; fix overview arithmetic bounds.
+7. Continue remaining phases. Keep nested visual/performance evidence open
+   until measured on the target netbook.
 
 ## Project constraints
 

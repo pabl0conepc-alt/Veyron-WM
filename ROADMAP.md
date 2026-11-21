@@ -88,7 +88,8 @@ scheduling, and measured behavior. Blur and transparency remain optional.
 - [x] Resolve installed XDG desktop entries and launch them with
   `veyronctl launch <NAME>`, refusing entries that need a terminal.
 - [x] Serve `zwlr_layer_shell_v1` so bars, notification daemons, wallpapers and
-  OSDs are ordinary clients with exclusive zones and frame callbacks.
+  OSDs are ordinary clients with exclusive zones and frame callbacks; exclusive
+  zones reduce the tiled work area and reflow windows.
 - [x] Workspace overview geometry: every workspace on the sparse grid with its
   windows scaled into a tile, exposed as `veyronctl overview [--json]`.
 - [x] Smart workspace: learned `app id -> output/workspace` affinity

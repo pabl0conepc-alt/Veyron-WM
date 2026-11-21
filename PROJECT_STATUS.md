@@ -1,7 +1,7 @@
 # Veyron WM project status
 
 Last reviewed: 2026-11-21 against updated `origin/main` commit `ed18b75` and
-active branch `codex/current-main-audit` (latest pushed commit `70bc7d1`).
+active branch `codex/current-main-audit` (latest pushed code commit `85e5754`).
 
 ## Current repository state
 
@@ -17,9 +17,8 @@ active branch `codex/current-main-audit` (latest pushed commit `70bc7d1`).
   app affinity, and session-record capture/restore.
 - The compositor runs nested Winit/GLES or headless Wayland protocol mode.
   Headless tests use real clients but do not validate visible GPU presentation.
-- Current high-priority defects: layer-shell exclusive zones do not reduce
-  tiling area;
-  pointer hit testing misses subsurface/popup/layer surfaces; popup operations
+- Current high-priority defects: pointer hit testing misses
+  subsurface/popup/layer surfaces; popup operations
   and client fullscreen behavior are incomplete; Recall does not reconcile
   restored records with future client surfaces; IPC reload can report false
   success, its version is not on-wire, and concurrent IPC peers are uncapped.
@@ -50,18 +49,11 @@ active branch `codex/current-main-audit` (latest pushed commit `70bc7d1`).
 - At `ed18b75`, Actions run [44912416024](https://github.com/pabl0conepc-alt/Veyron-WM/actions/runs/44912416024)
   passed the normal format, Clippy, build, and test job. The Nix package job
   failed because six headless client tests could not dynamically load Wayland.
-- Smart workspace affinity after manual/workspace/output moves and late identity
-  routing is fixed in `1c203fa`. Standard CI passed format, Clippy, build and
-  all tests at `de011c3` (run `44926751159`). Nix library discovery was fixed in
-  `253a901`; run `44926821591` passed standard CI and reached headless tests in
-  Nix, where one test exposed a shared-memory filename collision. The test-only
-  commit `0eaa47d` failed the expected regression test; `bf79323` adds an atomic
-  unique suffix and passed standard CI. Run `44931933845` then failed at the
-  custom install phase because `target/release/veyron` was absent. Commit
-  `f9f2105` uses the standard Cargo install hook; run `44932470919` passed both
-  standard CI and the Nix package build/test job. Layer-shell regression run
-  `44936140199` currently fails both test jobs: 24 px exclusive zone yields
-  0 px client height reduction; implementation remains pending.
+- Layer-shell test-first run `44937098387` failed in standard and Nix tests:
+  the mapped 24 px panel reduced toplevel height by 0 px. Commit `85e5754`
+  implements the core work area and Smithay synchronization. Run `44937377591`
+  passed standard format, Clippy, build and tests plus the reproducible Nix
+  package build and tests.
 - The netbook shell has Nix but no `cargo`/`rustc` on PATH. A prior compiler
   closure estimate was too large for the 4 GiB machine; continue using CI for
   full workspace validation and avoid concurrent local builds.
