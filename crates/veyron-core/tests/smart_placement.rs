@@ -129,12 +129,11 @@ fn smart_workspace_follows_a_window_moved_to_another_output() {
         .expect("add output");
 
     assert!(wm.move_focused_to_output(1));
-    assert!(
-        wm.output_snapshot(1)
+    assert!(wm
+        .output_snapshot(1)
             .expect("secondary output")
             .placement_of(first)
-            .is_some()
-    );
+            .is_some());
     assert!(wm.focus_output(0));
 
     let second = open(&mut wm, "firefox");
