@@ -77,6 +77,76 @@ assumes the nested winit output's `Flipped180` transform; if corners are
 clipped at the wrong edge, that is the first thing to check. Shadow offset
 direction depends on the pixel shader's `v_coords` orientation.
 
+## Debug pass (branch `claude/debug-pass`)
+
+A correctness review of the branch at `c18a061`, prioritising the last six
+commits, then a sweep for panics and leaks on untrusted input. Baseline
+before any change: `cargo fmt --check` clean, `clippy -D warnings` clean,
+190 tests passing. After: fmt and clippy clean, 201 tests passing (11 new
+regression tests, each seen failing before its fix). CI for `c18a061`
+already passed both jobs, including `reproducible Nix package`, so
+`flake.nix` was not changed.
+
+Bugs fixed (file:line after the fix, symptom, fix, test):
+
+| Where | Symptom | Fix | Test |
+|---|---|---|---|
+| `veyron/src/state.rs:1470` | xdg popups never got an initial configure, so menus never appeared | configure unconfigured popups on commit | `headless::popups_are_configured_and_receive_frame_callbacks` |
+| `veyron/src/state.rs:1406` | popups got no frame callbacks (separate surface trees) | send frames to each toplevel's and layer's popups | same headless test |
+| `veyron/src/state.rs:1496` | a toplevel opened behind a fullscreen window had no placement, so it was never configured and could not draw | initial configure on first commit when still unsent | `headless::a_window_opened_behind_a_fullscreen_window_is_still_configured` |
+| `veyron/src/state.rs:888` | floating windows were never configured: `resize`, snap, PiP and fullscreen of a floating window changed the model only | configure floating windows when their rect size changes | `headless::floating_geometry_changes_reach_the_client` |
+| `veyron/src/state.rs:1357` | wheel `v120` was sent as a notch count (1 instead of 120 per notch) | pass the raw v120 value | `state::tests::wheel_notches_are_reported_in_v120_units` |
+| `veyron/src/state.rs:1338` | raw-symbol matching broke chords written with the typed symbol (`super+shift+plus`) | fall back to the modified symbol | `state::tests::bindings_match_the_unshifted_key_and_fall_back_to_the_typed_symbol` |
+| `veyron/src/state.rs:1372`, `apps.rs:120` | spawned/launched children were never waited for and stayed zombies | reap each child on a 64 KiB-stack thread | `state::tests::spawned_commands_do_not_linger_as_zombies` |
+| `veyron/src/state.rs:453` | clicking an overlay/top layer surface focused/raised (or super-dragged) the window underneath | skip window focus and drag when a layer surface takes the click | none (no input injection in the harness) |
+| `veyron/src/state.rs:445` | any button release ended a super+drag and was swallowed, leaving buttons pressed during the drag stuck in the client | only the left button ends the drag | none (same reason) |
+| `veyron-core/src/wm.rs:1738`, `:2027` | `workspace 99999999` (or `move-to-workspace`) created every workspace up to it, quadratically: hang then OOM | refuse non-existing indexes past 1024 | `wm::tests::huge_workspace_indexes_are_refused_without_creating_workspaces` |
+| `veyron-core/src/session.rs:163` | a client title over 1024 bytes (or app id over 256) made every `session save` fail | truncate on a char boundary at capture | `session::tests::capture_survives_identities_longer_than_the_session_limits` |
+| `veyron-core/src/layout.rs:73` | unbounded `gap`/`outer_margin` overflowed i32 geometry (debug panic, garbage in release) | validate `0..=4096` | `config::tests::absurd_gaps_and_margins_are_rejected` |
+| `veyron-core/src/theme.rs:596` | a failed export left `.<name>.tmp` behind | remove the temporary file on error | `theme::tests::a_failed_export_leaves_no_temporary_file_behind` |
+| `veyron-ipc/src/lib.rs:378` | a response over the 64 KiB line limit (e.g. `state` with many long titles) dropped the connection with no reply | answer with an error response | `tests::an_oversized_response_is_reported_instead_of_dropping_the_connection` |
+
+Behaviour change to be aware of: a window floated by a rule is now
+configured to its floating rectangle (remembered geometry or the default
+3/5-viewport size) instead of keeping the tiled size it first received.
+
+Reviewed and found correct: `surface_under`/`layer_surface_under` origins,
+`move_floating_to`/`cycle_focus`/`move_focused_to_workspace_index`/
+`adjust_gap`/`adjust_opacity`/`apply_theme_op`, the `[theme]` validation,
+the IPC `Theme` request, `Chrome::forget_hidden`, scene element order and
+alpha (translucent surface elements report no opaque regions), and the
+`frag_map` maths: with `Flipped180`, output row = `height - gl_FragCoord.y`,
+which lands on pixel centres of `clip_rect`.
+
+Noted, not changed (doubtful or feature-sized):
+
+- The window viewport ignores layer-shell exclusive zones, so a bar such as
+  waybar overlaps tiled windows.
+- A drag restarts the position animation on every motion event, so the
+  window trails the pointer instead of tracking it; pointer focus is not
+  refreshed when a drag ends until the next motion. If the dragged window
+  closes mid-drag, motion stays swallowed until the button is released.
+- Animators of windows on hidden workspaces persist, so the workspace
+  slide-in only plays the first time a workspace is shown.
+- Subsurface commits do not call `Window::on_commit` on the root window, so
+  a desynchronised subsurface can leave the window's bounding box stale.
+- `new_layer_surface` sends the first configure before the client's initial
+  commit (anvil sends it on that commit); fine with Smithay, unverified with
+  gtk-layer-shell clients.
+- IPC: the socket is chmod-ed to 0600 after `bind` (a brief window with
+  umask permissions, inside the 0700 runtime dir); one thread per
+  connection is unbounded; `launch` scans desktop files on the compositor
+  thread.
+- Pointer coordinates are divided by the winit scale factor while the
+  output renders at scale 1; HiDPI hosts are untested.
+- Dwindle recursion depth equals the window count (a stack overflow needs
+  tens of thousands of windows).
+- Restored session windows have no surfaces but take layout slots (already
+  documented in `KNOWN_ISSUES.md`).
+
+Unverified: nothing was run on screen; the two input fixes and all
+rendering paths still need the nested-session check.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
