@@ -169,6 +169,33 @@ cannot be started from a display manager or a TTY yet: the only backend is the
 nested winit one, which needs a running Wayland or X11 session. Start it from
 inside your existing desktop as described under [Running](#running).
 
+### Debian and Ubuntu
+
+A `.deb` is built with [`cargo-deb`](https://github.com/kornelski/cargo-deb)
+from the metadata in `crates/veyron/Cargo.toml`. Distribution `rustc` packages
+are older than the 1.97 minimum, so install the toolchain with
+[rustup](https://rustup.rs):
+
+```sh
+sudo apt install build-essential pkg-config git curl \
+  libwayland-dev libxkbcommon-dev libegl-dev libffi-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install cargo-deb --locked
+cargo deb -p veyron --locked
+sudo apt install ./target/debian/veyron-wm_*.deb
+```
+
+The package installs `veyron`, `veyronctl`, the README and the Wayland session
+file, and depends on `libwayland-client0`, `libxkbcommon0`, `libegl1` and
+`libffi8` explicitly, because those libraries are opened with `dlopen` and
+`dpkg-shlibdeps` cannot see them. The same session-file caveat as on Arch
+applies: start Veyron from inside your existing desktop.
+
+CI (`.github/workflows/debian.yml`) runs the test suite, builds the package in
+`debian:trixie` and `ubuntu:24.04` containers, installs it with `apt` in a
+clean container of the same release and smoke-tests the headless compositor
+through `veyronctl`.
+
 ## Running
 
 Veyron runs **nested**: it opens a window in your current session and serves a
