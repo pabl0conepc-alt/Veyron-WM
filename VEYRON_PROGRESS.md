@@ -5,7 +5,37 @@ and `KNOWN_ISSUES.md`. States follow the master prompt: IMPLEMENTED requires
 runtime validation, which no feature has yet in a visible nested session, so
 code that compiles and passes tests is at most PARTIAL or UNVERIFIED.
 
-## This session (branch `claude/render-input-wiring`)
+## Layer-shell input and exclusive zones (branch `claude/layer-shell-input`)
+
+- **Exclusive zones shrink the viewport.** The core gained
+  `Wm::set_usable_area` (stored as `Insets` from the output edges, so it
+  survives resizes) and `OutputState::usable_area`; tiled and floating
+  windows are laid out in it. `state.rs::arrange_layers` re-arranges the
+  layer map on every layer commit, unmap/destroy and output resize and hands
+  `non_exclusive_zone()` to the core, retiling and reconfiguring on change.
+- **Fullscreen covers the whole output** (previously the margin-inset
+  viewport), and the top layer is drawn and hit-tested below a fullscreen
+  window; the overlay layer stays above.
+- **Keyboard interactivity.** `exclusive` overlay/top surfaces take the
+  keyboard while mapped (buffer attached) and give it back to the core's
+  focused window on unmap/destroy; window focus changes do not steal it and
+  compositor bindings keep working. `on_demand` surfaces (any layer) take it
+  on click; clicking or focusing a window, or a new window, takes it back.
+  `none` never gets it.
+- The first layer configure now answers the client's initial commit.
+
+Tests: fmt and clippy `-D warnings` clean; 210 tests pass (146 core unit,
+33 core integration, 10 IPC, 7 compositor unit, 14 headless). New:
+`geometry::tests::insets_*` (2),
+`wm::tests::panels_shrink_the_viewport_but_not_fullscreen`,
+`wm::tests::reserved_edges_follow_output_resizes_and_keep_floating_windows_clear`,
+`headless::a_panel_exclusive_zone_keeps_tiled_windows_clear_of_it`,
+`headless::an_exclusive_keyboard_layer_holds_the_keyboard_until_it_closes`
+(the harness client now speaks `zwlr_layer_shell_v1` and tracks
+`wl_keyboard` focus). Not tested: `on_demand` click focus (no pointer
+injection in the harness). Not visually checked with waybar, rofi or fuzzel.
+
+## Previous session (branch `claude/render-input-wiring`)
 
 Tooling: `nix develop` provides cargo 1.99 but neither clippy nor rustfmt
 (rustfmt came from `nix shell nixpkgs#rustfmt`). The headless tests need
@@ -121,7 +151,7 @@ which lands on pixel centres of `clip_rect`.
 Noted, not changed (doubtful or feature-sized):
 
 - The window viewport ignores layer-shell exclusive zones, so a bar such as
-  waybar overlaps tiled windows.
+  waybar overlaps tiled windows. (Fixed on `claude/layer-shell-input`.)
 - A drag restarts the position animation on every motion event, so the
   window trails the pointer instead of tracking it; pointer focus is not
   refreshed when a drag ends until the next motion. If the dragged window
@@ -132,7 +162,8 @@ Noted, not changed (doubtful or feature-sized):
   a desynchronised subsurface can leave the window's bounding box stale.
 - `new_layer_surface` sends the first configure before the client's initial
   commit (anvil sends it on that commit); fine with Smithay, unverified with
-  gtk-layer-shell clients.
+  gtk-layer-shell clients. (Fixed on `claude/layer-shell-input`: the first
+  configure now answers the initial commit.)
 - IPC: the socket is chmod-ed to 0600 after `bind` (a brief window with
   umask permissions, inside the 0700 runtime dir); one thread per
   connection is unbounded; `launch` scans desktop files on the compositor
@@ -245,7 +276,7 @@ rendering paths still need the nested-session check.
 | Command | IPC, veyronctl, structured responses, `subscribe` event stream | PARTIAL | `veyron-ipc` v5; owner-only socket; headless-tested |
 | Profiles | Layout/motion profiles, cycling | PARTIAL | `profiles.rs` |
 | Smart | Smart workspace, app discovery, launcher | PARTIAL | `smart.rs`, `launcher.rs`, `apps.rs` |
-| Ecosystem | Layer-shell (bars, OSD, notifications) | PARTIAL | pointer now works; keyboard interactivity missing |
+| Ecosystem | Layer-shell (bars, OSD, notifications) | PARTIAL | pointer, exclusive zones and keyboard interactivity wired; zones and exclusive keyboard headless-tested; check waybar/rofi/fuzzel nested |
 | Ecosystem | Native panel, notifications, OSD, clipboard, screenshot, recorder, studio | MISSING | separate clients over layer-shell + IPC |
 | Wayland | Screencopy, screen sharing, XWayland | MISSING | see ADR 0002 |
 | Wayland | Multi-output, hotplug | PARTIAL | core only; backend has one output |

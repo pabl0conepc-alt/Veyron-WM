@@ -42,10 +42,22 @@
   directly. It refuses `Terminal=true` entries, ignores desktop actions and does
   not use D-Bus activation, so applications relying on either need an explicit
   `spawn` binding.
-- `zwlr_layer_shell_v1` surfaces render with their exclusive zones and receive
-  frame callbacks, and now receive pointer input: overlay/top layers above
-  windows, bottom/background layers where no window is. Keyboard
-  interactivity on layer surfaces is not implemented yet.
+- `zwlr_layer_shell_v1` surfaces receive frame callbacks and pointer input
+  (overlay/top layers above windows, bottom/background layers where no window
+  is), and their exclusive zones shrink the tiling/floating viewport.
+  Keyboard interactivity is honoured: a mapped overlay/top surface asking for
+  `exclusive` holds the keyboard until it unmaps (compositor bindings still
+  work), `on_demand` surfaces take it on click and give it back when a window
+  is clicked or focused, `none` never gets it. Exclusive zones and exclusive
+  keyboard focus are covered by headless tests; click-to-focus for
+  `on_demand` is untested (the harness cannot inject pointer input), and none
+  of it has been checked with real waybar/rofi/fuzzel in a nested session.
+- While a window is fullscreen it covers the whole output (no outer margin,
+  no panel zone) and top-layer surfaces such as bars are drawn below it; a
+  launcher on the top layer is therefore hidden and does not take the
+  keyboard during fullscreen. Launchers on the overlay layer are unaffected.
+- Only one exclusive layer surface holds the keyboard at a time (the
+  front-most, overlay before top); with several, the others wait.
 - Pointer focus previously passed a surface-relative point where Smithay
   expects the surface's global origin, so clients saw wrong local coordinates;
   this is fixed and subsurfaces/popups under the pointer are now resolved.

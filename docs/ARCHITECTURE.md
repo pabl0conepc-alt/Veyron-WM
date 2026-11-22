@@ -60,8 +60,10 @@ Policies:
   Stacking is always an explicit user action (`move left/right` moves the
   focused window into the neighbouring column). Predictability wins over
   guessing.
-- Fullscreen covers the viewport. The tiling strip is untouched, so leaving
-  fullscreen restores the exact previous layout.
+- The viewport is the output minus the edges panels reserve (layer-shell
+  exclusive zones, reported with `Wm::set_usable_area`) minus the outer
+  margin. Fullscreen covers the whole output instead. The tiling strip is
+  untouched, so leaving fullscreen restores the exact previous layout.
 - Floating windows are a separate list drawn above the strip. Toggling float off
   re-inserts the window as a column at the current focus, and toggling it on
   starts from the window's last tiled geometry, so the operation is reversible.
@@ -291,13 +293,20 @@ features.
   therefore converge without configure storms.
 - **Layer shell:** `zwlr_layer_shell_v1` surfaces are mapped into the output's
   layer map, arranged with their anchors, margins and exclusive zones, sent an
-  initial configure, re-arranged and re-configured on output resize, and given
-  frame callbacks. Panels, notification daemons, wallpapers and OSDs therefore
-  render without being part of `Wm`. Pointer and keyboard input on layer
-  surfaces is not forwarded yet.
-- **Focus:** keyboard focus follows the snapshot's focused window; activation
-  state is applied to every managed window. Pointer buttons focus the window
-  under the cursor and raise floating windows.
+  initial configure in reply to their initial commit, re-arranged and
+  re-configured on every commit, unmap and output resize, and given frame
+  callbacks. Panels, notification daemons, wallpapers and OSDs therefore
+  render without being part of `Wm`; after each arrangement the layer map's
+  non-exclusive zone is handed to `Wm::set_usable_area`, which retiles when
+  it changed. They receive pointer input with the same stacking they are
+  drawn with. While a window is fullscreen the top layer is drawn (and
+  hit-tested) below windows.
+- **Focus:** keyboard focus goes to, in order: the front-most mapped
+  overlay/top layer surface with `exclusive` keyboard interactivity, a layer
+  surface with `on_demand` interactivity the user clicked, then the
+  snapshot's focused window. Activation state is applied to every managed
+  window. Pointer buttons focus the window under the cursor (taking the
+  keyboard back from an on-demand layer) and raise floating windows.
 - **Input:** key events go through the XKB keyboard handle. The filter looks up
   the exact modifier set and keysym name in the configuration; unbound keys are
   forwarded to the focused client. Presses only trigger actions, releases are

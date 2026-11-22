@@ -160,8 +160,11 @@ What works:
   scales each workspace's windows into its tile; `veyronctl overview [--json]`
   exposes it for bars, scripts and a future overview surface.
 - Layer-shell: `zwlr_layer_shell_v1` clients (waybar, notification daemons,
-  wallpapers, OSDs) are mapped on the output with their exclusive zones, and
-  their frame callbacks are delivered.
+  wallpapers, OSDs, launchers) are mapped on the output and get frame
+  callbacks and pointer input; their exclusive zones keep tiled and floating
+  windows clear of them (fullscreen still covers the whole output), and a
+  launcher asking for exclusive keyboard interactivity holds the keyboard
+  while it is open.
 - Smart workspace: with `behavior.smart_workspace`, every window the core places
   teaches it where that app lives, and its next window opens on the same output
   and workspace without switching the user away. Rules still win.
@@ -194,8 +197,8 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 - No cursor image is drawn yet. Only window positions animate: there are no
   opening/closing transitions, and client sizes still jump to their target.
 - Popup grabs, screencopy, idle, input-method and session-lock protocols are not
-  implemented. Layer-shell surfaces receive pointer clicks but not keyboard
-  focus, and their exclusive zones do not yet shrink the tiling area.
+  implemented. Layer-shell keyboard focus and exclusive zones are tested
+  headlessly but not yet checked with real bars and launchers.
 - Blur is not drawn. On Intel HD Graphics the faint edge of shadows shows a
   slight dotted dithering pattern in the nested window; the `flat` design
   avoids it.

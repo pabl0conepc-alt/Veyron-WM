@@ -212,6 +212,52 @@ impl Rect {
     }
 }
 
+/// Space reserved along each edge of a rectangle, such as the exclusive zone
+/// a panel claims at the top of an output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct Insets {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl Insets {
+    pub const ZERO: Insets = Insets {
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+    };
+
+    /// The edges `inner` leaves free inside `outer`. Parts of `inner` outside
+    /// `outer` reserve nothing, so every inset is at least zero.
+    pub fn between(outer: Rect, inner: Rect) -> Insets {
+        Insets {
+            top: (inner.y - outer.y).max(0),
+            right: (outer.right() - inner.right()).max(0),
+            bottom: (outer.bottom() - inner.bottom()).max(0),
+            left: (inner.x - outer.x).max(0),
+        }
+    }
+
+    /// Shrink `rect` by these insets. A reservation that would leave nothing
+    /// is ignored, so the result is never empty for a non-empty `rect`.
+    pub fn shrink(&self, rect: Rect) -> Rect {
+        let inner = Rect::new(
+            rect.x.saturating_add(self.left),
+            rect.y.saturating_add(self.top),
+            rect.w.saturating_sub(self.left).saturating_sub(self.right),
+            rect.h.saturating_sub(self.top).saturating_sub(self.bottom),
+        );
+        if inner.is_empty() {
+            rect
+        } else {
+            inner
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +349,44 @@ mod tests {
         assert_eq!(
             container.centered(Size::new(200, 20)),
             Rect::new(0, 15, 100, 20)
+        );
+    }
+
+    #[test]
+    fn insets_round_trip_through_an_inner_rectangle() {
+        let output = Rect::new(100, 0, 1280, 800);
+        // A 30 px bar on top and a 20 px dock on the left.
+        let usable = Rect::new(120, 30, 1260, 770);
+        let insets = Insets::between(output, usable);
+        assert_eq!(
+            insets,
+            Insets {
+                top: 30,
+                right: 0,
+                bottom: 0,
+                left: 20,
+            }
+        );
+        assert_eq!(insets.shrink(output), usable);
+        // Insets stay attached to the edges when the rectangle is resized.
+        assert_eq!(
+            insets.shrink(Rect::new(100, 0, 1920, 1080)),
+            Rect::new(120, 30, 1900, 1050)
+        );
+    }
+
+    #[test]
+    fn insets_never_empty_a_rectangle() {
+        let rect = Rect::new(0, 0, 100, 50);
+        let greedy = Insets {
+            top: 40,
+            bottom: 40,
+            ..Insets::ZERO
+        };
+        assert_eq!(greedy.shrink(rect), rect);
+        assert_eq!(
+            Insets::between(rect, Rect::new(-10, -10, 200, 200)),
+            Insets::ZERO
         );
     }
 }

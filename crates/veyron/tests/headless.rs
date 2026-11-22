@@ -22,10 +22,12 @@ use std::{
 
 use veyron_ipc::{Request, Response, StateReport};
 use wayland_client::{
+    backend::ObjectId,
     globals::{registry_queue_init, GlobalListContents},
     protocol::{
         wl_buffer, wl_callback,
         wl_compositor::WlCompositor,
+        wl_keyboard::{self, WlKeyboard},
         wl_output, wl_registry,
         wl_seat::{self, WlSeat},
         wl_shm::{self, WlShm},
@@ -37,6 +39,10 @@ use wayland_client::{
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel,
     xdg_wm_base::{self, XdgWmBase},
+};
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
+    zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
 };
 
 /// How long to wait for the compositor process to serve its sockets.
@@ -128,6 +134,22 @@ impl Harness {
         }
     }
 
+    /// Poll the state report until `done` holds, failing after the timeout.
+    fn wait_for_state(&self, what: &str, done: impl Fn(&StateReport) -> bool) -> StateReport {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        loop {
+            let state = self.state();
+            if done(&state) {
+                return state;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}: {state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     fn action(&self, action: &str) {
         match veyron_ipc::request(
             &self.control_socket,
@@ -198,6 +220,11 @@ struct ClientState {
     popup_configure: Option<[i32; 4]>,
     /// `wl_surface.frame` callbacks that fired.
     frames_done: usize,
+    /// Last `zwlr_layer_surface_v1.configure`: width, height.
+    layer_configure: Option<(u32, u32)>,
+    /// Surface holding this client's keyboard focus, from `wl_keyboard`
+    /// enter/leave events.
+    keyboard_focus: Option<ObjectId>,
 }
 
 /// A minimal but genuine Wayland client.
@@ -208,8 +235,9 @@ struct Client {
     compositor: WlCompositor,
     wm_base: XdgWmBase,
     shm: WlShm,
-    // Kept alive so the server-side globals stay bound for the whole test.
-    _seat: WlSeat,
+    layer_shell: ZwlrLayerShellV1,
+    seat: WlSeat,
+    // Kept alive so the server-side global stays bound for the whole test.
     _output: wl_output::WlOutput,
 }
 
@@ -239,6 +267,9 @@ impl Client {
         let output = globals
             .bind::<wl_output::WlOutput, ClientState, ()>(&qh, 1..=4, ())
             .expect("wl_output");
+        let layer_shell = globals
+            .bind::<ZwlrLayerShellV1, ClientState, ()>(&qh, 1..=4, ())
+            .expect("zwlr_layer_shell_v1");
 
         let mut client = Self {
             queue,
@@ -247,7 +278,8 @@ impl Client {
             compositor,
             wm_base,
             shm,
-            _seat: seat,
+            layer_shell,
+            seat,
             _output: output,
         };
         client.roundtrip();
@@ -399,6 +431,60 @@ impl Client {
         }
     }
 
+    /// Bind the seat's keyboard so `wl_keyboard` enter/leave are tracked.
+    fn keyboard(&mut self) -> WlKeyboard {
+        let keyboard = self.seat.get_keyboard(&self.qh, ());
+        self.roundtrip();
+        keyboard
+    }
+
+    /// Create a layer-shell surface the way bars and launchers do: set
+    /// anchors, size, exclusive zone and keyboard interactivity, commit
+    /// without a buffer, wait for the configure, then attach a buffer of the
+    /// configured size.
+    fn create_layer(&mut self, layer: LayerSpec) -> LayerShellSurface {
+        self.state.layer_configure = None;
+        let surface = self.compositor.create_surface(&self.qh, ());
+        let layer_surface = self.layer_shell.get_layer_surface(
+            &surface,
+            None,
+            layer.layer,
+            layer.namespace.to_string(),
+            &self.qh,
+            (),
+        );
+        layer_surface.set_anchor(layer.anchor);
+        layer_surface.set_size(layer.size.0, layer.size.1);
+        layer_surface.set_exclusive_zone(layer.exclusive_zone);
+        layer_surface.set_keyboard_interactivity(layer.keyboard);
+        surface.commit();
+        self.wait_for("the layer surface's initial configure", |state| {
+            state.layer_configure.is_some()
+        });
+        let (width, height) = self.state.layer_configure.expect("layer configure");
+        assert!(
+            width > 0 && height > 0,
+            "layer configured to {width}x{height}"
+        );
+
+        let buffer = self.shm_buffer(width as i32, height as i32);
+        surface.attach(Some(&buffer.buffer), 0, 0);
+        surface.damage(0, 0, width as i32, height as i32);
+        surface.commit();
+        self.roundtrip();
+        LayerShellSurface {
+            surface,
+            layer_surface,
+            size: (width, height),
+            _buffer: buffer,
+        }
+    }
+
+    /// Whether this client's keyboard focus is on `surface`.
+    fn has_keyboard_focus(&self, surface: &WlSurface) -> bool {
+        self.state.keyboard_focus.as_ref() == Some(&surface.id())
+    }
+
     /// Round-trip until `done` holds, failing the test after the timeout.
     fn wait_for(&mut self, what: &str, done: impl Fn(&ClientState) -> bool) {
         let deadline = Instant::now() + EVENT_TIMEOUT;
@@ -434,6 +520,59 @@ impl Toplevel {
     fn destroy(self) {
         self.toplevel.destroy();
         self.xdg_surface.destroy();
+        self.surface.destroy();
+    }
+}
+
+/// What a layer-shell client asks for.
+struct LayerSpec {
+    layer: zwlr_layer_shell_v1::Layer,
+    anchor: zwlr_layer_surface_v1::Anchor,
+    size: (u32, u32),
+    exclusive_zone: i32,
+    keyboard: zwlr_layer_surface_v1::KeyboardInteractivity,
+    namespace: &'static str,
+}
+
+impl LayerSpec {
+    /// A waybar-like bar: anchored to the top edge, full width, reserving
+    /// its height, never taking the keyboard.
+    fn top_bar(height: u32) -> Self {
+        use zwlr_layer_surface_v1::Anchor;
+        Self {
+            layer: zwlr_layer_shell_v1::Layer::Top,
+            anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+            size: (0, height),
+            exclusive_zone: height as i32,
+            keyboard: zwlr_layer_surface_v1::KeyboardInteractivity::None,
+            namespace: "bar",
+        }
+    }
+
+    /// A rofi/fuzzel-like launcher: centred on the overlay layer, grabbing
+    /// the keyboard while it is open.
+    fn launcher() -> Self {
+        Self {
+            layer: zwlr_layer_shell_v1::Layer::Overlay,
+            anchor: zwlr_layer_surface_v1::Anchor::empty(),
+            size: (400, 300),
+            exclusive_zone: 0,
+            keyboard: zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive,
+            namespace: "launcher",
+        }
+    }
+}
+
+struct LayerShellSurface {
+    surface: WlSurface,
+    layer_surface: ZwlrLayerSurfaceV1,
+    size: (u32, u32),
+    _buffer: ShmBuffer,
+}
+
+impl LayerShellSurface {
+    fn destroy(self) {
+        self.layer_surface.destroy();
         self.surface.destroy();
     }
 }
@@ -640,6 +779,57 @@ impl Dispatch<xdg_popup::XdgPopup, ()> for ClientState {
         } = event
         {
             state.popup_configure = Some([x, y, width, height]);
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // The keymap fd is dropped (closed) with the event.
+        match event {
+            wl_keyboard::Event::Enter { surface, .. } => state.keyboard_focus = Some(surface.id()),
+            wl_keyboard::Event::Leave { .. } => state.keyboard_focus = None,
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwlrLayerShellV1, ()> for ClientState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrLayerShellV1,
+        _event: zwlr_layer_shell_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        proxy: &ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Event::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
+            proxy.ack_configure(serial);
+            state.layer_configure = Some((width, height));
         }
     }
 }
@@ -1155,4 +1345,91 @@ fn subscribers_hear_about_workspace_window_and_theme_changes() {
     assert!(next().changes.contains(&veyron_ipc::Change::Theme));
 
     harness.shutdown();
+}
+
+#[test]
+fn a_panel_exclusive_zone_keeps_tiled_windows_clear_of_it() {
+    let harness = Harness::start("layer-zone", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _toplevel = client.create_toplevel("tiled");
+    assert_eq!(harness.state().windows[0].rect, [12, 12, 620, 776]);
+
+    // A 30 px waybar-like bar along the top edge reserves its height.
+    let bar = client.create_layer(LayerSpec::top_bar(30));
+    assert_eq!(bar.size, (1280, 30), "the bar spans the output width");
+    let state = harness.wait_for_state("the window to move below the bar", |state| {
+        state.windows[0].rect[1] != 12
+    });
+    assert_eq!(
+        state.windows[0].rect,
+        [12, 42, 620, 746],
+        "the outer margin now starts below the 30 px zone"
+    );
+    client.wait_for(
+        "the window to be resized to the smaller viewport",
+        |state| {
+            state
+                .last_configure
+                .is_some_and(|configure| configure.height == 746)
+        },
+    );
+
+    // Fullscreen still covers the whole output, the bar's strip included.
+    harness.action("toggle-fullscreen");
+    assert_eq!(harness.state().windows[0].rect, [0, 0, 1280, 800]);
+    harness.action("toggle-fullscreen");
+    assert_eq!(harness.state().windows[0].rect, [12, 42, 620, 746]);
+
+    // Closing the bar gives its space back.
+    bar.destroy();
+    client.roundtrip();
+    harness.wait_for_state("the window to reclaim the bar's space", |state| {
+        state.windows[0].rect == [12, 12, 620, 776]
+    });
+}
+
+#[test]
+fn an_exclusive_keyboard_layer_holds_the_keyboard_until_it_closes() {
+    let harness = Harness::start("layer-keyboard", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _keyboard = client.keyboard();
+    let window = client.create_toplevel("editor");
+    let window_id = window.surface.id();
+    client.wait_for("keyboard focus on the window", |state| {
+        state.keyboard_focus.as_ref() == Some(&window_id)
+    });
+
+    // A bar without keyboard interactivity never takes the keyboard.
+    let _bar = client.create_layer(LayerSpec::top_bar(30));
+    client.roundtrip();
+    assert!(client.has_keyboard_focus(&window.surface));
+
+    // A launcher asking for exclusive interactivity gets it once mapped.
+    let launcher = client.create_layer(LayerSpec::launcher());
+    let launcher_id = launcher.surface.id();
+    client.wait_for("keyboard focus on the launcher", |state| {
+        state.keyboard_focus.as_ref() == Some(&launcher_id)
+    });
+
+    // Neither a new window nor a window focus change steals it.
+    let mut other = Client::connect(&harness.wayland_socket);
+    let _other_window = other.create_toplevel("other");
+    harness.action("focus left");
+    client.roundtrip();
+    assert!(
+        client.has_keyboard_focus(&launcher.surface),
+        "the launcher keeps the keyboard while it is mapped"
+    );
+    let state = harness.state();
+    assert_eq!(
+        state.focused,
+        Some(state.windows[0].id),
+        "the core still tracks window focus underneath"
+    );
+
+    // Closing the launcher hands the keyboard to the focused window.
+    launcher.destroy();
+    client.wait_for("keyboard focus back on the window", |state| {
+        state.keyboard_focus.as_ref() == Some(&window_id)
+    });
 }

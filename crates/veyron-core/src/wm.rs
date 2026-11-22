@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     action::{Action, Direction, ResizeAxis},
     config::Config,
-    geometry::{Rect, Size},
+    geometry::{Insets, Rect, Size},
     groups::{GroupId, GroupSet},
-    layout::{default_floating_size, viewport_for, Placement, ScrollLayout},
+    layout::{default_floating_size, viewport_for, LayoutConfig, Placement, ScrollLayout},
     rules::WindowPolicy,
     session::Session,
     snap::{PipCorner, SnapZone},
@@ -131,6 +131,9 @@ impl WorkspacePosition {
 pub struct OutputState {
     name: String,
     rect: Rect,
+    /// Edges claimed by panels and docks (layer-shell exclusive zones), which
+    /// tiled and floating windows stay clear of.
+    reserved: Insets,
     workspaces: Vec<Workspace>,
     workspace_indices: HashMap<WorkspacePosition, usize>,
     /// Named workspaces, including the default numeric names.
@@ -139,12 +142,35 @@ pub struct OutputState {
 }
 
 impl OutputState {
+    fn new(name: String, rect: Rect, workspace: Workspace) -> Self {
+        Self {
+            name,
+            rect,
+            reserved: Insets::ZERO,
+            workspaces: vec![workspace],
+            workspace_indices: HashMap::from([(WorkspacePosition::default(), 0)]),
+            names: HashMap::from([("1".to_string(), 0)]),
+            active: 0,
+        }
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// The whole output; fullscreen windows cover all of it.
     pub fn rect(&self) -> Rect {
         self.rect
+    }
+
+    /// The output minus the edges reserved by panels.
+    pub fn usable_area(&self) -> Rect {
+        self.reserved.shrink(self.rect)
+    }
+
+    /// Where windows are laid out: the usable area inside the outer margin.
+    fn viewport(&self, config: &LayoutConfig) -> Rect {
+        viewport_for(self.usable_area(), config)
     }
 
     pub fn workspaces(&self) -> &[Workspace] {
@@ -220,13 +246,15 @@ pub struct PlacementInfo {
 /// Everything the compositor needs to draw one frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
-    /// Full output rectangle, used to clear the frame.
+    /// Full output rectangle, used to clear the frame and covered by a
+    /// fullscreen window.
     pub output: Rect,
     /// Name of the output this frame belongs to.
     pub output_name: String,
     /// Index of the output in [`Wm::outputs`].
     pub output_index: usize,
-    /// Usable area inside the configured outer margin.
+    /// Area tiled and floating windows are laid out in: the output minus
+    /// panel exclusive zones, inside the configured outer margin.
     pub viewport: Rect,
     pub workspace: String,
     pub workspace_index: usize,
@@ -311,18 +339,10 @@ impl Wm {
             &config.layout,
             viewport,
         );
-        let workspace_indices = HashMap::from([(WorkspacePosition::default(), 0)]);
         let mut wm = Self {
             config,
             windows: HashMap::new(),
-            outputs: vec![OutputState {
-                name: output_name.into(),
-                rect,
-                workspaces: vec![workspace],
-                workspace_indices,
-                names: HashMap::from([("1".to_string(), 0)]),
-                active: 0,
-            }],
+            outputs: vec![OutputState::new(output_name.into(), rect, workspace)],
             active_output: 0,
             next_id: 0,
             scratchpad: Vec::new(),
@@ -437,10 +457,11 @@ impl Wm {
         self.outputs.get(index)
     }
 
-    /// Usable area of one output, inside the configured outer margin.
+    /// Usable area of one output: clear of panel exclusive zones and inside
+    /// the configured outer margin.
     pub fn viewport_of(&self, output_index: usize) -> Rect {
         match self.outputs.get(output_index) {
-            Some(output) => viewport_for(output.rect, &self.config.layout),
+            Some(output) => output.viewport(&self.config.layout),
             None => Rect::ZERO,
         }
     }
@@ -462,19 +483,13 @@ impl Wm {
         }
         let viewport = viewport_for(rect, &self.config.layout);
         let index = self.outputs.len();
-        self.outputs.push(OutputState {
-            name,
-            rect,
-            workspaces: vec![Workspace::new(
-                "1".to_string(),
-                WorkspacePosition::default(),
-                &self.config.layout,
-                viewport,
-            )],
-            workspace_indices: HashMap::from([(WorkspacePosition::default(), 0)]),
-            names: HashMap::from([("1".to_string(), 0)]),
-            active: 0,
-        });
+        let workspace = Workspace::new(
+            "1".to_string(),
+            WorkspacePosition::default(),
+            &self.config.layout,
+            viewport,
+        );
+        self.outputs.push(OutputState::new(name, rect, workspace));
         Some(index)
     }
 
@@ -1335,14 +1350,40 @@ impl Wm {
         if output_index >= self.outputs.len() || self.outputs[output_index].rect == rect {
             return false;
         }
-        let viewport = viewport_for(rect, &self.config.layout);
         self.outputs[output_index].rect = rect;
+        self.reflow_output(output_index);
+        true
+    }
+
+    /// Report the part of an output left free by panels and docks (the
+    /// layer-shell non-exclusive zone), in global coordinates. Tiled and
+    /// floating windows are laid out inside it; fullscreen windows still cover
+    /// the whole output. The reservation is kept as distances from the output
+    /// edges, so it follows the output through later resizes.
+    ///
+    /// Returns whether the usable area changed.
+    pub fn set_usable_area(&mut self, output_index: usize, area: Rect) -> bool {
+        let Some(output) = self.outputs.get_mut(output_index) else {
+            return false;
+        };
+        let reserved = Insets::between(output.rect, area);
+        if output.reserved == reserved {
+            return false;
+        }
+        output.reserved = reserved;
+        self.reflow_output(output_index);
+        true
+    }
+
+    /// Hand one output's current viewport to its workspaces and keep floating
+    /// windows inside it.
+    fn reflow_output(&mut self, output_index: usize) {
+        let viewport = self.viewport_of(output_index);
         for workspace in &mut self.outputs[output_index].workspaces {
             workspace.layout.set_viewport(viewport);
         }
         self.clamp_floating_windows();
         self.refresh_tiled_rects();
-        true
     }
 
     /// Build the frame description of the active output.
@@ -1382,7 +1423,7 @@ impl Wm {
     fn build_snapshot(&self, output_index: usize, workspace_index: usize) -> Snapshot {
         let output = &self.outputs[output_index];
         let workspace = &output.workspaces[workspace_index];
-        let viewport = viewport_for(output.rect, &self.config.layout);
+        let viewport = output.viewport(&self.config.layout);
         let layout = workspace.effective_layout();
         let gap = smart_gap(&self.config.layout, workspace.layout.window_count());
 
@@ -1397,9 +1438,11 @@ impl Wm {
         match workspace.fullscreen {
             Some(id) if self.windows.contains_key(&id) => {
                 let (opacity, blur, animate) = visual(id);
+                // Fullscreen ignores panels and the outer margin: a video or
+                // game owns the whole output.
                 placements.push(PlacementInfo {
                     window: id,
-                    rect: viewport,
+                    rect: output.rect,
                     floating: self
                         .windows
                         .get(&id)
@@ -1823,7 +1866,7 @@ impl Wm {
     ) -> usize {
         let output = &mut self.outputs[output_index];
         let index = output.workspaces.len();
-        let viewport = viewport_for(output.rect, &self.config.layout);
+        let viewport = output.viewport(&self.config.layout);
         output.workspaces.push(Workspace::new(
             name.clone(),
             position,
@@ -2599,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_covers_the_viewport_and_restores_afterwards() {
+    fn fullscreen_covers_the_output_and_restores_afterwards() {
         let mut wm = wm();
         let ids = open(&mut wm, 2);
 
@@ -2608,13 +2651,87 @@ mod tests {
         let snapshot = wm.snapshot();
         assert_eq!(snapshot.placements.len(), 1);
         assert_eq!(snapshot.placements[0].window, ids[1]);
-        assert_eq!(snapshot.placements[0].rect, snapshot.viewport);
+        assert_eq!(
+            snapshot.placements[0].rect, snapshot.output,
+            "fullscreen ignores the outer margin"
+        );
         assert!(snapshot.is_fullscreen(ids[1]));
 
         wm.dispatch(Action::ToggleFullscreen);
         let snapshot = wm.snapshot();
         assert_eq!(snapshot.placements.len(), 2);
         assert!(!snapshot.is_fullscreen(ids[1]));
+    }
+
+    #[test]
+    fn panels_shrink_the_viewport_but_not_fullscreen() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 2);
+        let margin = wm.config().layout.outer_margin;
+        let full = wm.viewport();
+
+        // A 30 px bar along the top edge.
+        assert!(wm.set_usable_area(0, Rect::new(0, 30, 1280, 770)));
+        assert!(
+            !wm.set_usable_area(0, Rect::new(0, 30, 1280, 770)),
+            "an unchanged area is not a change"
+        );
+        assert_eq!(
+            wm.active_output().usable_area(),
+            Rect::new(0, 30, 1280, 770)
+        );
+        let snapshot = wm.snapshot();
+        assert_eq!(
+            snapshot.viewport,
+            Rect::new(margin, 30 + margin, full.w, full.h - 30)
+        );
+        for placement in &snapshot.placements {
+            assert!(placement.rect.y >= 30 + margin, "{placement:?}");
+            assert!(placement.rect.bottom() <= snapshot.viewport.bottom());
+        }
+
+        wm.dispatch(Action::ToggleFullscreen);
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placements[0].window, ids[1]);
+        assert_eq!(snapshot.placements[0].rect, Rect::new(0, 0, 1280, 800));
+        wm.dispatch(Action::ToggleFullscreen);
+
+        // The bar goes away: windows get the space back.
+        assert!(wm.set_usable_area(0, Rect::new(0, 0, 1280, 800)));
+        assert_eq!(wm.snapshot().viewport, full);
+        assert!(wm
+            .snapshot()
+            .placements
+            .iter()
+            .any(|placement| placement.rect.y == margin));
+    }
+
+    #[test]
+    fn reserved_edges_follow_output_resizes_and_keep_floating_windows_clear() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 1);
+        wm.dispatch(Action::ToggleFloating);
+        wm.move_floating_to(ids[0], 0, 0);
+        let margin = wm.config().layout.outer_margin;
+        let rect = wm.snapshot().placement_of(ids[0]).expect("placed").rect;
+        assert_eq!(rect.x, margin);
+
+        // A 40 px dock on the left pushes the floating window out of its way.
+        assert!(wm.set_usable_area(0, Rect::new(40, 0, 1240, 800)));
+        let rect = wm.snapshot().placement_of(ids[0]).expect("placed").rect;
+        assert_eq!(rect.x, 40 + margin);
+
+        // The dock keeps its edge when the output grows.
+        wm.set_output_size(Size::new(1920, 1080));
+        assert_eq!(
+            wm.active_output().usable_area(),
+            Rect::new(40, 0, 1880, 1080)
+        );
+        assert_eq!(
+            wm.snapshot().viewport,
+            Rect::new(40 + margin, margin, 1880 - 2 * margin, 1080 - 2 * margin)
+        );
+        assert!(!wm.set_usable_area(7, Rect::new(0, 0, 10, 10)));
     }
 
     #[test]
