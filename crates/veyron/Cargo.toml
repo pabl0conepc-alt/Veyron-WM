@@ -39,6 +39,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 name = "veyron-wm"
 maintainer = "Pablo Arraes <327252850+pabl0conepc-alt@users.noreply.github.com>"
 copyright = "2026, Pablo Arraes"
+license-file = ["../../LICENSE", "0"]
 extended-description = """\
 VEYRON WM is a scrollable tiling Wayland compositor written in Rust with \
 Material You theming, GPU window decorations and a JSON control socket \

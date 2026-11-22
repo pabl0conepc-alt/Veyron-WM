@@ -37,6 +37,11 @@
           export XDG_RUNTIME_DIR="$(mktemp -d)"
         '';
 
+        # MIT requires shipping the copyright notice.
+        postInstall = ''
+          install -Dm644 LICENSE "$out/share/licenses/veyron-wm/LICENSE"
+        '';
+
         # The default cargo install hook installs both binaries (`veyron`,
         # `veyronctl`) from the target-specific release directory.
         postFixup = ''

@@ -10,7 +10,7 @@ and a JSON control socket for bars and scripts. It runs well on a 4 GiB netbook.
 
 [![CI](https://github.com/pabl0conepc-alt/Veyron-WM/actions/workflows/ci.yml/badge.svg)](https://github.com/pabl0conepc-alt/Veyron-WM/actions/workflows/ci.yml)
 ![Rust](https://img.shields.io/badge/rust-1.97%2B-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 </div>
 
@@ -761,4 +761,4 @@ docs/decisions/       architecture decision records
 
 ## License
 
-MIT.
+[MIT](LICENSE), Copyright (c) 2026 Pablo Arraes.

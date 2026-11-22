@@ -75,9 +75,6 @@ package() {
   install -Dm755 target/release/veyronctl "${pkgdir}/usr/bin/veyronctl"
   install -Dm644 packaging/veyron.desktop "${pkgdir}/usr/share/wayland-sessions/veyron.desktop"
   install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
-  # MIT requires shipping the copyright notice. Upstream declares MIT in
-  # Cargo.toml but has no LICENSE file yet; install it once it exists.
-  if [[ -f LICENSE ]]; then
-    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-  fi
+  # MIT requires shipping the copyright notice.
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
