@@ -515,6 +515,9 @@ impl Veyron {
             // The grabbed client does not see pointer motion during the grab.
             return;
         }
+        if self.wm.config().behavior.focus_follows_mouse {
+            self.focus_under_pointer();
+        }
 
         let target = self.surface_under(location);
         let serial = SERIAL_COUNTER.next_serial();
@@ -699,6 +702,35 @@ impl Veyron {
             self.needs_redraw = true;
         } else if surface.is_initial_configure_sent() {
             surface.send_configure();
+        }
+    }
+
+    /// `focus_follows_mouse`: focus the window under the pointer when it is
+    /// entirely on screen. A partly visible window would scroll the layout
+    /// under the pointer and bounce focus between neighbours, so it still
+    /// takes a click. Bars and overlays above the windows block it.
+    fn focus_under_pointer(&mut self) {
+        let location = self.pointer_location;
+        if self
+            .layer_surface_under(location, &[Layer::Overlay, Layer::Top])
+            .is_some()
+        {
+            return;
+        }
+        let Some(id) = self
+            .space
+            .element_under(location)
+            .and_then(|(window, _)| self.window_id(window))
+        else {
+            return;
+        };
+        let snapshot = self.wm.snapshot();
+        let fully_visible = snapshot.placement_of(id).is_some_and(|placement| {
+            placement.rect.intersection(snapshot.viewport) == Some(placement.rect)
+        });
+        if snapshot.focused != Some(id) && fully_visible && self.wm.focus_window(id) {
+            self.sync_focus();
+            self.needs_redraw = true;
         }
     }
 

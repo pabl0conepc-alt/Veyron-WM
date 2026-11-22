@@ -404,6 +404,7 @@ reduce_motion = false        # snap instantly for reduced-motion preferences
 [behavior]
 remember_geometry = true     # restore floating geometry per app id
 smart_workspace = false      # new windows open where their app already lives
+focus_follows_mouse = false  # focus the window under the pointer
 
 # Per-application rules, evaluated in order; later fields win.
 [[rules]]

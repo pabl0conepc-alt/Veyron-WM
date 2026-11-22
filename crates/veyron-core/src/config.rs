@@ -183,6 +183,10 @@ pub struct Behavior {
     /// Open a new window on the output and workspace where the same application
     /// already lives. Rules that pin a workspace always win over it.
     pub smart_workspace: bool,
+    /// Focus the window under the pointer without clicking. Windows only
+    /// partly on screen still need a click, so focusing never scrolls the
+    /// layout out from under the pointer.
+    pub focus_follows_mouse: bool,
 }
 
 impl Default for Behavior {
@@ -190,6 +194,7 @@ impl Default for Behavior {
         Self {
             remember_geometry: true,
             smart_workspace: false,
+            focus_follows_mouse: false,
         }
     }
 }
@@ -624,6 +629,14 @@ mod tests {
         let rgba = config.appearance.background_rgba();
         assert!((rgba[0] - 0.101_960_78).abs() < 1e-6);
         assert_eq!(rgba[3], 1.0);
+    }
+
+    #[test]
+    fn focus_follows_mouse_is_off_by_default_and_can_be_enabled() {
+        assert!(!Config::default().behavior.focus_follows_mouse);
+        let config = Config::from_toml_str("[behavior]\nfocus_follows_mouse = true\n")
+            .expect("valid configuration");
+        assert!(config.behavior.focus_follows_mouse);
     }
 
     #[test]
