@@ -6,11 +6,12 @@
 - Sparse 2D workspace navigation, transfer and state coordinates now have
   passing CI coverage. The visible nested title indicator and navigation still
   need validation in the target Plasma session.
-- Floating windows can be moved and resized by keyboard or IPC, and moved with
-  `super` + left-button drag (clamped to the viewport, sharing
-  `Wm::move_floating_to` with the keyboard path). Pointer resize, client-
-  initiated `xdg_toplevel.move/resize`, popup grabs and drag-and-drop are not
-  wired; the drag has not been runtime-tested in a nested session.
+- Floating windows can be moved (`super` + left drag) and resized (`super` +
+  right drag) with the pointer, and clients can start the same grabs from
+  their own title bars (`xdg_toplevel.move/resize`). Tiled windows ignore
+  pointer grabs (use the `width`/`height`/`resize` actions). Popup grabs and
+  drag-and-drop are not wired, and the grabs have not been runtime-tested in a
+  nested session (the harness cannot inject pointer input).
 - Rendering now uses Smithay's output damage tracker and buffer age when
   available. The nested implementation has not yet been runtime-checked on the
   target EGL driver, and must fall back to full redraw if age is unavailable.
@@ -20,8 +21,9 @@
   commit, but they have not been visually validated in a nested session.
 - The nested scene graph animates window positions between layouts and slides a
   newly active workspace in from the direction of travel, with a per-rule
-  `animation = false` opt-out. Client sizes still configure at their target,
-  opening and closing are not animated, and no visible nested-session check has
+  `animation = false` opt-out. New windows rise
+  24 px and fade in; client sizes still configure at their target, closing is
+  not animated, and no visible nested-session check has
   been performed.
 - The renderer draws each window with the opacity its rules request (scene
   elements are built per window instead of with one space-wide alpha). Blur

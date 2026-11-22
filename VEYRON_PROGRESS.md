@@ -198,6 +198,26 @@ rendering paths still need the nested-session check.
   smoke-tests the headless compositor over `veyronctl`. All four jobs passed.
   Not verified: the nested compositor on a real Debian or Ubuntu desktop.
 
+## Daily-use batch (2026-11-21)
+
+- **Pointer resize:** `super` + right drag resizes a floating window from the
+  edges nearest the pointer (thirds of the window). Core: `ResizeEdges`,
+  `Rect::resized`, `Wm::resize_floating_to` (minimum size, viewport clamp).
+- **Client requests:** `xdg_toplevel.move/resize` (title bars, borders of
+  client-side decorated apps) start the same grabs while the press is held;
+  `set_fullscreen`/`unset_fullscreen` toggle the core fullscreen state and
+  configures now carry the xdg `Fullscreen` state.
+- **`veyronctl subscribe`** (protocol v5): pushed `{changes, state}` events for
+  workspace, focus, windows, layout and theme changes; animations send none.
+  `veyronctl watch [--waybar]` uses it instead of polling.
+- **Open animation:** new windows rise 24 px and fade in over the motion
+  duration.
+- **Focus follows mouse:** `[behavior] focus_follows_mouse = true`, fully
+  visible windows only.
+- Tests: core unit tests for resize/fullscreen/config, IPC tests for change
+  detection and streaming, headless tests for subscriptions and client
+  fullscreen. Pointer grabs and the fade are not runtime-checked on screen.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
@@ -205,10 +225,11 @@ rendering paths still need the nested-session check.
 | WM | Scroll, master-stack, dwindle, auto layouts | PARTIAL | `layout.rs`, `tiling.rs`; nested visual check |
 | WM | Floating, fullscreen, smart gaps, rules, scratchpad | PARTIAL | `wm.rs`, `rules.rs`; nested check |
 | WM | Groups, PiP, snap zones, smart focus | PARTIAL | `groups.rs`, `snap.rs`; nested check |
-| WM | Pointer move of floating windows | PARTIAL | `state.rs::begin_drag`; runtime test |
-| WM | Pointer resize, client move/resize requests | MISSING | wire `XdgShellHandler::move_request/resize_request` |
+| WM | Pointer move/resize of floating windows (`super` + left/right drag) | PARTIAL | `state.rs::begin_super_grab`, `GrabKind`; core unit-tested, no input injection in the harness |
+| WM | Client move/resize requests, client fullscreen (F11) | PARTIAL | `XdgShellHandler::move_request/resize_request/fullscreen_request`; fullscreen headless-tested |
+| WM | Focus follows mouse (opt-in) | PARTIAL | `state.rs::focus_under_pointer`; fully visible windows only |
 | WM | Minimize | MISSING | needs core state + taskbar/foreign-toplevel |
-| Motion | Position animations, workspace slide, per-window opt-out | PARTIAL | `motion.rs`; open/close anims missing |
+| Motion | Position animations, workspace slide, open (rise + fade), per-window opt-out | PARTIAL | `motion.rs`, `state.rs::opening`; close animation missing |
 | Motion | Spring/physics, reduced motion | PARTIAL | `motion.rs`; renderer ignores profile motion |
 | Glass | Per-window opacity | PARTIAL | rendered now; needs visual check |
 | Glass | Rounded corners, shadows, designs | PARTIAL | `decoration.rs`; compiled, not seen on screen |
@@ -221,7 +242,7 @@ rendering paths still need the nested-session check.
 | Spaces | Overview | PARTIAL | IPC geometry only; no drawn overview |
 | Gestures | Touchpad/touch gestures | MISSING | winit backend gives no swipe events; needs libinput/udev backend |
 | Recall | Session save/restore | PARTIAL | `session.rs`; no app relaunch |
-| Command | IPC, veyronctl, structured responses | PARTIAL | `veyron-ipc`; owner-only socket |
+| Command | IPC, veyronctl, structured responses, `subscribe` event stream | PARTIAL | `veyron-ipc` v5; owner-only socket; headless-tested |
 | Profiles | Layout/motion profiles, cycling | PARTIAL | `profiles.rs` |
 | Smart | Smart workspace, app discovery, launcher | PARTIAL | `smart.rs`, `launcher.rs`, `apps.rs` |
 | Ecosystem | Layer-shell (bars, OSD, notifications) | PARTIAL | pointer now works; keyboard interactivity missing |
