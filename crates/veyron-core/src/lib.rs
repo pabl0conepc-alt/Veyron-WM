@@ -42,7 +42,7 @@ pub use config::{Behavior, Binding, Config, ConfigError, Modifiers, WorkspacePre
 pub use geometry::{Insets, Point, Rect, ResizeEdges, Size};
 pub use groups::{GroupId, GroupSet, WindowGroup};
 pub use launcher::{best_match, parse_entry, pick_terminal, split_exec, DesktopEntry};
-pub use layout::{LayoutConfig, Placement, ScrollLayout};
+pub use layout::{CenterFocusedColumn, LayoutConfig, Placement, ScrollLayout};
 pub use motion::{
     workspace_slide, Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig,
 };

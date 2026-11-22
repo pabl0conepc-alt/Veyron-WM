@@ -842,6 +842,87 @@ mod tests {
     }
 
     #[test]
+    fn every_layout_name_parses_in_mode_rules_presets_and_profiles() {
+        for kind in LayoutKind::SELECTABLE {
+            let name = kind.as_str();
+            let config = Config::from_toml_str(&format!(
+                "[layout]\nmode = \"{name}\"\n\n\
+                 [[rules]]\napp_id = \"app\"\nlayout = \"{name}\"\n\n\
+                 [[workspaces]]\nname = \"w\"\nlayout = \"{name}\"\n\n\
+                 [[profiles]]\nname = \"p\"\n[profiles.layout]\nmode = \"{name}\"\n"
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(config.layout.mode, kind);
+            assert_eq!(config.rules.resolve("app", "").layout, Some(kind));
+            assert_eq!(config.workspaces[0].layout, Some(kind));
+            assert_eq!(
+                config.profiles.get("p").expect("profile").layout.mode,
+                Some(kind)
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_layout_names_are_rejected() {
+        for text in [
+            "[layout]\nmode = \"tabbed\"\n",
+            "[layout]\nmode = \"center_tile\"\n",
+            "[[rules]]\napp_id = \"a\"\nlayout = \"stacking\"\n",
+            "[[workspaces]]\nname = \"w\"\nlayout = \"monocle-ish\"\n",
+        ] {
+            assert!(Config::from_toml_str(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn center_focused_column_is_parsed_and_validated() {
+        use crate::layout::CenterFocusedColumn;
+
+        assert_eq!(
+            Config::default().layout.center_focused_column,
+            CenterFocusedColumn::Never
+        );
+        for (text, expected) in [
+            ("never", CenterFocusedColumn::Never),
+            ("always", CenterFocusedColumn::Always),
+            ("on-overflow", CenterFocusedColumn::OnOverflow),
+        ] {
+            let config =
+                Config::from_toml_str(&format!("[layout]\ncenter_focused_column = \"{text}\"\n"))
+                    .expect("valid mode");
+            assert_eq!(config.layout.center_focused_column, expected);
+        }
+        assert!(
+            Config::from_toml_str("[layout]\ncenter_focused_column = \"on_overflow\"\n").is_err()
+        );
+        assert!(Config::from_toml_str("[layout]\ncenter_focused_column = true\n").is_err());
+
+        let config = Config::from_toml_str(
+            "[[profiles]]\nname = \"focus\"\n[profiles.layout]\ncenter_focused_column = \"always\"\n",
+        )
+        .expect("profile patch");
+        assert_eq!(
+            config
+                .profiles
+                .get("focus")
+                .expect("profile")
+                .layout
+                .center_focused_column,
+            Some(CenterFocusedColumn::Always)
+        );
+
+        // The option survives a print-config round trip.
+        let mut original = Config::default();
+        original.layout.center_focused_column = CenterFocusedColumn::OnOverflow;
+        let text = original.to_toml_string().expect("serializable");
+        let reparsed = Config::from_toml_str(&text).expect("reparse");
+        assert_eq!(
+            reparsed.layout.center_focused_column,
+            CenterFocusedColumn::OnOverflow
+        );
+    }
+
+    #[test]
     fn default_focus_chord_resolves_to_the_left_direction() {
         let config = Config::default();
         let action = config.lookup(

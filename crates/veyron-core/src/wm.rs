@@ -423,8 +423,12 @@ impl Wm {
             for workspace in &mut self.outputs[index].workspaces {
                 workspace.layout.set_config(self.config.layout.clone());
                 workspace.layout.set_viewport(viewport);
-                if let Some(mode) = profile.layout.mode {
-                    workspace.layout_mode = mode;
+            }
+        }
+        if let Some(mode) = profile.layout.mode {
+            for output_index in 0..self.outputs.len() {
+                for workspace_index in 0..self.outputs[output_index].workspaces.len() {
+                    self.set_workspace_layout(output_index, workspace_index, mode);
                 }
             }
         }
@@ -569,6 +573,7 @@ impl Wm {
                 .any(|(name, label)| name == output && label == workspace)
         });
 
+        self.clamp_floating_windows();
         self.refresh_tiled_rects();
         self.note_focus();
         true
@@ -699,6 +704,9 @@ impl Wm {
         }
 
         self.active_output = index;
+        // A tiled window landing on a floating workspace is drawn at its
+        // floating geometry, which still belongs to the old output.
+        self.clamp_floating_windows();
         self.refresh_tiled_rects();
         self.note_focus();
         true
@@ -856,21 +864,13 @@ impl Wm {
         window.set_opacity(policy.opacity);
         window.set_blur(policy.blur);
         window.set_animate(policy.animate);
-        let viewport = self.viewport();
-        let floating_size = window
-            .min_size()
-            .map(|size| size.clamp_to(viewport.size()))
-            .unwrap_or_else(|| default_floating_size(viewport));
-        let remembered = self
-            .remembered
-            .get(window.app_id())
-            .copied()
-            .filter(|rect| !rect.is_empty())
-            .map(|rect| {
-                let size = rect.size().clamp_to(viewport.size());
-                Rect::new(rect.x, rect.y, size.w, size.h)
-            });
-        window.set_floating_rect(remembered.unwrap_or_else(|| viewport.centered(floating_size)));
+        // Every window gets a floating geometry up front: it is used when the
+        // window floats, and on a workspace whose layout is `floating`.
+        window.set_floating_rect(self.initial_floating_rect(
+            self.active_output,
+            &app_id,
+            window.min_size(),
+        ));
         if policy.floating {
             window.set_floating(true);
         }
@@ -897,7 +897,7 @@ impl Wm {
         };
         let is_active = target == self.outputs[output_index].active;
         if let Some(kind) = policy.layout {
-            self.outputs[output_index].workspaces[target].layout_mode = kind;
+            self.set_workspace_layout(output_index, target, kind);
         }
 
         if policy.scratchpad {
@@ -1006,8 +1006,27 @@ impl Wm {
 
         if let Some(kind) = policy.layout {
             if let Some((output_index, workspace_index, _)) = self.locate(id) {
-                self.outputs[output_index].workspaces[workspace_index].layout_mode = kind;
+                self.set_workspace_layout(output_index, workspace_index, kind);
                 effects.layout_changed = true;
+            }
+        }
+
+        // Created before its identity was known, a window landing untiled on
+        // a floating workspace opens like any new floating window: at the
+        // geometry remembered for its app, otherwise centred.
+        if let Some((output_index, workspace_index, false)) = self.locate(id) {
+            if self.outputs[output_index].workspaces[workspace_index]
+                .layout_mode
+                .is_floating()
+            {
+                let min_size = self.windows.get(&id).and_then(Window::min_size);
+                let rect = self.initial_floating_rect(output_index, app_id, min_size);
+                if let Some(window) = self.windows.get_mut(&id) {
+                    if window.floating_rect() != rect {
+                        window.set_floating_rect(rect);
+                        effects.layout_changed = true;
+                    }
+                }
             }
         }
 
@@ -1098,9 +1117,11 @@ impl Wm {
         let viewport = self.viewport();
         let output_index = self.active_output;
         let workspace_index = self.outputs[output_index].active;
-        let ids = self.outputs[output_index].workspaces[workspace_index]
-            .floating
-            .clone();
+        let workspace = &self.outputs[output_index].workspaces[workspace_index];
+        let mut ids = workspace.floating.clone();
+        if workspace.layout_mode.is_floating() {
+            ids.extend(workspace.layout.order());
+        }
         let mut moved = false;
         for id in ids {
             let Some(window) = self.windows.get(&id) else {
@@ -1456,23 +1477,39 @@ impl Wm {
                 });
             }
             _ => {
-                let tiled = if layout == LayoutKind::Scroll {
-                    workspace.layout.placements_with_gap(gap)
-                } else {
-                    arrange(
-                        layout,
-                        &workspace.layout.order(),
-                        viewport,
-                        gap,
-                        self.config.layout.master_ratio,
-                    )
+                let tiled = match layout {
+                    LayoutKind::Scroll => workspace.layout.placements_with_gap(gap),
+                    // A floating workspace draws its tiled set untiled, at
+                    // each window's floating geometry.
+                    LayoutKind::Floating => workspace
+                        .layout
+                        .order()
+                        .into_iter()
+                        .filter_map(|id| {
+                            self.windows.get(&id).map(|window| Placement {
+                                window: id,
+                                rect: window.floating_rect(),
+                            })
+                        })
+                        .collect(),
+                    _ => {
+                        let order = workspace.layout.order();
+                        arrange(
+                            layout,
+                            &order,
+                            self.shown_window(workspace, layout, &order),
+                            viewport,
+                            gap,
+                            self.config.layout.master_ratio,
+                        )
+                    }
                 };
                 for Placement { window, rect } in tiled {
                     let (opacity, blur, animate) = visual(window);
                     placements.push(PlacementInfo {
                         window,
                         rect,
-                        floating: false,
+                        floating: layout.is_floating(),
                         fullscreen: false,
                         opacity,
                         blur,
@@ -1517,6 +1554,69 @@ impl Wm {
             focused: workspace.focused_window(),
             placements,
         }
+    }
+
+    /// The tiled window monocle and deck keep visible: the focused one, or for
+    /// deck (whose master is always shown) the stack window focused most
+    /// recently, so focusing the master does not flip the visible stack card.
+    fn shown_window(
+        &self,
+        workspace: &Workspace,
+        layout: LayoutKind,
+        order: &[WindowId],
+    ) -> Option<WindowId> {
+        let focused = workspace.layout.focused_window();
+        if layout != LayoutKind::Deck {
+            return focused;
+        }
+        let stack = order.get(1..).unwrap_or_default();
+        focused.filter(|id| stack.contains(id)).or_else(|| {
+            self.focus_history
+                .iter()
+                .rev()
+                .copied()
+                .find(|id| stack.contains(id))
+        })
+    }
+
+    /// Whether a window is drawn at its floating geometry: it sits in a
+    /// floating layer, or in the tiled set of a workspace whose layout is
+    /// `floating`. Moving and resizing by hand works on exactly these windows.
+    fn floats(&self, id: WindowId) -> bool {
+        if self.windows.get(&id).is_some_and(Window::is_floating) {
+            return true;
+        }
+        self.locate(id)
+            .is_some_and(|(output, workspace, floating)| {
+                floating
+                    || self.outputs[output].workspaces[workspace]
+                        .layout_mode
+                        .is_floating()
+            })
+    }
+
+    /// Where a new floating window opens on an output: the geometry
+    /// remembered for its application (resized to fit), otherwise centred at
+    /// its minimum size or the default floating size.
+    fn initial_floating_rect(
+        &self,
+        output_index: usize,
+        app_id: &str,
+        min_size: Option<Size>,
+    ) -> Rect {
+        let viewport = self.viewport_of(output_index);
+        let size = min_size
+            .map(|size| size.clamp_to(viewport.size()))
+            .unwrap_or_else(|| default_floating_size(viewport));
+        self.remembered
+            .get(app_id)
+            .copied()
+            .filter(|rect| !rect.is_empty())
+            .map(|rect| {
+                let size = rect.size().clamp_to(viewport.size());
+                Rect::new(rect.x, rect.y, size.w, size.h)
+            })
+            .unwrap_or_else(|| viewport.centered(size))
     }
 
     /// Most recently focused windows, oldest first.
@@ -1917,11 +2017,41 @@ impl Wm {
 
     /// Select the tiling layout of the active workspace.
     fn set_layout(&mut self, kind: LayoutKind) -> bool {
-        let workspace = self.active_workspace_mut();
-        if workspace.layout_mode == kind {
+        let output_index = self.active_output;
+        let workspace_index = self.outputs[output_index].active;
+        self.set_workspace_layout(output_index, workspace_index, kind)
+    }
+
+    /// Select the layout of one workspace. Returns whether it changed.
+    ///
+    /// The tiled set of a workspace is the same whatever its layout, so
+    /// switching to `floating` and back re-tiles exactly the windows that were
+    /// tiled before. Entering `floating` leaves every visible tiled window
+    /// where the tiling put it, by seeding its floating geometry from the
+    /// current frame (COSMIC style); hidden windows keep the geometry they
+    /// already had.
+    fn set_workspace_layout(
+        &mut self,
+        output_index: usize,
+        workspace_index: usize,
+        kind: LayoutKind,
+    ) -> bool {
+        if self.outputs[output_index].workspaces[workspace_index].layout_mode == kind {
             return false;
         }
-        workspace.layout_mode = kind;
+        if kind.is_floating() {
+            let viewport = self.viewport_of(output_index);
+            let frame = self.build_snapshot(output_index, workspace_index);
+            for placement in frame.placements {
+                if placement.floating || placement.fullscreen {
+                    continue;
+                }
+                if let Some(window) = self.windows.get_mut(&placement.window) {
+                    window.set_floating_rect(clamp_into(placement.rect, viewport));
+                }
+            }
+        }
+        self.outputs[output_index].workspaces[workspace_index].layout_mode = kind;
         true
     }
 
@@ -1946,10 +2076,13 @@ impl Wm {
         if !self.config.behavior.remember_geometry {
             return;
         }
+        if !self.floats(id) {
+            return;
+        }
         let Some(window) = self.windows.get(&id) else {
             return;
         };
-        if !window.is_floating() || window.app_id().is_empty() {
+        if window.app_id().is_empty() {
             return;
         }
         let app_id = window.app_id().to_string();
@@ -2173,12 +2306,20 @@ impl Wm {
             workspace.layout.insert_window(id);
         } else {
             let viewport = self.viewport();
+            // On a floating workspace the window is already drawn at its
+            // floating geometry; it only moves to the floating layer, which
+            // keeps it floating once the workspace tiles again.
+            let untiled = self
+                .active_output()
+                .active_workspace()
+                .layout_mode
+                .is_floating();
             let rect = self
                 .windows
                 .get(&id)
                 .map(|window| {
                     let last = window.last_tiled_rect();
-                    if last.is_empty() {
+                    if untiled || last.is_empty() {
                         window.floating_rect()
                     } else {
                         last
@@ -2207,12 +2348,12 @@ impl Wm {
         let Some(id) = self.focused_window() else {
             return false;
         };
+        if !self.floats(id) {
+            return false;
+        }
         let Some(window) = self.windows.get(&id) else {
             return false;
         };
-        if !window.is_floating() {
-            return false;
-        }
 
         let mut rect = window.floating_rect();
         let requested_min = window.min_size().unwrap_or(MIN_FLOATING_SIZE);
@@ -2270,12 +2411,12 @@ impl Wm {
         let Some(id) = self.focused_window() else {
             return false;
         };
+        if !self.floats(id) {
+            return false;
+        }
         let Some(window) = self.windows.get(&id) else {
             return false;
         };
-        if !window.is_floating() {
-            return false;
-        }
 
         let rect = window.floating_rect();
         let (dx, dy) = match direction {
@@ -2290,7 +2431,25 @@ impl Wm {
     /// Focus the next (`delta > 0`) or previous visible window of the active
     /// workspace in draw order, wrapping around (alt-tab).
     fn cycle_focus(&mut self, delta: i32) -> bool {
-        let order: Vec<WindowId> = self.snapshot().windows().collect();
+        let workspace = self.active_output().active_workspace();
+        let order: Vec<WindowId> = if workspace.fullscreen.is_some() {
+            self.snapshot().windows().collect()
+        } else {
+            // Every tiled window, including the ones monocle and deck hide,
+            // then the floating layer: the order the frame draws them in.
+            workspace
+                .layout
+                .order()
+                .into_iter()
+                .chain(
+                    workspace
+                        .floating
+                        .iter()
+                        .copied()
+                        .filter(|id| self.windows.contains_key(id)),
+                )
+                .collect()
+        };
         if order.len() < 2 || delta == 0 {
             return false;
         }
@@ -2308,12 +2467,12 @@ impl Wm {
         let Some(id) = self.focused_window() else {
             return false;
         };
+        if !self.floats(id) {
+            return false;
+        }
         let Some(window) = self.windows.get(&id) else {
             return false;
         };
-        if !window.is_floating() {
-            return false;
-        }
         let rect = window.floating_rect();
         let viewport = self.viewport();
         self.move_floating_to(
@@ -2406,12 +2565,12 @@ impl Wm {
     /// and pointer drags in the compositor. Returns whether the window moved.
     pub fn move_floating_to(&mut self, id: WindowId, x: i32, y: i32) -> bool {
         let viewport = self.viewport();
+        if !self.floats(id) {
+            return false;
+        }
         let Some(window) = self.windows.get_mut(&id) else {
             return false;
         };
-        if !window.is_floating() {
-            return false;
-        }
         let mut rect = window.floating_rect();
         let max_x = (viewport.right() - rect.w).max(viewport.x);
         let max_y = (viewport.bottom() - rect.h).max(viewport.y);
@@ -2430,12 +2589,12 @@ impl Wm {
     /// inside the viewport. Tiled windows are left to their layout.
     pub fn resize_floating_to(&mut self, id: WindowId, rect: Rect) -> bool {
         let viewport = self.viewport();
+        if !self.floats(id) {
+            return false;
+        }
         let Some(window) = self.windows.get_mut(&id) else {
             return false;
         };
-        if !window.is_floating() {
-            return false;
-        }
         let min = window.min_size().unwrap_or(MIN_FLOATING_SIZE);
         let sized = Rect::new(rect.x, rect.y, rect.w.max(min.w), rect.h.max(min.h));
         let rect = clamp_into(sized, viewport);
@@ -2478,12 +2637,18 @@ impl Wm {
     }
 
     /// Keep floating windows on screen after an output resize or margin change.
-    /// Each window is clamped to the viewport of the output it belongs to.
+    /// Each window is clamped to the viewport of the output it belongs to,
+    /// including the untiled windows of floating workspaces.
     fn clamp_floating_windows(&mut self) {
         for index in 0..self.outputs.len() {
             let viewport = self.viewport_of(index);
             for workspace in &self.outputs[index].workspaces {
-                for id in &workspace.floating {
+                let untiled = if workspace.layout_mode.is_floating() {
+                    workspace.layout.order()
+                } else {
+                    Vec::new()
+                };
+                for id in workspace.floating.iter().chain(&untiled) {
                     if let Some(window) = self.windows.get_mut(id) {
                         let rect = window.floating_rect();
                         window.set_floating_rect(clamp_into(rect, viewport));
@@ -2548,12 +2713,16 @@ fn order_delta(direction: Direction) -> isize {
 
 /// Move focus in the direction the *resolved* layout understands.
 fn focus_in_layout(workspace: &mut Workspace, direction: Direction) -> bool {
-    if workspace.effective_layout() == LayoutKind::Scroll {
-        workspace.layout.focus_direction(direction)
-    } else {
-        workspace
+    match workspace.effective_layout() {
+        LayoutKind::Scroll => workspace.layout.focus_direction(direction),
+        // Hidden windows have no on-screen neighbours: next/previous cycles
+        // through every window, wrapping around.
+        LayoutKind::Monocle | LayoutKind::Deck => {
+            workspace.layout.focus_order_cycle(order_delta(direction))
+        }
+        _ => workspace
             .layout
-            .focus_order_neighbor(order_delta(direction))
+            .focus_order_neighbor(order_delta(direction)),
     }
 }
 
@@ -3390,6 +3559,400 @@ mod tests {
             wm.active_output().active_workspace().layout_mode(),
             LayoutKind::Auto
         );
+    }
+
+    #[test]
+    fn layout_next_visits_every_layout_and_wraps_to_scroll() {
+        let mut wm = wm();
+        open(&mut wm, 2);
+        let mut seen = vec![wm.active_output().active_workspace().layout_mode()];
+        for _ in 1..LayoutKind::SELECTABLE.len() {
+            assert!(wm.dispatch(Action::LayoutNext).layout_changed);
+            seen.push(wm.active_output().active_workspace().layout_mode());
+        }
+        assert_eq!(seen, LayoutKind::SELECTABLE.to_vec());
+        assert_eq!(seen.last(), Some(&LayoutKind::Floating));
+
+        assert!(wm.dispatch(Action::LayoutNext).layout_changed);
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.layout, LayoutKind::Scroll);
+        assert_eq!(snapshot.placements.len(), 2);
+        assert!(snapshot.placements.iter().all(|p| !p.floating));
+    }
+
+    #[test]
+    fn monocle_shows_only_the_focused_window_and_cycles_through_the_rest() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 3);
+
+        assert!(
+            wm.dispatch(Action::Layout {
+                kind: LayoutKind::Monocle
+            })
+            .layout_changed
+        );
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.layout, LayoutKind::Monocle);
+        assert_eq!(snapshot.placements.len(), 1, "the others are unmapped");
+        assert_eq!(
+            snapshot.placement_of(ids[2]).expect("focused").rect,
+            snapshot.viewport
+        );
+        assert!(snapshot.placement_of(ids[0]).is_none());
+
+        // Next/previous wrap around, since hidden windows have no neighbours.
+        assert!(
+            wm.dispatch(Action::Focus {
+                direction: Direction::Right
+            })
+            .focus_changed
+        );
+        assert_eq!(wm.focused_window(), Some(ids[0]));
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.windows().collect::<Vec<_>>(), vec![ids[0]]);
+
+        assert!(
+            wm.dispatch(Action::Focus {
+                direction: Direction::Left
+            })
+            .focus_changed
+        );
+        assert_eq!(wm.focused_window(), Some(ids[2]));
+        wm.dispatch(Action::Focus {
+            direction: Direction::Up,
+        });
+        assert_eq!(wm.focused_window(), Some(ids[1]));
+
+        // Alt-tab reaches hidden windows too.
+        assert!(wm.dispatch(Action::FocusCycle { delta: 1 }).focus_changed);
+        assert_eq!(wm.focused_window(), Some(ids[2]));
+
+        // Closing the visible window reveals the next focus target.
+        wm.remove_window(ids[2]);
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placements.len(), 1);
+        assert_eq!(snapshot.focused, Some(snapshot.placements[0].window));
+
+        wm.remove_window(ids[0]);
+        wm.remove_window(ids[1]);
+        let snapshot = wm.snapshot();
+        assert!(snapshot.placements.is_empty());
+        assert_eq!(snapshot.focused, None);
+    }
+
+    #[test]
+    fn monocle_keeps_floating_windows_and_fullscreen_on_top() {
+        let mut wm = wm_with_rules(vec![WindowRule {
+            floating: Some(true),
+            ..rule("mpv")
+        }]);
+        let tiled = open(&mut wm, 2);
+        let video = wm.create_window(NewWindow {
+            app_id: "mpv".into(),
+            ..NewWindow::default()
+        });
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::Monocle,
+        });
+
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placements.len(), 2);
+        assert!(snapshot.is_floating(video));
+        assert_eq!(snapshot.focused, Some(video));
+        // The tiled window shown is the layout's focus, not the floating one.
+        assert!(snapshot.placement_of(tiled[1]).is_some());
+
+        wm.focus_window(tiled[0]);
+        assert!(wm.dispatch(Action::ToggleFullscreen).layout_changed);
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placements.len(), 1);
+        assert!(snapshot.is_fullscreen(tiled[0]));
+    }
+
+    #[test]
+    fn deck_shows_the_master_and_the_last_focused_stack_window() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 4);
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::Deck,
+        });
+
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.layout, LayoutKind::Deck);
+        assert_eq!(snapshot.placements.len(), 2);
+        assert_eq!(
+            snapshot.placement_of(ids[0]).expect("master").rect,
+            Rect::new(12, 12, 749, 776)
+        );
+        assert_eq!(
+            snapshot.placement_of(ids[3]).expect("focused stack").rect,
+            Rect::new(769, 12, 499, 776)
+        );
+        assert!(snapshot.placement_of(ids[1]).is_none());
+        assert!(snapshot.placement_of(ids[2]).is_none());
+
+        // Focusing the master keeps the stack card that was on top.
+        assert!(wm.focus_window(ids[0]));
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.focused, Some(ids[0]));
+        assert!(snapshot.placement_of(ids[3]).is_some());
+
+        // Next from the master brings the first stack window up.
+        wm.dispatch(Action::Focus {
+            direction: Direction::Down,
+        });
+        assert_eq!(wm.focused_window(), Some(ids[1]));
+        let snapshot = wm.snapshot();
+        assert!(snapshot.placement_of(ids[1]).is_some());
+        assert!(snapshot.placement_of(ids[3]).is_none());
+
+        // Previous from the master wraps to the last stack window.
+        wm.dispatch(Action::Focus {
+            direction: Direction::Up,
+        });
+        wm.dispatch(Action::Focus {
+            direction: Direction::Up,
+        });
+        assert_eq!(wm.focused_window(), Some(ids[3]));
+    }
+
+    #[test]
+    fn grid_and_center_tile_use_the_viewport_and_gap() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 4);
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::Grid,
+        });
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.layout, LayoutKind::Grid);
+        assert_eq!(
+            snapshot.placement_of(ids[0]).expect("cell").rect,
+            Rect::new(12, 12, 624, 384)
+        );
+        assert_eq!(
+            snapshot.placement_of(ids[3]).expect("cell").rect,
+            Rect::new(644, 404, 624, 384)
+        );
+
+        let mut wm = wm_with_rules(Vec::new());
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::CenterTile,
+        });
+        let master = wm.create_window(NewWindow::default());
+        let centred = Rect::new(268, 12, 744, 776);
+        assert_eq!(
+            wm.snapshot().placement_of(master).expect("master").rect,
+            centred,
+            "a lone window is centred at master_ratio of the width"
+        );
+        let stack = wm.create_window(NewWindow::default());
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placement_of(master).expect("master").rect, centred);
+        assert_eq!(
+            snapshot.placement_of(stack).expect("stack").rect,
+            Rect::new(1020, 12, 248, 776)
+        );
+    }
+
+    #[test]
+    fn a_floating_workspace_leaves_windows_where_they_were_tiled() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 2);
+        let tiled = wm.snapshot();
+
+        assert!(
+            wm.dispatch(Action::Layout {
+                kind: LayoutKind::Floating
+            })
+            .layout_changed
+        );
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.layout, LayoutKind::Floating);
+        for id in &ids {
+            let placement = snapshot.placement_of(*id).expect("still drawn");
+            assert!(placement.floating);
+            assert_eq!(
+                placement.rect,
+                tiled.placement_of(*id).expect("tiled").rect,
+                "the window stays where the tiling put it"
+            );
+            assert!(
+                !wm.window(*id).expect("window").is_floating(),
+                "the window still belongs to the tiled set"
+            );
+        }
+
+        // Untiled windows resize and move like floating ones.
+        assert!(
+            wm.dispatch(Action::Resize {
+                axis: ResizeAxis::Width,
+                delta: -100,
+            })
+            .layout_changed
+        );
+        assert!(
+            wm.dispatch(Action::MoveFloating {
+                direction: Direction::Left,
+                delta: 40,
+            })
+            .layout_changed
+        );
+        let moved = wm.snapshot().placement_of(ids[1]).expect("placement").rect;
+        // 640 + 50 (resized around its centre) - 40.
+        assert_eq!(moved, Rect::new(650, 12, 520, 776));
+        assert!(wm.move_floating_to(ids[0], 100, 100));
+
+        // Back to a tiling layout, the same windows tile again.
+        assert!(
+            wm.dispatch(Action::Layout {
+                kind: LayoutKind::Scroll
+            })
+            .layout_changed
+        );
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placements, tiled.placements);
+        assert!(!wm.move_floating_to(ids[0], 200, 200), "tiled again");
+    }
+
+    #[test]
+    fn new_windows_on_a_floating_workspace_open_centred_or_where_remembered() {
+        let mut wm = wm();
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::Floating,
+        });
+        let viewport = wm.viewport();
+
+        let first = wm.create_window(NewWindow {
+            app_id: "editor".into(),
+            ..NewWindow::default()
+        });
+        let snapshot = wm.snapshot();
+        let placement = snapshot.placement_of(first).expect("placement");
+        assert!(placement.floating);
+        assert_eq!(
+            placement.rect,
+            viewport.centered(default_floating_size(viewport))
+        );
+        assert_eq!(snapshot.focused, Some(first));
+
+        wm.dispatch(Action::MoveFloating {
+            direction: Direction::Right,
+            delta: 64,
+        });
+        let remembered = wm.snapshot().placement_of(first).expect("moved").rect;
+        assert!(wm.remove_window(first));
+
+        // A window created before its identity is known picks the remembered
+        // geometry up once the client names itself.
+        let second = wm.create_window(NewWindow::default());
+        assert_eq!(
+            wm.snapshot().placement_of(second).expect("placement").rect,
+            viewport.centered(default_floating_size(viewport))
+        );
+        assert!(
+            wm.set_window_identity(second, "editor", "notes")
+                .layout_changed
+        );
+        assert_eq!(
+            wm.snapshot().placement_of(second).expect("placement").rect,
+            remembered
+        );
+    }
+
+    #[test]
+    fn floating_workspace_keeps_fullscreen_and_toggle_floating_coherent() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 2);
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::Floating,
+        });
+        let before = wm.snapshot().placement_of(ids[1]).expect("placement").rect;
+
+        assert!(wm.dispatch(Action::ToggleFullscreen).layout_changed);
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.placements.len(), 1);
+        assert!(snapshot.is_fullscreen(ids[1]));
+        assert_eq!(
+            snapshot.placement_of(ids[1]).expect("fs").rect,
+            snapshot.output
+        );
+        wm.dispatch(Action::ToggleFullscreen);
+        assert_eq!(
+            wm.snapshot().placement_of(ids[1]).expect("placement").rect,
+            before,
+            "leaving fullscreen restores the floating geometry"
+        );
+
+        // toggle-floating does not move the window; it pins it to the floating
+        // layer, so it stays floating once the workspace tiles again.
+        assert!(wm.dispatch(Action::ToggleFloating).layout_changed);
+        assert!(wm.window(ids[1]).expect("window").is_floating());
+        assert_eq!(
+            wm.snapshot().placement_of(ids[1]).expect("placement").rect,
+            before
+        );
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::MasterStack,
+        });
+        let snapshot = wm.snapshot();
+        assert!(snapshot.is_floating(ids[1]));
+        assert!(!snapshot.is_floating(ids[0]));
+        assert_eq!(
+            snapshot.placement_of(ids[0]).expect("tiled").rect,
+            snapshot.viewport
+        );
+
+        // Toggling it back joins the tiled set again.
+        assert!(wm.dispatch(Action::ToggleFloating).layout_changed);
+        assert!(!wm.snapshot().is_floating(ids[1]));
+    }
+
+    #[test]
+    fn a_floating_layout_rule_switches_the_workspace_without_moving_windows() {
+        let config = Config::from_toml_str(
+            "[layout]\nmode = \"grid\"\n\n[[rules]]\napp_id = \"gimp\"\nlayout = \"floating\"\n",
+        )
+        .expect("valid config");
+        let mut wm = Wm::new(config, "VEYRON-TEST", Size::new(1280, 800));
+        let tiled = open(&mut wm, 1)[0];
+        assert_eq!(wm.snapshot().layout, LayoutKind::Grid);
+        let grid_rect = wm.snapshot().placement_of(tiled).expect("tiled").rect;
+
+        let gimp = wm.create_window(NewWindow {
+            app_id: "gimp".into(),
+            ..NewWindow::default()
+        });
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.layout, LayoutKind::Floating);
+        assert!(snapshot.is_floating(gimp));
+        assert!(snapshot.is_floating(tiled));
+        assert_eq!(snapshot.placement_of(tiled).expect("kept").rect, grid_rect);
+        let viewport = snapshot.viewport;
+        assert_eq!(
+            snapshot.placement_of(gimp).expect("new").rect,
+            viewport.centered(default_floating_size(viewport))
+        );
+    }
+
+    #[test]
+    fn canvas_pan_and_viewport_clamps_cover_untiled_windows() {
+        let mut wm = wm();
+        let ids = open(&mut wm, 1);
+        wm.dispatch(Action::Layout {
+            kind: LayoutKind::Floating,
+        });
+        let before = wm.snapshot().placement_of(ids[0]).expect("placement").rect;
+        assert!(
+            wm.canvas_pan(30, 0),
+            "the canvas gesture moves untiled windows"
+        );
+        let panned = wm.snapshot().placement_of(ids[0]).expect("placement").rect;
+        assert_eq!(panned.x, before.x + 30);
+
+        wm.set_output_size(Size::new(400, 300));
+        let viewport = wm.viewport();
+        let rect = wm.snapshot().placement_of(ids[0]).expect("placement").rect;
+        assert_eq!(rect.intersection(viewport), Some(rect));
     }
 
     #[test]

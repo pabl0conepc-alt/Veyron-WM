@@ -46,8 +46,12 @@ pub struct LayoutConfig {
     pub mode: LayoutKind,
     /// Remove the gap for a lone window and tighten it on dense layouts.
     pub smart_gaps: bool,
-    /// Share of the viewport given to the master window in `MasterStack`.
+    /// Share of the viewport given to the master window in `MasterStack`,
+    /// `Deck` and `CenterTile`.
     pub master_ratio: f64,
+    /// When the scrolling strip centres the focused column (niri's option of
+    /// the same name).
+    pub center_focused_column: CenterFocusedColumn,
 }
 
 impl Default for LayoutConfig {
@@ -61,8 +65,23 @@ impl Default for LayoutConfig {
             mode: LayoutKind::Scroll,
             smart_gaps: false,
             master_ratio: 0.6,
+            center_focused_column: CenterFocusedColumn::Never,
         }
     }
+}
+
+/// How the scrolling strip positions the focused column.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CenterFocusedColumn {
+    /// Scroll only as far as needed to show the focused column.
+    #[default]
+    Never,
+    /// Always centre the focused column.
+    Always,
+    /// Centre the focused column only when it does not fit on screen together
+    /// with the previously focused column; otherwise keep both visible.
+    OnOverflow,
 }
 
 impl LayoutConfig {
@@ -169,6 +188,9 @@ pub struct ScrollLayout {
     focus: Option<Position>,
     scroll: f64,
     viewport: Rect,
+    /// Window focused the last time the viewport followed the focus, which
+    /// `center_focused_column = "on-overflow"` compares against.
+    revealed: Option<WindowId>,
 }
 
 impl ScrollLayout {
@@ -179,6 +201,7 @@ impl ScrollLayout {
             focus: None,
             scroll: 0.0,
             viewport,
+            revealed: None,
         }
     }
 
@@ -267,6 +290,24 @@ impl ScrollLayout {
             return false;
         };
         self.focus_window(target)
+    }
+
+    /// Like [`ScrollLayout::focus_order_neighbor`], but wrapping around at
+    /// both ends. Layouts that hide windows (monocle, deck) use it, so every
+    /// window stays reachable from either direction.
+    pub fn focus_order_cycle(&mut self, delta: isize) -> bool {
+        let order = self.order();
+        let Some(current) = self.focused_window() else {
+            return false;
+        };
+        let Some(index) = order.iter().position(|window| *window == current) else {
+            return false;
+        };
+        if order.len() < 2 || delta == 0 {
+            return false;
+        }
+        let target = (index as isize + delta).rem_euclid(order.len() as isize) as usize;
+        self.focus_window(order[target])
     }
 
     /// Swap the focused window with its predecessor/successor in strip order.
@@ -549,9 +590,7 @@ impl ScrollLayout {
             return false;
         };
         let before = self.scroll;
-        let start = self.column_offset(focus.column) as f64;
-        let width = self.column_outer_width(focus.column) - self.gap();
-        self.scroll = start + width as f64 / 2.0 - self.viewport.w as f64 / 2.0;
+        self.scroll = self.centered_scroll(focus.column);
         self.clamp_scroll();
         (self.scroll - before).abs() > f64::EPSILON
     }
@@ -665,28 +704,73 @@ impl ScrollLayout {
             .map(|placement| placement.rect)
     }
 
-    /// Keep the focused column inside the viewport, scrolling only as much as
-    /// necessary. Columns wider than the viewport are aligned to their left edge.
+    /// Keep the focused column inside the viewport.
+    ///
+    /// By default this scrolls only as much as necessary, aligning columns
+    /// wider than the viewport to their left edge. `center_focused_column`
+    /// can instead centre the focused column always, or only when it does not
+    /// fit next to the previously focused column (in which case both are kept
+    /// visible).
     pub fn ensure_focus_visible(&mut self) {
         let Some(focus) = self.focus else {
             self.scroll = 0.0;
+            self.revealed = None;
             return;
         };
         if self.viewport.w <= 0 {
             return;
         }
 
-        let start = self.column_offset(focus.column) as f64;
-        let end = start + (self.column_outer_width(focus.column) - self.gap()).max(1) as f64;
-        let view = self.viewport.w as f64;
+        let previous = self
+            .revealed
+            .and_then(|window| self.position_of(window))
+            .map(|position| position.column)
+            .filter(|column| *column != focus.column);
+        self.revealed = self.focused_window();
 
+        let (start, end) = self.column_span(focus.column);
+        match self.config.center_focused_column {
+            CenterFocusedColumn::Never => self.reveal(start, end),
+            CenterFocusedColumn::Always => self.scroll = self.centered_scroll(focus.column),
+            CenterFocusedColumn::OnOverflow => match previous {
+                Some(previous) => {
+                    let (other_start, other_end) = self.column_span(previous);
+                    let (start, end) = (start.min(other_start), end.max(other_end));
+                    if end - start <= self.viewport.w as f64 {
+                        self.reveal(start, end);
+                    } else {
+                        self.scroll = self.centered_scroll(focus.column);
+                    }
+                }
+                None => self.reveal(start, end),
+            },
+        }
+        self.clamp_scroll();
+    }
+
+    /// Scroll as little as possible so `start..end` (strip coordinates) is
+    /// visible, favouring the start when the range is wider than the viewport.
+    fn reveal(&mut self, start: f64, end: f64) {
+        let view = self.viewport.w as f64;
         if end - self.scroll > view {
             self.scroll = end - view;
         }
         if start - self.scroll < 0.0 {
             self.scroll = start;
         }
-        self.clamp_scroll();
+    }
+
+    /// Strip coordinates of a column's visible extent (without its gap).
+    fn column_span(&self, index: usize) -> (f64, f64) {
+        let start = self.column_offset(index) as f64;
+        let end = start + (self.column_outer_width(index) - self.gap()).max(1) as f64;
+        (start, end)
+    }
+
+    /// Unclamped scroll offset that centres a column in the viewport.
+    fn centered_scroll(&self, index: usize) -> f64 {
+        let (start, end) = self.column_span(index);
+        (start + end) / 2.0 - self.viewport.w as f64 / 2.0
     }
 
     /// Largest possible scroll offset for the current strip and viewport.
@@ -971,6 +1055,139 @@ mod tests {
         let bottom = placements.last().map(|p| p.rect.bottom());
         assert_eq!(top, Some(0));
         assert_eq!(bottom, Some(500));
+    }
+
+    fn centering_layout(mode: CenterFocusedColumn, ratio: f64, windows: u64) -> ScrollLayout {
+        let config = LayoutConfig {
+            center_focused_column: mode,
+            default_column_ratio: ratio,
+            ..LayoutConfig::default()
+        };
+        let mut layout = ScrollLayout::new(config, Rect::new(0, 0, 1000, 800));
+        for id in 1..=windows {
+            layout.insert_window(window(id));
+        }
+        layout
+    }
+
+    #[test]
+    fn center_focused_column_never_scrolls_minimally() {
+        // Five 500px slots (492px columns): 2492px of content, max scroll 1492.
+        let mut layout = centering_layout(CenterFocusedColumn::Never, 0.5, 5);
+        assert_eq!(layout.scroll(), 1492.0);
+        assert!(layout.focus_direction(Direction::Left));
+        assert_eq!(layout.scroll(), 1492.0, "column 4 is already visible");
+        assert!(layout.focus_direction(Direction::Left));
+        assert_eq!(layout.scroll(), 1000.0, "column 3 is aligned to the left");
+    }
+
+    #[test]
+    fn center_focused_column_always_centres_within_the_scroll_bounds() {
+        let mut layout = centering_layout(CenterFocusedColumn::Always, 0.5, 5);
+        // The last column cannot be centred past the end of the strip.
+        assert_eq!(layout.scroll(), 1492.0);
+
+        assert!(layout.focus_direction(Direction::Left));
+        assert!(layout.focus_direction(Direction::Left));
+        // Column 3 starts at 1000 and is 492px wide: centred means 746.
+        assert_eq!(layout.scroll(), 746.0);
+        let rect = layout.rect_of(window(3)).expect("focused geometry");
+        assert_eq!(rect.x, (1000 - 492) / 2);
+
+        // The first column cannot be centred before the start of the strip.
+        assert!(layout.focus_window(window(1)));
+        assert_eq!(layout.scroll(), 0.0);
+
+        // A single window is centred only within what the strip allows.
+        let lone = centering_layout(CenterFocusedColumn::Always, 0.5, 1);
+        assert_eq!(lone.scroll(), 0.0);
+    }
+
+    #[test]
+    fn center_focused_column_on_overflow_keeps_two_fitting_columns_visible() {
+        // Two 492px columns fit in 1000px together: no centring.
+        let mut layout = centering_layout(CenterFocusedColumn::OnOverflow, 0.5, 5);
+        assert_eq!(layout.scroll(), 1492.0);
+        assert!(layout.focus_direction(Direction::Left));
+        assert_eq!(layout.scroll(), 1492.0);
+        assert!(layout.focus_direction(Direction::Left));
+        assert_eq!(layout.scroll(), 1000.0, "columns 3 and 4 both visible");
+        let previous = layout.rect_of(window(4)).expect("geometry");
+        assert!(previous.right() <= 1000);
+    }
+
+    #[test]
+    fn center_focused_column_on_overflow_centres_when_the_pair_does_not_fit() {
+        // 700px slots (692px columns): two columns need 1392px, more than the
+        // 1000px viewport, so each focus change centres the new column.
+        let mut layout = centering_layout(CenterFocusedColumn::OnOverflow, 0.7, 3);
+        // Content is 2092px wide, so the last column is clamped to 1092.
+        assert_eq!(layout.scroll(), 1092.0);
+
+        assert!(layout.focus_direction(Direction::Left));
+        assert_eq!(layout.scroll(), 546.0, "700 + 346 - 500");
+        let rect = layout.rect_of(window(2)).expect("geometry");
+        assert_eq!(rect.x, (1000 - 692) / 2);
+
+        // Without a focus change (a viewport update) nothing is re-centred.
+        layout.set_viewport(Rect::new(0, 0, 1000, 600));
+        assert_eq!(layout.scroll(), 546.0);
+
+        // The same move with `never` only aligns the column's left edge.
+        let mut never = centering_layout(CenterFocusedColumn::Never, 0.7, 3);
+        assert!(never.focus_direction(Direction::Left));
+        assert_eq!(never.scroll(), 700.0);
+    }
+
+    #[test]
+    fn center_focused_column_parses_from_kebab_case() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            mode: CenterFocusedColumn,
+        }
+        for (text, expected) in [
+            ("never", CenterFocusedColumn::Never),
+            ("always", CenterFocusedColumn::Always),
+            ("on-overflow", CenterFocusedColumn::OnOverflow),
+        ] {
+            let parsed: Wrapper =
+                toml::from_str(&format!("mode = \"{text}\"")).expect("valid mode");
+            assert_eq!(parsed.mode, expected);
+        }
+        assert!(toml::from_str::<Wrapper>("mode = \"sometimes\"").is_err());
+        assert_eq!(
+            LayoutConfig::default().center_focused_column,
+            CenterFocusedColumn::Never
+        );
+    }
+
+    #[test]
+    fn focus_order_cycle_wraps_around_both_ends() {
+        let mut layout = layout(1000, 600);
+        for id in 1..=3 {
+            layout.insert_window(window(id));
+        }
+        assert!(layout.focus_order_cycle(1));
+        assert_eq!(layout.focused_window(), Some(window(1)), "wraps forward");
+        assert!(layout.focus_order_cycle(-1));
+        assert_eq!(layout.focused_window(), Some(window(3)), "wraps back");
+        assert!(layout.focus_order_cycle(-1));
+        assert_eq!(layout.focused_window(), Some(window(2)));
+
+        let mut lone = layout_with(1);
+        assert!(!lone.focus_order_cycle(1), "nothing to cycle to");
+        assert!(
+            !ScrollLayout::new(LayoutConfig::default(), Rect::new(0, 0, 10, 10))
+                .focus_order_cycle(1)
+        );
+    }
+
+    fn layout_with(windows: u64) -> ScrollLayout {
+        let mut layout = layout(800, 600);
+        for id in 1..=windows {
+            layout.insert_window(window(id));
+        }
+        layout
     }
 
     #[test]
