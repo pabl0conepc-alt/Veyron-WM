@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    layout::LayoutConfig,
+    layout::{CenterFocusedColumn, LayoutConfig},
     motion::{MotionConfig, SpringConfig},
     tiling::LayoutKind,
 };
@@ -31,6 +31,7 @@ pub struct LayoutPatch {
     pub mode: Option<LayoutKind>,
     pub smart_gaps: Option<bool>,
     pub master_ratio: Option<f64>,
+    pub center_focused_column: Option<CenterFocusedColumn>,
 }
 
 impl LayoutPatch {
@@ -59,6 +60,9 @@ impl LayoutPatch {
         }
         if let Some(ratio) = self.master_ratio {
             layout.master_ratio = ratio;
+        }
+        if let Some(center) = self.center_focused_column {
+            layout.center_focused_column = center;
         }
     }
 }

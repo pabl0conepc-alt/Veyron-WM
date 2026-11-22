@@ -897,6 +897,18 @@ mod tests {
             })
         );
         assert_eq!(Action::parse("layout next"), Ok(Action::LayoutNext));
+        for kind in LayoutKind::SELECTABLE {
+            assert_eq!(
+                Action::parse(&format!("set-layout {kind}")),
+                Ok(Action::Layout { kind })
+            );
+        }
+        assert_eq!(
+            Action::parse("layout float"),
+            Ok(Action::Layout {
+                kind: LayoutKind::Floating
+            })
+        );
         assert!(Action::parse("layout spiral-ish").is_err());
         assert!(Action::parse("scratchpad now").is_err());
     }

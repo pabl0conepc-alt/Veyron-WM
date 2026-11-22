@@ -104,7 +104,8 @@ pub struct StateReport {
     /// Signed coordinates of the active sparse 2D workspace.
     pub workspace_position: [i64; 2],
     /// Resolved tiling layout of the active workspace (`scroll`,
-    /// `master-stack`, `dwindle`).
+    /// `master-stack`, `dwindle`, `grid`, `center-tile`, `deck`, `monocle` or
+    /// `floating`; `auto` is reported as the layout it resolved to).
     pub layout: String,
     /// Effective inner gap in logical pixels after smart gaps.
     pub gap: i32,

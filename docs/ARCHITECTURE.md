@@ -113,8 +113,20 @@ multi-output backend can drive without further core changes.
 - `master-stack` gives the first window `master_ratio` of the width and stacks
   the rest in the remaining column.
 - `dwindle` splits the usable area recursively, alternating axes.
+- `grid` places windows in rows of `ceil(sqrt(n))`, stretching the last row.
+- `center-tile` centres the master at `master_ratio` of the width and
+  alternates the stack between a right and a left column.
+- `deck` is `master-stack` with one visible stack window; `monocle` shows only
+  the focused window. Windows these two hide get no placement, so the
+  compositor unmaps them like windows on other workspaces.
+- `floating` tiles nothing: the workspace's tiled set is drawn at each
+  window's floating geometry, and switching back to a tiling layout tiles the
+  same windows again.
 - `auto` resolves to `master-stack` for up to three windows and to `dwindle`
   from four windows on (dynamic tiling).
+
+`center_focused_column` (`never`, `always`, `on-overflow`) only affects how the
+`scroll` strip follows the focus.
 
 The strip still owns window order, focus and column ratios for every layout, so
 there is one source of truth. In flat layouts `left/up` and `right/down` step
