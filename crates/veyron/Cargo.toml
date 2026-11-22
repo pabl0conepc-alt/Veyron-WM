@@ -30,6 +30,7 @@ workspace = true
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # Debian/Ubuntu package, built with `cargo deb -p veyron` (see README.md).
 # libwayland-client, libxkbcommon and libEGL are opened with dlopen at runtime,

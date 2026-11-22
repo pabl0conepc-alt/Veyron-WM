@@ -27,7 +27,7 @@ use smithay::{
                 AsRenderElements, Kind,
             },
             gles::{element::PixelShaderElement, GlesRenderer},
-            utils::on_commit_buffer_handler,
+            utils::{on_commit_buffer_handler, with_renderer_surface_state},
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
     },
@@ -63,7 +63,8 @@ use smithay::{
         },
         shell::{
             wlr_layer::{
-                Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+                KeyboardInteractivity, Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData,
+                WlrLayerShellHandler, WlrLayerShellState,
             },
             xdg::{
                 decoration::{XdgDecorationHandler, XdgDecorationState},
@@ -162,6 +163,10 @@ pub struct Veyron {
     /// Floating window being dragged with `super` + left button, and the
     /// pointer's offset from its top-left corner when the drag started.
     drag: Option<(WindowId, Point<f64, Logical>)>,
+    /// Layer surface accepting the keyboard (`on_demand`, or `exclusive` on a
+    /// layer below windows) the user clicked into; it keeps the keyboard
+    /// until a window is clicked or focused, or it stops accepting it.
+    layer_focus: Option<WlSurface>,
     /// Material You scheme generated from `[theme]`.
     palette: Palette,
     /// Window decorations (borders, shadows, rounded corners) kept across frames.
@@ -285,6 +290,7 @@ impl Veyron {
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
             drag: None,
+            layer_focus: None,
             palette,
             chrome: Chrome::default(),
             needs_redraw: true,
@@ -460,11 +466,20 @@ impl Veyron {
         }
         // A click on a panel, OSD or notification above the windows belongs
         // to that layer surface; it must not focus, raise or drag the window
-        // underneath.
-        let over_layer = self
-            .layer_surface_under(self.pointer_location, &[Layer::Overlay, Layer::Top])
-            .is_some();
-        if event.state() == ButtonState::Pressed && !over_layer {
+        // underneath. A launcher or panel that accepts the keyboard on demand
+        // takes it with the click.
+        let clicked_layer = if event.state() == ButtonState::Pressed {
+            self.layer_under(self.pointer_location)
+        } else {
+            None
+        };
+        if let Some(layer) = &clicked_layer {
+            if layer.can_receive_keyboard_focus() {
+                self.layer_focus = Some(layer.wl_surface().clone());
+                self.sync_keyboard_focus();
+            }
+        }
+        if event.state() == ButtonState::Pressed && clicked_layer.is_none() {
             if let Some(drag) = self.begin_drag(event.button_code()) {
                 self.drag = Some(drag);
                 return;
@@ -475,7 +490,11 @@ impl Veyron {
                 .map(|(window, _)| window.clone());
             if let Some(window) = window {
                 if let Some(id) = self.window_id(&window) {
-                    if self.wm.focus_window(id) {
+                    // Clicking a window takes the keyboard back from a layer
+                    // surface focused on demand, even if the window already
+                    // had focus in the model.
+                    let from_layer = self.layer_focus.take().is_some();
+                    if self.wm.focus_window(id) || from_layer {
                         self.sync_focus();
                     }
                     if self.wm.snapshot().is_floating(id) {
@@ -514,7 +533,8 @@ impl Veyron {
             return None;
         }
         let corner = self.space.element_location(&window)?;
-        if self.wm.focus_window(id) {
+        let from_layer = self.layer_focus.take().is_some();
+        if self.wm.focus_window(id) || from_layer {
             self.sync_focus();
         }
         self.space.raise_element(&window, false);
@@ -574,6 +594,11 @@ impl Veyron {
             self.reload_config();
         }
 
+        if effects.focus_changed {
+            // An explicit window focus change (keyboard, IPC) ends on-demand
+            // layer focus; an exclusive layer keeps the keyboard regardless.
+            self.layer_focus = None;
+        }
         if effects.layout_changed || effects.workspace_changed || effects.focus_changed {
             self.sync_layout();
             self.sync_focus();
@@ -861,14 +886,123 @@ impl Veyron {
         self.damage_tracker = OutputDamageTracker::new(window_size, 1.0, Transform::Flipped180);
 
         // Panels and notification surfaces get exclusive zones and sizes
-        // recomputed, then a configure for their new geometry.
-        let layers: Vec<_> = {
+        // recomputed for the new output size.
+        self.arrange_layers();
+    }
+
+    /// Lay out layer surfaces and hand the area their exclusive zones leave
+    /// free to the core, retiling windows when it changed.
+    ///
+    /// `LayerMap::arrange` sends each configured layer surface a configure
+    /// when its size changes, so panels follow on their own.
+    fn arrange_layers(&mut self) {
+        let zone = {
             let mut map = layer_map_for_output(&self.output);
             map.arrange();
-            map.layers().cloned().collect()
+            map.non_exclusive_zone()
         };
-        for layer in layers {
-            layer.layer_surface().send_pending_configure();
+        // The only output sits at the origin, so its local coordinates are
+        // global ones.
+        let area = Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h);
+        if self.wm.set_usable_area(self.wm.active_output_index(), area) {
+            self.sync_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Whether a fullscreen window is shown: the top layer (bars) then sits
+    /// below windows, so only the overlay layer stays in front.
+    fn fullscreen_active(&self) -> bool {
+        self.wm
+            .snapshot()
+            .placements
+            .iter()
+            .any(|placement| placement.fullscreen)
+    }
+
+    /// Layers drawn above windows, front first.
+    fn layers_above_windows(&self) -> &'static [Layer] {
+        if self.fullscreen_active() {
+            &[Layer::Overlay]
+        } else {
+            &[Layer::Overlay, Layer::Top]
+        }
+    }
+
+    /// Layers drawn below windows, front first.
+    fn layers_below_windows(&self) -> &'static [Layer] {
+        if self.fullscreen_active() {
+            &[Layer::Top, Layer::Bottom, Layer::Background]
+        } else {
+            &[Layer::Bottom, Layer::Background]
+        }
+    }
+
+    /// The surface that should hold the keyboard:
+    ///
+    /// 1. the front-most mapped layer surface above windows that asked for
+    ///    `exclusive` keyboard interactivity (launchers such as rofi or
+    ///    fuzzel), for as long as it stays mapped;
+    /// 2. a layer surface the user clicked into, if it still accepts focus;
+    /// 3. the focused window of the core.
+    fn keyboard_target(&self) -> Option<WlSurface> {
+        if let Some(surface) = self.exclusive_layer() {
+            return Some(surface);
+        }
+        if let Some(surface) = &self.layer_focus {
+            return Some(surface.clone());
+        }
+        self.wm
+            .snapshot()
+            .focused
+            .and_then(|id| self.windows.get(&id))
+            .and_then(Window::toplevel)
+            .map(|toplevel| toplevel.wl_surface().clone())
+    }
+
+    /// The front-most mapped layer surface above windows that asked for
+    /// `exclusive` keyboard interactivity.
+    fn exclusive_layer(&self) -> Option<WlSurface> {
+        let layers = self.layers_above_windows();
+        let map = layer_map_for_output(&self.output);
+        layers.iter().find_map(|layer| {
+            map.layers_on(*layer)
+                .rev()
+                .find(|surface| {
+                    has_buffer(surface.wl_surface())
+                        && surface.cached_state().keyboard_interactivity
+                            == KeyboardInteractivity::Exclusive
+                })
+                .map(|surface| surface.wl_surface().clone())
+        })
+    }
+
+    /// Whether `surface` is a mapped layer surface that accepts keyboard
+    /// focus (`exclusive` or `on_demand` interactivity).
+    fn layer_accepts_keyboard(&self, surface: &WlSurface) -> bool {
+        layer_map_for_output(&self.output)
+            .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+            .is_some_and(|layer| {
+                layer.can_receive_keyboard_focus() && has_buffer(layer.wl_surface())
+            })
+    }
+
+    /// Give the keyboard to [`Self::keyboard_target`] if it does not have it
+    /// already. Cheap enough to run on every layer commit.
+    fn sync_keyboard_focus(&mut self) {
+        if self
+            .layer_focus
+            .as_ref()
+            .is_some_and(|surface| !self.layer_accepts_keyboard(surface))
+        {
+            // The clicked layer unmapped or gave up keyboard interactivity.
+            self.layer_focus = None;
+        }
+        let target = self.keyboard_target();
+        if self.keyboard.current_focus() != target {
+            let serial = SERIAL_COUNTER.next_serial();
+            let keyboard = self.keyboard.clone();
+            keyboard.set_focus(self, target, serial);
         }
     }
 
@@ -958,18 +1092,11 @@ impl Veyron {
         }
     }
 
-    /// Move keyboard focus to the focused window of the active workspace.
+    /// Move keyboard focus to the focused window of the active workspace
+    /// (unless a layer surface holds it) and update window activation.
     fn sync_focus(&mut self) {
+        self.sync_keyboard_focus();
         let snapshot = self.wm.snapshot();
-        let focused_surface = snapshot
-            .focused
-            .and_then(|id| self.windows.get(&id))
-            .and_then(Window::toplevel)
-            .map(|toplevel| toplevel.wl_surface().clone());
-
-        let serial = SERIAL_COUNTER.next_serial();
-        let keyboard = self.keyboard.clone();
-        keyboard.set_focus(self, focused_surface, serial);
 
         for (id, window) in &self.windows {
             // `set_activated` only stages the xdg state; the configure that
@@ -999,11 +1126,11 @@ impl Veyron {
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         // Panels, OSDs and notifications above windows take the pointer first;
         // wallpapers and desktop layers below only receive it where no window is.
-        if let Some(hit) = self.layer_surface_under(location, &[Layer::Overlay, Layer::Top]) {
+        if let Some(hit) = self.layer_surface_under(location, self.layers_above_windows()) {
             return Some(hit);
         }
         let Some((window, _)) = self.space.element_under(location) else {
-            return self.layer_surface_under(location, &[Layer::Bottom, Layer::Background]);
+            return self.layer_surface_under(location, self.layers_below_windows());
         };
         // Smithay expects the focused surface's origin in global coordinates and
         // derives surface-local positions from it; subsurfaces and popups are
@@ -1029,6 +1156,21 @@ impl Veyron {
                 .surface_under(location - origin.to_f64(), WindowSurfaceType::ALL)
                 .map(|(wl_surface, offset)| (wl_surface, (origin + offset).to_f64()))
         })
+    }
+
+    /// The layer surface that takes a click at `location`, with the same
+    /// stacking as [`Self::surface_under`].
+    fn layer_under(&self, location: Point<f64, Logical>) -> Option<DesktopLayerSurface> {
+        let above = self.layers_above_windows();
+        let below = self.layers_below_windows();
+        let window_under = self.space.element_under(location).is_some();
+        let map = layer_map_for_output(&self.output);
+        let find = |layers: &[Layer]| {
+            layers
+                .iter()
+                .find_map(|layer| map.layer_under(*layer, location).cloned())
+        };
+        find(above).or_else(|| if window_under { None } else { find(below) })
     }
 
     fn window_id(&self, window: &Window) -> Option<WindowId> {
@@ -1169,7 +1311,8 @@ impl Chrome {
 
 /// Build the frame's render elements front to back: overlay and top layer
 /// surfaces, then windows from the top of the stack down, each followed by
-/// its decoration, then bottom and background layer surfaces.
+/// its decoration, then bottom and background layer surfaces. While a window
+/// is fullscreen the top layer moves below the windows.
 ///
 /// A window's popups are drawn unclipped in front of it; its own surface tree
 /// is clipped to rounded corners when the design asks for them. The output is
@@ -1204,8 +1347,16 @@ fn scene_elements(
                 }
             }
         };
+    // A fullscreen window covers bars on the top layer; only overlays (OSDs,
+    // lock screens) stay in front of it.
+    let fullscreen = snapshot
+        .placements
+        .iter()
+        .any(|placement| placement.fullscreen);
     push_layers(&mut elements, Layer::Overlay, renderer);
-    push_layers(&mut elements, Layer::Top, renderer);
+    if !fullscreen {
+        push_layers(&mut elements, Layer::Top, renderer);
+    }
 
     let design = style.design;
     let shaders = if design.needs_shader() {
@@ -1359,6 +1510,9 @@ fn scene_elements(
     }
     chrome.forget_hidden(snapshot);
 
+    if fullscreen {
+        push_layers(&mut elements, Layer::Top, renderer);
+    }
     push_layers(&mut elements, Layer::Bottom, renderer);
     push_layers(&mut elements, Layer::Background, renderer);
     elements
@@ -1456,6 +1610,12 @@ fn spawn(command: &str) -> Option<u32> {
     }
 }
 
+/// Whether a surface has a buffer attached, i.e. is mapped. Layer surfaces
+/// unmap by committing a null buffer without being destroyed.
+fn has_buffer(surface: &WlSurface) -> bool {
+    with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
+}
+
 /// Deliver frame callbacks to a toplevel or layer surface tree and to its
 /// popups, which are separate surface trees.
 fn send_frames_surface_and_popups(surface: &WlSurface, time: u32) {
@@ -1501,21 +1661,31 @@ impl CompositorHandler for Veyron {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
 
-        if self
+        if let Some(layer) = self
             .space
             .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-            .is_some()
         {
-            let rearranged = { layer_map_for_output(&self.output).arrange() };
-            if rearranged {
-                let layers: Vec<_> = layer_map_for_output(&self.output)
-                    .layers()
-                    .cloned()
-                    .collect();
-                for layer in layers {
-                    layer.layer_surface().send_pending_configure();
-                }
+            // A commit can change anchors, size, exclusive zone or keyboard
+            // interactivity, and attaching or dropping a buffer maps or
+            // unmaps the surface: re-arrange, retile and move the keyboard.
+            self.arrange_layers();
+            // The protocol wants the first configure in reply to the initial
+            // commit, when the client has set its size and anchors.
+            let initial_configure_sent = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<LayerSurfaceData>()
+                    .map(|data| {
+                        data.lock()
+                            .expect("layer surface attributes are not poisoned")
+                            .initial_configure_sent
+                    })
+                    .unwrap_or(true)
+            });
+            if !initial_configure_sent {
+                layer.layer_surface().send_configure();
             }
+            self.sync_keyboard_focus();
             self.needs_redraw = true;
             return;
         }
@@ -1611,6 +1781,9 @@ impl XdgShellHandler for Veyron {
         let window = Window::new_wayland_window(surface);
         let id = self.wm.create_window(NewWindow::default());
         self.windows.insert(id, window);
+        // A new window takes the keyboard from a layer focused on demand,
+        // but not from an exclusive one such as an open launcher.
+        self.layer_focus = None;
         self.sync_layout();
         self.sync_focus();
         self.needs_redraw = true;
@@ -1708,8 +1881,8 @@ impl WlrLayerShellHandler for Veyron {
             tracing::warn!("could not map a layer surface");
             return;
         }
-        // Mapping arranged the surface, so this is its initial configure.
-        layer_surface.layer_surface().send_configure();
+        // The initial configure is sent when the client's initial commit
+        // arrives (see `commit`), once its size and anchors are known.
         self.needs_redraw = true;
     }
 
@@ -1720,6 +1893,14 @@ impl WlrLayerShellHandler for Veyron {
             .cloned();
         if let Some(layer) = doomed {
             layer_map_for_output(&self.output).unmap_layer(&layer);
+            if self.layer_focus.as_ref() == Some(layer.wl_surface()) {
+                self.layer_focus = None;
+            }
+            // A panel going away gives its exclusive zone back to windows; a
+            // launcher going away gives the keyboard back to the focused
+            // window.
+            self.arrange_layers();
+            self.sync_keyboard_focus();
             self.needs_redraw = true;
         }
     }
