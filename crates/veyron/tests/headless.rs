@@ -182,11 +182,14 @@ struct ToplevelConfigure {
     width: i32,
     height: i32,
     activated: bool,
+    fullscreen: bool,
 }
 
 #[derive(Debug, Default)]
 struct ClientState {
     last_configure: Option<ToplevelConfigure>,
+    /// Last configure of each toplevel, by protocol object id.
+    configures: std::collections::HashMap<wayland_client::backend::ObjectId, ToplevelConfigure>,
     acked_serials: Vec<u32>,
     configure_count: usize,
     buffer_releases: usize,
@@ -574,7 +577,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for ClientState {
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
     fn event(
         state: &mut Self,
-        _proxy: &xdg_toplevel::XdgToplevel,
+        proxy: &xdg_toplevel::XdgToplevel,
         event: xdg_toplevel::Event,
         _data: &(),
         _conn: &Connection,
@@ -587,19 +590,22 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
         } = event
         {
             // xdg-shell transports the state list as an array of u32 values.
-            let activated = states.as_chunks::<4>().0.iter().any(|chunk| {
-                let value = u32::from_ne_bytes(*chunk);
-                matches!(
-                    xdg_toplevel::State::try_from(value),
-                    Ok(xdg_toplevel::State::Activated)
-                )
-            });
+            let has = |wanted: xdg_toplevel::State| {
+                states.as_chunks::<4>().0.iter().any(|chunk| {
+                    xdg_toplevel::State::try_from(u32::from_ne_bytes(*chunk)) == Ok(wanted)
+                })
+            };
+            let activated = has(xdg_toplevel::State::Activated);
+            let fullscreen = has(xdg_toplevel::State::Fullscreen);
 
-            state.last_configure = Some(ToplevelConfigure {
+            let configure = ToplevelConfigure {
                 width,
                 height,
                 activated,
-            });
+                fullscreen,
+            };
+            state.last_configure = Some(configure);
+            state.configures.insert(proxy.id(), configure);
             state.configure_count += 1;
         }
     }
@@ -1068,6 +1074,85 @@ fn editing_the_configuration_file_reloads_it_automatically() {
         );
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+
+    harness.shutdown();
+}
+
+#[test]
+fn client_fullscreen_requests_toggle_fullscreen_and_reach_the_client() {
+    let harness = Harness::start("client-fullscreen", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let window = client.create_toplevel("video");
+    let _other = client.create_toplevel("other");
+
+    window.toplevel.set_fullscreen(None);
+    client.roundtrip();
+    let id = window.toplevel.id();
+    // Configures of both windows interleave; follow the one that asked.
+    client.wait_for("a fullscreen configure", |state| {
+        state
+            .configures
+            .get(&id)
+            .is_some_and(|configure| configure.fullscreen)
+    });
+    let state = harness.state();
+    let focused = state.focused.expect("a focused window");
+    let report = state
+        .windows
+        .iter()
+        .find(|window| window.id == focused)
+        .expect("the focused window is reported");
+    assert!(report.fullscreen, "the requesting window is fullscreen");
+    assert_eq!(report.title, "video");
+
+    window.toplevel.unset_fullscreen();
+    client.roundtrip();
+    client.wait_for("leaving fullscreen", |state| {
+        state
+            .configures
+            .get(&id)
+            .is_some_and(|configure| !configure.fullscreen)
+    });
+    assert!(harness
+        .state()
+        .windows
+        .iter()
+        .all(|window| !window.fullscreen));
+}
+
+#[test]
+fn subscribers_hear_about_workspace_window_and_theme_changes() {
+    let mut harness = Harness::start("subscribe", 1280, 800);
+    let (sender, events) = std::sync::mpsc::channel();
+    let socket = harness.control_socket.clone();
+    std::thread::spawn(move || {
+        for event in veyron_ipc::subscribe(&socket).expect("subscribes") {
+            if sender.send(event.expect("a valid event")).is_err() {
+                return;
+            }
+        }
+    });
+    let next = || {
+        events
+            .recv_timeout(EVENT_TIMEOUT)
+            .expect("an event arrives in time")
+    };
+    let first = next();
+    assert_eq!(first.changes.len(), veyron_ipc::Change::ALL.len());
+
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _window = client.create_toplevel("subscribed");
+    let opened = next();
+    assert!(opened.changes.contains(&veyron_ipc::Change::Windows));
+    assert_eq!(opened.state.windows.len(), 1);
+
+    harness.action("workspace 2");
+    let switched = next();
+    assert!(switched.changes.contains(&veyron_ipc::Change::Workspace));
+    assert_eq!(switched.state.workspace_index, 1);
+
+    harness.action("theme toggle");
+    assert!(next().changes.contains(&veyron_ipc::Change::Theme));
 
     harness.shutdown();
 }

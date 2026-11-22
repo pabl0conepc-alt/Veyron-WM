@@ -15,6 +15,8 @@ Usage:
   veyronctl launch <NAME>         Start an installed application
   veyronctl watch [--waybar]      Print the state as a JSON line on every change
                                   (--waybar: a waybar custom-module line)
+  veyronctl subscribe             Print every change as a JSON event line
+                                  (changes: workspace, focus, windows, layout, theme)
   veyronctl theme [--json]        Show the Material You colours
   veyronctl theme <OP>            toggle, dark, light, next, seed <#hex|preset>,
                                   variant <name|next>
@@ -67,8 +69,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("no command given".into());
     }
 
-    if words[0] == "watch" {
-        return watch(&socket, waybar);
+    match words[0].as_str() {
+        "watch" if waybar => return watch(&socket, WatchFormat::Waybar),
+        "watch" => return watch(&socket, WatchFormat::State),
+        "subscribe" if waybar => return watch(&socket, WatchFormat::Waybar),
+        "subscribe" => return watch(&socket, WatchFormat::Event),
+        _ => {}
     }
 
     let mut save_session_to = None;
@@ -205,41 +211,72 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
+        Response::Event(event) => {
+            println!("{}", serde_json::to_string(&event)?);
+            Ok(())
+        }
         Response::Error { message } => Err(message.into()),
     }
 }
 
-/// How often `watch` samples the compositor state.
+/// How long `watch` waits before reconnecting to a compositor that is gone.
 const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// `veyronctl watch`: print the state as one JSON line whenever it changes, for
-/// bars and shell widgets. With `--waybar` each line is a waybar custom-module
-/// object. Survives compositor restarts by reconnecting.
-fn watch(socket: &std::path::Path, waybar: bool) -> Result<(), Box<dyn Error>> {
+/// What `watch` prints for each event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchFormat {
+    /// The state as JSON (`watch`).
+    State,
+    /// The whole event, with what changed (`subscribe`).
+    Event,
+    /// A waybar custom-module object (`--waybar`).
+    Waybar,
+}
+
+/// `veyronctl watch` / `subscribe`: print one JSON line per change, for bars
+/// and shell widgets. Changes are pushed by the compositor, so lines appear
+/// immediately. Survives compositor restarts by reconnecting.
+fn watch(socket: &std::path::Path, format: WatchFormat) -> Result<(), Box<dyn Error>> {
     use std::io::Write as _;
 
     let mut last = String::new();
+    // Prints `line` unless it repeats the previous one. A closed pipe (the
+    // bar exited) ends the watcher.
+    let mut emit = |line: String| -> bool {
+        if line.is_empty() || line == last {
+            return true;
+        }
+        let mut stdout = std::io::stdout().lock();
+        let written = writeln!(stdout, "{line}")
+            .and_then(|()| stdout.flush())
+            .is_ok();
+        last = line;
+        written
+    };
     loop {
-        let line = match veyron_ipc::request(socket, &Request::State) {
-            Ok(Response::State(report)) if waybar => waybar_line(&report),
-            Ok(Response::State(report)) => serde_json::to_string(&report)?,
-            _ if waybar => {
-                r#"{"text":"","tooltip":"Veyron is not running","class":"offline"}"#.to_string()
-            }
-            _ => String::new(),
-        };
-        if line != last {
-            if !line.is_empty() {
-                let mut stdout = std::io::stdout().lock();
-                // A closed pipe (the bar exited) ends the watcher.
-                if writeln!(stdout, "{line}")
-                    .and_then(|()| stdout.flush())
-                    .is_err()
-                {
+        if let Ok(events) = veyron_ipc::subscribe(socket) {
+            for event in events {
+                let event = match event {
+                    Ok(event) => event,
+                    Err(veyron_ipc::IpcError::Remote(message)) => return Err(message.into()),
+                    Err(_) => break,
+                };
+                let line = match format {
+                    WatchFormat::Waybar => waybar_line(&event.state),
+                    WatchFormat::State => serde_json::to_string(&event.state)?,
+                    WatchFormat::Event => serde_json::to_string(&event)?,
+                };
+                if !emit(line) {
                     return Ok(());
                 }
             }
-            last = line;
+        }
+        if format == WatchFormat::Waybar
+            && !emit(
+                r#"{"text":"","tooltip":"Veyron is not running","class":"offline"}"#.to_string(),
+            )
+        {
+            return Ok(());
         }
         std::thread::sleep(WATCH_INTERVAL);
     }

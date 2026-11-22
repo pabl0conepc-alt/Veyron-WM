@@ -81,8 +81,8 @@ use veyron_core::{
     Wm, WorkspacePosition,
 };
 use veyron_ipc::{
-    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, ThemeReport,
-    WindowReport, MAX_LINE_BYTES,
+    Change, EventReport, OverviewReport, OverviewTileReport, OverviewWindowReport, Response,
+    StateReport, ThemeReport, WindowReport, MAX_LINE_BYTES,
 };
 
 use crate::{
@@ -239,6 +239,11 @@ pub struct Veyron {
     palette: Palette,
     /// Window decorations (borders, shadows, rounded corners) kept across frames.
     chrome: Chrome,
+    /// `veyronctl subscribe` connections and the state they were last sent.
+    subscribers: Vec<std::sync::mpsc::Sender<Response>>,
+    published: Option<StateReport>,
+    /// The scheme changed since subscribers last heard about it.
+    theme_unpublished: bool,
     needs_redraw: bool,
     /// Set when the compositor should exit.
     pub exit: bool,
@@ -360,6 +365,9 @@ impl Veyron {
             grab: None,
             palette,
             chrome: Chrome::default(),
+            subscribers: Vec::new(),
+            published: None,
+            theme_unpublished: false,
             needs_redraw: true,
             exit: false,
         };
@@ -400,6 +408,7 @@ impl Veyron {
             self.render()?;
             self.send_frame_callbacks();
         }
+        self.publish_events();
         Ok(())
     }
 
@@ -813,6 +822,11 @@ impl Veyron {
                 self.apply_action(Action::Quit);
                 Response::Ok
             }
+            veyron_ipc::Request::Subscribe => {
+                // The reply channel becomes the subscription.
+                self.subscribe(job.reply);
+                return;
+            }
             veyron_ipc::Request::Action { action } => match Action::parse(&action) {
                 Ok(action) => {
                     self.apply_action(action);
@@ -824,6 +838,46 @@ impl Veyron {
             },
         };
         let _ = job.reply.send(response);
+    }
+
+    /// Register a subscriber and send it the current state.
+    fn subscribe(&mut self, events: std::sync::mpsc::Sender<Response>) {
+        let state = self.state_report();
+        let first = EventReport {
+            changes: Change::ALL.to_vec(),
+            state: state.clone(),
+        };
+        if events.send(Response::Event(first)).is_ok() {
+            self.subscribers.push(events);
+            self.published.get_or_insert(state);
+        }
+    }
+
+    /// Tell subscribers what changed since the last event. Called once per
+    /// loop iteration; geometry-only changes (animations) send nothing.
+    fn publish_events(&mut self) {
+        if self.subscribers.is_empty() {
+            self.published = None;
+            self.theme_unpublished = false;
+            return;
+        }
+        let state = self.state_report();
+        let mut changes = self
+            .published
+            .as_ref()
+            .map(|old| Change::between(old, &state))
+            .unwrap_or_else(|| Change::ALL.to_vec());
+        if std::mem::take(&mut self.theme_unpublished) && !changes.contains(&Change::Theme) {
+            changes.push(Change::Theme);
+        }
+        self.published = Some(state.clone());
+        if changes.is_empty() {
+            return;
+        }
+        let event = Response::Event(EventReport { changes, state });
+        // A closed connection drops its receiver, which ends the subscription.
+        self.subscribers
+            .retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
 
     fn state_report(&self) -> StateReport {
@@ -932,6 +986,7 @@ impl Veyron {
         let theme = &self.wm.config().theme;
         self.palette = theme.palette();
         self.needs_redraw = true;
+        self.theme_unpublished = true;
         if !theme.export || self.backend.is_none() {
             return;
         }

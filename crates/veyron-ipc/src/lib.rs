@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        mpsc, Arc,
     },
     time::{Duration, Instant},
 };
@@ -30,7 +30,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Bumped whenever a message shape changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Hard limit for a single message, newline included.
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
@@ -63,6 +63,9 @@ pub enum Request {
     Ping,
     /// Ask for the active Material You scheme.
     Theme,
+    /// Keep the connection open and receive a [`Response::Event`] line on
+    /// every state change, starting with the current state.
+    Subscribe,
 }
 
 /// A response from the compositor.
@@ -83,6 +86,8 @@ pub enum Response {
     Launched { name: String, command: String },
     /// Reply to [`Request::Theme`].
     Theme(ThemeReport),
+    /// Streamed to [`Request::Subscribe`] connections.
+    Event(EventReport),
     /// The request was rejected. The message is meant for humans.
     Error { message: String },
 }
@@ -128,6 +133,85 @@ pub struct WindowReport {
     pub title: String,
     /// Opacity requested by the window rules (`1.0` when none match).
     pub opacity: f32,
+}
+
+/// A state change pushed to subscribers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventReport {
+    /// What changed since the previous event. The first event of a
+    /// subscription lists everything.
+    pub changes: Vec<Change>,
+    /// The state after the change.
+    pub state: StateReport,
+}
+
+/// One kind of change in an [`EventReport`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Change {
+    /// Active workspace, its name, or the number of workspaces.
+    Workspace,
+    /// The focused window.
+    Focus,
+    /// A window opened, closed, or changed title, app id, floating or
+    /// fullscreen state. Pure geometry changes (animations) are not events.
+    Windows,
+    /// The tiling layout of the active workspace.
+    Layout,
+    /// The Material You scheme.
+    Theme,
+}
+
+impl Change {
+    pub const ALL: [Change; 5] = [
+        Change::Workspace,
+        Change::Focus,
+        Change::Windows,
+        Change::Layout,
+        Change::Theme,
+    ];
+
+    /// Changes between two states, ignoring window geometry.
+    pub fn between(old: &StateReport, new: &StateReport) -> Vec<Change> {
+        let mut changes = Vec::new();
+        if (
+            &old.workspace,
+            old.workspace_index,
+            old.workspace_count,
+            old.workspace_position,
+        ) != (
+            &new.workspace,
+            new.workspace_index,
+            new.workspace_count,
+            new.workspace_position,
+        ) {
+            changes.push(Change::Workspace);
+        }
+        if old.focused != new.focused {
+            changes.push(Change::Focus);
+        }
+        let identity = |window: &WindowReport| {
+            (
+                window.id,
+                window.floating,
+                window.fullscreen,
+                window.app_id.clone(),
+                window.title.clone(),
+            )
+        };
+        if !old
+            .windows
+            .iter()
+            .map(identity)
+            .eq(new.windows.iter().map(identity))
+        {
+            changes.push(Change::Windows);
+        }
+        if old.layout != new.layout {
+            changes.push(Change::Layout);
+        }
+        changes
+    }
 }
 
 /// The active Material You scheme, as generated from `[theme]`.
@@ -198,6 +282,9 @@ pub enum IpcError {
     /// The peer sent bytes that are not valid UTF-8.
     #[error("ipc message is not valid UTF-8")]
     InvalidUtf8,
+    /// The compositor answered with an error.
+    #[error("{0}")]
+    Remote(String),
 }
 
 /// Default control socket: `$VEYRON_SOCKET`, else `$XDG_RUNTIME_DIR/veyron.sock`.
@@ -329,12 +416,16 @@ impl Drop for ActivityGuard {
 /// own thread. A handler must be quick: it is called on the connection thread.
 /// Requests are tracked by `activity`, so a caller can wait for the last reply
 /// to be written before it exits.
-pub fn serve<F>(path: &Path, activity: &Activity, handler: F) -> Result<(), IpcError>
+///
+/// A handler answers with a [`Response`] or, for [`Request::Subscribe`], with
+/// a [`Reply::Stream`] whose responses are written until either side hangs up.
+pub fn serve<F, R>(path: &Path, activity: &Activity, handler: F) -> Result<(), IpcError>
 where
-    F: Fn(Request) -> Response + Send + Sync + 'static,
+    F: Fn(Request) -> R + Send + Sync + 'static,
+    R: Into<Reply>,
 {
     let listener = bind_listener(path)?;
-    let handler = Arc::new(handler);
+    let handler: Arc<Handler> = Arc::new(move |request| handler(request).into());
     let activity = activity.clone();
 
     for stream in listener.incoming() {
@@ -357,9 +448,27 @@ where
     Ok(())
 }
 
+/// What a server handler answers.
+#[derive(Debug)]
+pub enum Reply {
+    /// A single response.
+    Once(Response),
+    /// Responses written one per line as they arrive; the connection closes
+    /// when the sender is dropped or the client goes away.
+    Stream(mpsc::Receiver<Response>),
+}
+
+impl From<Response> for Reply {
+    fn from(response: Response) -> Self {
+        Reply::Once(response)
+    }
+}
+
+type Handler = dyn Fn(Request) -> Reply + Send + Sync;
+
 fn handle_connection(
     mut stream: UnixStream,
-    handler: &(dyn Fn(Request) -> Response + Send + Sync),
+    handler: &Handler,
     activity: &Activity,
 ) -> Result<(), IpcError> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -370,8 +479,16 @@ fn handle_connection(
         match read_message::<_, Request>(&mut reader) {
             Ok(Some(request)) => {
                 // In flight until the response is on the wire.
-                let _in_flight = activity.enter();
-                let response = handler(request);
+                let in_flight = activity.enter();
+                let response = match handler(request) {
+                    Reply::Once(response) => response,
+                    Reply::Stream(events) => {
+                        // A subscription lives until a side hangs up, so it
+                        // must not hold the shutdown back.
+                        drop(in_flight);
+                        return stream_responses(&mut stream, &events);
+                    }
+                };
                 match write_message(&mut stream, &response) {
                     // Reports grow with client-chosen titles; an answer that
                     // does not fit is replaced by an error the client can read.
@@ -397,6 +514,30 @@ fn handle_connection(
     }
 }
 
+/// Write each streamed response until the stream ends or the client is gone.
+fn stream_responses(
+    stream: &mut UnixStream,
+    responses: &mpsc::Receiver<Response>,
+) -> Result<(), IpcError> {
+    for response in responses {
+        match write_message(stream, &response) {
+            // One oversized state (very long titles) is skipped; the next
+            // change sends a fresh one.
+            Err(IpcError::MessageTooLarge) => {}
+            Err(IpcError::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                ) =>
+            {
+                return Ok(());
+            }
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
 /// Connect to a compositor control socket.
 pub fn connect(path: &Path) -> Result<UnixStream, IpcError> {
     let stream = UnixStream::connect(path)?;
@@ -411,6 +552,41 @@ pub fn request(path: &Path, request: &Request) -> Result<Response, IpcError> {
     write_message(&mut stream, request)?;
     let mut reader = BufReader::new(stream.try_clone()?);
     read_message::<_, Response>(&mut reader)?.ok_or(IpcError::ConnectionClosed)
+}
+
+/// Subscribe to state changes. The first event describes the current state;
+/// later ones arrive whenever the workspace, focus, windows, layout or theme
+/// change. The iterator ends when the compositor exits.
+pub fn subscribe(path: &Path) -> Result<Subscription, IpcError> {
+    let mut stream = connect(path)?;
+    write_message(&mut stream, &Request::Subscribe)?;
+    // Events can be minutes apart; only the write side keeps its timeout.
+    stream.set_read_timeout(None)?;
+    Ok(Subscription {
+        reader: BufReader::new(stream),
+    })
+}
+
+/// Events of a [`subscribe`] call.
+#[derive(Debug)]
+pub struct Subscription {
+    reader: BufReader<UnixStream>,
+}
+
+impl Iterator for Subscription {
+    type Item = Result<EventReport, IpcError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match read_message::<_, Response>(&mut self.reader) {
+            Ok(Some(Response::Event(event))) => Some(Ok(event)),
+            Ok(Some(Response::Error { message })) => Some(Err(IpcError::Remote(message))),
+            Ok(Some(_)) => Some(Err(IpcError::Remote(
+                "the compositor does not support subscriptions".to_string(),
+            ))),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        }
+    }
 }
 
 /// [`request`] against [`default_socket_path`].
@@ -437,6 +613,7 @@ mod tests {
                 query: "editor".into(),
             },
             Request::Quit,
+            Request::Subscribe,
             Request::Action {
                 action: "focus left".into(),
             },
@@ -603,8 +780,10 @@ mod tests {
         let server = std::thread::spawn(move || {
             handle_connection(
                 server,
-                &|_request| Response::Error {
-                    message: "x".repeat(MAX_LINE_BYTES),
+                &|_request| {
+                    Reply::Once(Response::Error {
+                        message: "x".repeat(MAX_LINE_BYTES),
+                    })
                 },
                 &Activity::new(),
             )
@@ -670,6 +849,99 @@ mod tests {
         assert_eq!(mode, 0o600);
 
         drop(listener);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn state(focused: Option<u64>, windows: Vec<WindowReport>) -> StateReport {
+        StateReport {
+            workspace: "1".into(),
+            workspace_index: 0,
+            workspace_count: 1,
+            workspace_position: [0, 0],
+            layout: "scroll".into(),
+            gap: 8,
+            windows,
+            focused,
+            scroll: 0.0,
+        }
+    }
+
+    fn window(id: u64, x: i32, title: &str) -> WindowReport {
+        WindowReport {
+            id,
+            rect: [x, 0, 100, 100],
+            floating: false,
+            fullscreen: false,
+            app_id: "app".into(),
+            title: title.into(),
+            opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn changes_ignore_geometry_but_see_focus_windows_workspace_and_layout() {
+        let old = state(Some(1), vec![window(1, 0, "a")]);
+        assert!(Change::between(&old, &old).is_empty());
+
+        let moved = state(Some(1), vec![window(1, 40, "a")]);
+        assert!(Change::between(&old, &moved).is_empty());
+
+        let retitled = state(Some(2), vec![window(1, 0, "b"), window(2, 0, "c")]);
+        assert_eq!(
+            Change::between(&old, &retitled),
+            vec![Change::Focus, Change::Windows]
+        );
+
+        let mut switched = old.clone();
+        switched.workspace_index = 1;
+        switched.workspace_count = 2;
+        switched.layout = "dwindle".into();
+        assert_eq!(
+            Change::between(&old, &switched),
+            vec![Change::Workspace, Change::Layout]
+        );
+    }
+
+    #[test]
+    fn subscriptions_stream_events_until_the_server_hangs_up() {
+        let path = std::env::temp_dir().join(format!(
+            "veyron-ipc-subscribe-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let server_path = path.clone();
+        std::thread::spawn(move || {
+            let _ = serve(&server_path, &Activity::new(), |request| match request {
+                Request::Subscribe => {
+                    let (sender, receiver) = mpsc::channel();
+                    for focused in [Some(1), Some(2)] {
+                        let event = EventReport {
+                            changes: vec![Change::Focus],
+                            state: state(focused, Vec::new()),
+                        };
+                        let _ = sender.send(Response::Event(event));
+                    }
+                    // Dropping the sender ends the stream.
+                    Reply::Stream(receiver)
+                }
+                _ => Reply::Once(Response::Ok),
+            });
+        });
+        for _ in 0..100 {
+            if UnixStream::connect(&path).is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let focused: Vec<Option<u64>> = subscribe(&path)
+            .expect("subscribes")
+            .map(|event| event.expect("event").state.focused)
+            .collect();
+        assert_eq!(focused, vec![Some(1), Some(2)]);
         let _ = std::fs::remove_file(&path);
     }
 }

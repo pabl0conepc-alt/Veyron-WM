@@ -39,8 +39,8 @@ switched at runtime with `veyronctl theme …`.</sub>
   grid, with an overview and per-monitor workspaces in the core.
 - **Easy to configure:** one strict TOML file, reloaded automatically when you
   save it; `veyron --check-config` explains mistakes.
-- **Scriptable:** `veyronctl` for every action, `veyronctl watch --waybar` for
-  bars, session save/restore, app launcher and profiles.
+- **Scriptable:** `veyronctl` for every action, `veyronctl watch --waybar` and
+  `veyronctl subscribe` push changes to bars instantly, session save/restore, app launcher and profiles.
 
 ## Quick start
 
@@ -72,6 +72,7 @@ veyron
 | Switch workspace / send the window there | `super+1..5` / `super+shift+1..5` |
 | Alt-tab | `alt+tab` |
 | Float a window, then drag it | `super+space`, `super+left drag` |
+| Resize a floating window | `super+right drag` (grab near an edge or corner) |
 | Next design / dark-light / next colour | `super+alt+t` / `super+t` / `super+shift+t` |
 | Quit | `super+shift+e` |
 
@@ -170,7 +171,12 @@ What works:
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
-  (`veyronctl`) with request/response, size limits and stale-socket handling.
+  (`veyronctl`) with request/response, size limits and stale-socket handling,
+  plus `veyronctl subscribe`: a pushed event stream (`workspace`, `focus`,
+  `windows`, `layout`, `theme` changes with the new state) for bars and shells.
+- Pointer: `super` + left drag moves and `super` + right drag resizes floating
+  windows; client title bars can move/resize them (`xdg_toplevel.move/resize`),
+  and F11 / video-player fullscreen requests are honoured.
 - Nested (winit) Wayland compositor: `xdg-shell` toplevels, SHM buffers,
   keyboard, pointer, wheel, `wl_output`, popups tracked, tiled layout rendered
   through Smithay's scene graph.
@@ -510,7 +516,8 @@ Switching a design at runtime drops the per-field overrides so the style shows
 as designed. If the GPU driver rejects the shaders, Veyron logs a warning and
 falls back to square solid borders.
 
-Floating windows can also be dragged with `super` + left button. Keys are
+Floating windows can also be dragged with `super` + left button and resized
+with `super` + right button. Keys are
 matched by their unshifted symbol, so `super+shift+1` means the `1` key on any
 layout.
 
