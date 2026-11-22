@@ -42,6 +42,7 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_server::{
         backend::{ClientData, ClientId, DisconnectReason},
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
@@ -75,8 +76,9 @@ use smithay::{
     },
 };
 use veyron_core::{
-    workspace_slide, Action, Config, Design, Effects, Modifiers, NewWindow, Palette, Rect,
-    RectAnimator, Session, Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
+    workspace_slide, Action, Config, Design, Effects, Modifiers, NewWindow, Palette,
+    Point as VPoint, Rect, RectAnimator, ResizeEdges, Session, Size as VSize, Snapshot, WindowId,
+    Wm, WorkspacePosition,
 };
 use veyron_ipc::{
     OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, ThemeReport,
@@ -90,6 +92,8 @@ use crate::{
 
 /// Linux input event code of the left mouse button.
 const BTN_LEFT: u32 = 0x110;
+/// Linux input event code of the right mouse button.
+const BTN_RIGHT: u32 = 0x111;
 
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
@@ -98,6 +102,75 @@ const AXIS_STEP_PIXELS: f64 = 15.0;
 const OVERVIEW_TILE: VSize = VSize::new(320, 200);
 /// Space between overview tiles.
 const OVERVIEW_GAP: i32 = 16;
+
+/// A floating window following the pointer until `button` is released.
+#[derive(Debug, Clone, Copy)]
+struct PointerGrab {
+    kind: GrabKind,
+    button: u32,
+    /// Started by the client (`xdg_toplevel.move`/`resize`) rather than by a
+    /// `super` binding, so the client saw the press and must see the release.
+    from_client: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GrabKind {
+    /// The pointer keeps its offset from the window's top-left corner.
+    Move {
+        window: WindowId,
+        offset: Point<f64, Logical>,
+    },
+    /// `edges` follow the pointer's travel since `origin`, starting from the
+    /// window rectangle `start`.
+    Resize {
+        window: WindowId,
+        edges: ResizeEdges,
+        start: Rect,
+        origin: Point<f64, Logical>,
+        min: VSize,
+    },
+}
+
+impl GrabKind {
+    fn window(&self) -> WindowId {
+        match *self {
+            GrabKind::Move { window, .. } | GrabKind::Resize { window, .. } => window,
+        }
+    }
+
+    /// Apply a pointer position to the core. Returns whether the window changed.
+    fn update(&self, wm: &mut Wm, pointer: Point<f64, Logical>) -> bool {
+        match *self {
+            GrabKind::Move { window, offset } => {
+                let corner = pointer - offset;
+                wm.move_floating_to(window, corner.x.round() as i32, corner.y.round() as i32)
+            }
+            GrabKind::Resize {
+                window,
+                edges,
+                start,
+                origin,
+                min,
+            } => {
+                let delta = pointer - origin;
+                let rect =
+                    start.resized(edges, delta.x.round() as i32, delta.y.round() as i32, min);
+                wm.resize_floating_to(window, rect)
+            }
+        }
+    }
+}
+
+/// Edges an `xdg_toplevel.resize` request names.
+fn xdg_edges(edge: xdg_toplevel::ResizeEdge) -> ResizeEdges {
+    use xdg_toplevel::ResizeEdge as Edge;
+    ResizeEdges {
+        left: matches!(edge, Edge::Left | Edge::TopLeft | Edge::BottomLeft),
+        right: matches!(edge, Edge::Right | Edge::TopRight | Edge::BottomRight),
+        top: matches!(edge, Edge::Top | Edge::TopLeft | Edge::TopRight),
+        bottom: matches!(edge, Edge::Bottom | Edge::BottomLeft | Edge::BottomRight),
+    }
+}
 
 /// Per-client protocol state (required by `smithay`'s compositor handler).
 #[derive(Debug, Default)]
@@ -150,8 +223,9 @@ pub struct Veyron {
     /// Last location a window was mapped at, so the scene graph is only touched
     /// when the layout really moved it (avoiding pointless z-order churn).
     mapped: HashMap<WindowId, (i32, i32)>,
-    /// Last size sent to each client, so configures are not flooded.
-    configured: HashMap<WindowId, (i32, i32)>,
+    /// Last size and fullscreen state sent to each client, so configures are
+    /// not flooded.
+    configured: HashMap<WindowId, (i32, i32, bool)>,
     /// In-flight window rectangles; the scene graph draws `current()`.
     animations: HashMap<WindowId, RectAnimator>,
     last_animation_frame: Instant,
@@ -159,9 +233,8 @@ pub struct Veyron {
     last_workspace_position: WorkspacePosition,
 
     pointer_location: Point<f64, Logical>,
-    /// Floating window being dragged with `super` + left button, and the
-    /// pointer's offset from its top-left corner when the drag started.
-    drag: Option<(WindowId, Point<f64, Logical>)>,
+    /// Floating window being moved or resized with the pointer.
+    grab: Option<PointerGrab>,
     /// Material You scheme generated from `[theme]`.
     palette: Palette,
     /// Window decorations (borders, shadows, rounded corners) kept across frames.
@@ -284,7 +357,7 @@ impl Veyron {
             last_animation_frame: Instant::now(),
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
-            drag: None,
+            grab: None,
             palette,
             chrome: Chrome::default(),
             needs_redraw: true,
@@ -415,16 +488,12 @@ impl Veyron {
             Point::from((surface_position.x / scale, surface_position.y / scale));
         self.pointer_location = location;
 
-        if let Some((id, offset)) = self.drag {
-            let corner = location - offset;
-            if self
-                .wm
-                .move_floating_to(id, corner.x.round() as i32, corner.y.round() as i32)
-            {
+        if let Some(grab) = self.grab {
+            if grab.kind.update(&mut self.wm, location) {
                 self.sync_layout();
                 self.needs_redraw = true;
             }
-            // The dragged client does not see pointer motion during the grab.
+            // The grabbed client does not see pointer motion during the grab.
             return;
         }
 
@@ -449,14 +518,18 @@ impl Veyron {
     where
         E: PointerButtonEvent<WinitInput>,
     {
-        // Only the left button ends a drag: the press that started it was never
-        // sent to the client, while other buttons pressed meanwhile were, and
-        // swallowing their release would leave them stuck in that client.
-        if event.state() == ButtonState::Released
-            && event.button_code() == BTN_LEFT
-            && self.drag.take().is_some()
-        {
-            return;
+        // Only the button that started a grab ends it. A `super` grab began with
+        // a press the client never saw, so its release is swallowed too; other
+        // buttons pressed meanwhile were sent, and swallowing their release
+        // would leave them stuck in that client. A grab the client asked for
+        // began with a press it did see, so it gets the release.
+        if event.state() == ButtonState::Released {
+            if let Some(grab) = self.grab.filter(|grab| grab.button == event.button_code()) {
+                self.grab = None;
+                if !grab.from_client {
+                    return;
+                }
+            }
         }
         // A click on a panel, OSD or notification above the windows belongs
         // to that layer surface; it must not focus, raise or drag the window
@@ -465,8 +538,8 @@ impl Veyron {
             .layer_surface_under(self.pointer_location, &[Layer::Overlay, Layer::Top])
             .is_some();
         if event.state() == ButtonState::Pressed && !over_layer {
-            if let Some(drag) = self.begin_drag(event.button_code()) {
-                self.drag = Some(drag);
+            if let Some(grab) = self.begin_super_grab(event.button_code()) {
+                self.grab = Some(grab);
                 return;
             }
             let window = self
@@ -500,26 +573,121 @@ impl Veyron {
         pointer.frame(self);
     }
 
-    /// Start dragging the floating window under the pointer when the left
-    /// button is pressed with `super` held. Tiled windows are left to the
-    /// layout, so the press is forwarded to them as usual.
-    fn begin_drag(&mut self, button: u32) -> Option<(WindowId, Point<f64, Logical>)> {
-        if button != BTN_LEFT || !self.keyboard.modifier_state().logo {
+    /// Start moving (`super` + left button) or resizing (`super` + right
+    /// button) the floating window under the pointer. Tiled windows are left
+    /// to the layout, so the press is forwarded to them as usual.
+    fn begin_super_grab(&mut self, button: u32) -> Option<PointerGrab> {
+        if !self.keyboard.modifier_state().logo {
             return None;
         }
+        let resize = match button {
+            BTN_LEFT => false,
+            BTN_RIGHT => true,
+            _ => return None,
+        };
         let (window, _) = self.space.element_under(self.pointer_location)?;
         let window = window.clone();
         let id = self.window_id(&window)?;
-        if !self.wm.snapshot().is_floating(id) {
+        let edges = resize.then(|| {
+            let rect = self
+                .wm
+                .snapshot()
+                .placement_of(id)
+                .map(|placement| placement.rect);
+            let pointer = VPoint::new(
+                self.pointer_location.x.round() as i32,
+                self.pointer_location.y.round() as i32,
+            );
+            rect.map(|rect| ResizeEdges::nearest(rect, pointer))
+                .unwrap_or_default()
+        });
+        self.start_grab(id, edges, button, false)
+    }
+
+    /// Grab floating window `id` for a move (`edges` is `None`) or a resize
+    /// along `edges`, focusing and raising it.
+    fn start_grab(
+        &mut self,
+        id: WindowId,
+        edges: Option<ResizeEdges>,
+        button: u32,
+        from_client: bool,
+    ) -> Option<PointerGrab> {
+        let snapshot = self.wm.snapshot();
+        if !snapshot.is_floating(id) || snapshot.is_fullscreen(id) {
             return None;
         }
-        let corner = self.space.element_location(&window)?;
+        let start = snapshot.placement_of(id)?.rect;
+        let kind = match edges {
+            None => GrabKind::Move {
+                window: id,
+                offset: self.pointer_location - Point::from((start.x as f64, start.y as f64)),
+            },
+            Some(edges) if edges.is_empty() => return None,
+            Some(edges) => GrabKind::Resize {
+                window: id,
+                edges,
+                start,
+                origin: self.pointer_location,
+                min: self.wm.min_floating_size(id),
+            },
+        };
         if self.wm.focus_window(id) {
             self.sync_focus();
         }
-        self.space.raise_element(&window, false);
+        if let Some(window) = self.windows.get(&id).cloned() {
+            self.space.raise_element(&window, false);
+        }
         self.needs_redraw = true;
-        Some((id, self.pointer_location - corner.to_f64()))
+        Some(PointerGrab {
+            kind,
+            button,
+            from_client,
+        })
+    }
+
+    /// Start the move or resize a client asked for from its own title bar or
+    /// border. Only honoured while the press with that serial is still held,
+    /// and only for floating windows: tiled ones belong to the layout.
+    fn client_grab(
+        &mut self,
+        surface: &ToplevelSurface,
+        serial: Serial,
+        edges: Option<ResizeEdges>,
+    ) {
+        if self.grab.is_some() || !self.pointer.has_grab(serial) {
+            return;
+        }
+        let Some(button) = self.pointer.grab_start_data().map(|start| start.button) else {
+            return;
+        };
+        let Some(id) = self.toplevel_id(surface) else {
+            return;
+        };
+        self.grab = self.start_grab(id, edges, button, true);
+    }
+
+    /// Enter or leave fullscreen because the client asked (F11, a video
+    /// player's fullscreen button). The client always gets a configure, so
+    /// it learns the answer even when nothing changed.
+    fn client_fullscreen(&mut self, surface: &ToplevelSurface, fullscreen: bool) {
+        let changed = self
+            .toplevel_id(surface)
+            .is_some_and(|id| self.wm.set_fullscreen(id, fullscreen));
+        if changed {
+            self.sync_layout();
+            self.sync_focus();
+            self.needs_redraw = true;
+        } else if surface.is_initial_configure_sent() {
+            surface.send_configure();
+        }
+    }
+
+    fn toplevel_id(&self, surface: &ToplevelSurface) -> Option<WindowId> {
+        self.windows
+            .iter()
+            .find(|(_, window)| window.toplevel() == Some(surface))
+            .map(|(id, _)| *id)
     }
 
     fn on_pointer_axis<E>(&mut self, event: &E)
@@ -893,7 +1061,7 @@ impl Veyron {
                     self.mapped.get(&placement.window),
                     self.configured.get(&placement.window),
                 ) {
-                    (Some((x, y)), Some((w, h))) => Rect::new(*x, *y, *w, *h),
+                    (Some((x, y)), Some((w, h, _))) => Rect::new(*x, *y, *w, *h),
                     // A workspace that just became active slides in from the
                     // direction the user travelled.
                     _ if placement.animate && slide != (0, 0) => {
@@ -923,7 +1091,7 @@ impl Veyron {
             // picture-in-picture and fullscreen change their rectangle, and
             // only a configure makes the client follow. Unchanged sizes are
             // skipped below, so a floating client is not resized needlessly.
-            let target_size = (target.w, target.h);
+            let target_size = (target.w, target.h, placement.fullscreen);
             if self.configured.get(&placement.window) == Some(&target_size) {
                 continue;
             }
@@ -933,6 +1101,13 @@ impl Veyron {
                 // can never mark every tiled window as active.
                 toplevel.with_pending_state(|state| {
                     state.size = Some((target_size.0, target_size.1).into());
+                    // Clients such as video players and browsers hide their
+                    // own chrome only when told they are fullscreen.
+                    if placement.fullscreen {
+                        state.states.set(xdg_toplevel::State::Fullscreen);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Fullscreen);
+                    }
                 });
                 toplevel.send_configure();
                 self.configured.insert(placement.window, target_size);
@@ -1655,6 +1830,7 @@ impl XdgShellHandler for Veyron {
             self.mapped.remove(&id);
             self.configured.remove(&id);
             self.animations.remove(&id);
+            self.grab = self.grab.filter(|grab| grab.kind.window() != id);
             self.wm.remove_window(id);
             self.sync_layout();
             self.sync_focus();
@@ -1668,17 +1844,31 @@ impl XdgShellHandler for Veyron {
         self.needs_redraw = true;
     }
 
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        self.client_grab(&surface, serial, None);
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: wl_seat::WlSeat,
+        serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
+    ) {
+        self.client_grab(&surface, serial, Some(xdg_edges(edges)));
+    }
+
     fn fullscreen_request(
         &mut self,
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
-        // Fullscreen is compositor policy in Veyron: acknowledge the request
-        // without changing the layout.
-        surface.send_configure();
+        self.client_fullscreen(&surface, true);
     }
 
-    fn unfullscreen_request(&mut self, _surface: ToplevelSurface) {}
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.client_fullscreen(&surface, false);
+    }
 }
 
 impl WlrLayerShellHandler for Veyron {

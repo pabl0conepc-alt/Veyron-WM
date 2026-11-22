@@ -34,6 +34,9 @@ const FOCUS_HISTORY_LIMIT: usize = 32;
 /// created, so an unbounded index from IPC or a binding would exhaust memory.
 const MAX_INDEXED_WORKSPACES: usize = 1024;
 
+/// Smallest size a resize gives a window that does not state a minimum.
+const MIN_FLOATING_SIZE: Size = Size { w: 64, h: 48 };
+
 /// A workspace is one scrollable strip plus its floating layer.
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -2169,7 +2172,7 @@ impl Wm {
         }
 
         let mut rect = window.floating_rect();
-        let requested_min = window.min_size().unwrap_or(Size::new(64, 48));
+        let requested_min = window.min_size().unwrap_or(MIN_FLOATING_SIZE);
         let viewport = self.viewport();
         let (old_size, new_size, min_size, origin, extent) = match axis {
             ResizeAxis::Width => (
@@ -2377,6 +2380,58 @@ impl Wm {
             self.remember_geometry(id);
         }
         changed
+    }
+
+    /// Give a floating window a new rectangle, as an interactive resize does.
+    /// The size never drops below the window's minimum and the result stays
+    /// inside the viewport. Tiled windows are left to their layout.
+    pub fn resize_floating_to(&mut self, id: WindowId, rect: Rect) -> bool {
+        let viewport = self.viewport();
+        let Some(window) = self.windows.get_mut(&id) else {
+            return false;
+        };
+        if !window.is_floating() {
+            return false;
+        }
+        let min = window.min_size().unwrap_or(MIN_FLOATING_SIZE);
+        let sized = Rect::new(rect.x, rect.y, rect.w.max(min.w), rect.h.max(min.h));
+        let rect = clamp_into(sized, viewport);
+        let changed = window.floating_rect() != rect;
+        window.set_floating_rect(rect);
+        if changed {
+            self.remember_geometry(id);
+        }
+        changed
+    }
+
+    /// Smallest size an interactive resize gives a floating window.
+    pub fn min_floating_size(&self, id: WindowId) -> Size {
+        self.windows
+            .get(&id)
+            .and_then(Window::min_size)
+            .unwrap_or(MIN_FLOATING_SIZE)
+    }
+
+    /// Enter or leave fullscreen for `id`, as a client asks with
+    /// `xdg_toplevel.set_fullscreen`. The window is focused first, because
+    /// fullscreen belongs to the active workspace.
+    pub fn set_fullscreen(&mut self, id: WindowId, fullscreen: bool) -> bool {
+        if !self.windows.contains_key(&id) || self.is_window_fullscreen(id) == fullscreen {
+            return false;
+        }
+        self.focus_window(id);
+        if self.focused_window() != Some(id) {
+            return false;
+        }
+        self.toggle_fullscreen()
+    }
+
+    fn is_window_fullscreen(&self, id: WindowId) -> bool {
+        self.locate(id)
+            .map(|(output, workspace, _)| {
+                self.outputs[output].workspaces[workspace].fullscreen == Some(id)
+            })
+            .unwrap_or(false)
     }
 
     /// Keep floating windows on screen after an output resize or margin change.
@@ -2937,6 +2992,47 @@ mod tests {
         let rect = wm.snapshot().placement_of(id).expect("placement").rect;
         assert_eq!(rect.x, viewport.x);
         assert!(rect.bottom() <= viewport.bottom());
+    }
+
+    #[test]
+    fn resize_floating_to_respects_minimum_size_viewport_and_tiling() {
+        let mut wm = wm();
+        let tiled = wm.create_window(NewWindow::default());
+        assert!(!wm.resize_floating_to(tiled, Rect::new(0, 0, 300, 300)));
+
+        let id = wm.create_window(NewWindow {
+            min_size: Some(Size::new(200, 100)),
+            ..NewWindow::default()
+        });
+        wm.dispatch(Action::ToggleFloating);
+        let viewport = wm.snapshot().viewport;
+        assert_eq!(wm.min_floating_size(id), Size::new(200, 100));
+
+        assert!(wm.resize_floating_to(id, Rect::new(viewport.x + 10, viewport.y + 10, 400, 300)));
+        let rect = wm.snapshot().placement_of(id).expect("placement").rect;
+        assert_eq!(rect, Rect::new(viewport.x + 10, viewport.y + 10, 400, 300));
+
+        wm.resize_floating_to(id, Rect::new(viewport.x, viewport.y, 5, 5));
+        let rect = wm.snapshot().placement_of(id).expect("placement").rect;
+        assert_eq!(rect.size(), Size::new(200, 100));
+
+        wm.resize_floating_to(id, Rect::new(viewport.x, viewport.y, i32::MAX, i32::MAX));
+        let rect = wm.snapshot().placement_of(id).expect("placement").rect;
+        assert!(rect.right() <= viewport.right() && rect.bottom() <= viewport.bottom());
+    }
+
+    #[test]
+    fn client_fullscreen_requests_focus_and_toggle_only_on_change() {
+        let mut wm = wm();
+        let first = wm.create_window(NewWindow::default());
+        let _second = wm.create_window(NewWindow::default());
+        assert!(wm.set_fullscreen(first, true));
+        assert_eq!(wm.focused_window(), Some(first));
+        assert!(wm.snapshot().is_fullscreen(first));
+        assert!(!wm.set_fullscreen(first, true));
+        assert!(wm.set_fullscreen(first, false));
+        assert!(!wm.snapshot().is_fullscreen(first));
+        assert!(!wm.set_fullscreen(WindowId(9999), true));
     }
 
     #[test]
