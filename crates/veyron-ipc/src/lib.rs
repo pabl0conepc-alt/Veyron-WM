@@ -133,6 +133,15 @@ pub struct WindowReport {
     pub title: String,
     /// Opacity requested by the window rules (`1.0` when none match).
     pub opacity: f32,
+    /// Pinned to every workspace (`pin`).
+    #[serde(default)]
+    pub pinned: bool,
+    /// Maximized to the usable area (`maximize`).
+    #[serde(default)]
+    pub maximized: bool,
+    /// Marks set with `mark <name>`.
+    #[serde(default)]
+    pub marks: Vec<String>,
 }
 
 /// A state change pushed to subscribers.
@@ -153,8 +162,8 @@ pub enum Change {
     Workspace,
     /// The focused window.
     Focus,
-    /// A window opened, closed, or changed title, app id, floating or
-    /// fullscreen state. Pure geometry changes (animations) are not events.
+    /// A window opened, closed, or changed title, app id, floating,
+    /// fullscreen, pinned or maximized state, or its marks. Pure geometry changes (animations) are not events.
     Windows,
     /// The tiling layout of the active workspace.
     Layout,
@@ -197,6 +206,9 @@ impl Change {
                 window.fullscreen,
                 window.app_id.clone(),
                 window.title.clone(),
+                window.pinned,
+                window.maximized,
+                window.marks.clone(),
             )
         };
         if !old
@@ -645,6 +657,9 @@ mod tests {
                 app_id: "foot".into(),
                 title: "Terminal".into(),
                 opacity: 0.8,
+                pinned: false,
+                maximized: false,
+                marks: vec!["web".into()],
             }],
             focused: Some(7),
             scroll: 12.5,
@@ -875,6 +890,9 @@ mod tests {
             app_id: "app".into(),
             title: title.into(),
             opacity: 1.0,
+            pinned: false,
+            maximized: false,
+            marks: vec!["web".into()],
         }
     }
 

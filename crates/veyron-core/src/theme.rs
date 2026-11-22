@@ -71,6 +71,9 @@ pub struct ThemeConfig {
     pub shadow_opacity: Option<f32>,
     /// Opacity applied to unfocused windows (`0.1..=1.0`), on top of rules.
     pub inactive_opacity: Option<f32>,
+    /// Darken unfocused windows by this much (`0.0..=0.9`), keeping them
+    /// opaque (Hyprland `dim_inactive`).
+    pub dim_inactive: Option<f32>,
     /// Overrides the focused-window border colour (defaults to `primary`).
     pub border_active: Option<String>,
     /// Overrides the unfocused-window border colour (defaults to
@@ -96,6 +99,7 @@ impl Default for ThemeConfig {
             shadow_size: None,
             shadow_opacity: None,
             inactive_opacity: None,
+            dim_inactive: None,
             border_active: None,
             border_inactive: None,
             use_surface_background: false,
@@ -164,6 +168,11 @@ impl ThemeConfig {
                 "theme.inactive_opacity must be between 0.1 and 1.0, got {opacity}"
             ));
         }
+        if let Some(dim) = self.dim_inactive.filter(|d| !(0.0..=0.9).contains(d)) {
+            return Err(format!(
+                "theme.dim_inactive must be between 0.0 and 0.9, got {dim}"
+            ));
+        }
         for colour in [&self.border_active, &self.border_inactive]
             .into_iter()
             .flatten()
@@ -198,6 +207,7 @@ impl ThemeConfig {
         self.shadow_size = None;
         self.shadow_opacity = None;
         self.inactive_opacity = None;
+        self.dim_inactive = None;
     }
 
     /// The decoration style with this table's overrides applied. Invalid
@@ -219,6 +229,9 @@ impl ThemeConfig {
         if let Some(opacity) = self.inactive_opacity {
             design.inactive_opacity = opacity;
         }
+        if let Some(dim) = self.dim_inactive {
+            design.dim_inactive = dim;
+        }
         design
     }
 }
@@ -237,6 +250,8 @@ pub struct Design {
     /// Vertical shadow offset, so light seems to come from above.
     pub shadow_offset: i32,
     pub inactive_opacity: f32,
+    /// How much unfocused windows are darkened (0 = not at all).
+    pub dim_inactive: f32,
     /// Tint the focused window's shadow with its border colour (a glow).
     pub glow: bool,
 }
@@ -251,6 +266,7 @@ impl Design {
             shadow_opacity: 0.35,
             shadow_offset: 4,
             inactive_opacity: 1.0,
+            dim_inactive: 0.0,
             glow: false,
         }
     }
@@ -761,5 +777,21 @@ mod tests {
             "the half-finished temporary file is removed"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dim_inactive_is_off_by_default_validated_and_overridable() {
+        assert_eq!(ThemeConfig::default().design().dim_inactive, 0.0);
+        let dimmed = ThemeConfig {
+            dim_inactive: Some(0.3),
+            ..ThemeConfig::default()
+        };
+        assert!(dimmed.validate().is_ok());
+        assert_eq!(dimmed.design().dim_inactive, 0.3);
+        let too_dark = ThemeConfig {
+            dim_inactive: Some(1.0),
+            ..ThemeConfig::default()
+        };
+        assert!(too_dark.validate().is_err());
     }
 }

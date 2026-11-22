@@ -227,9 +227,9 @@ pub struct Veyron {
     /// Last location a window was mapped at, so the scene graph is only touched
     /// when the layout really moved it (avoiding pointless z-order churn).
     mapped: HashMap<WindowId, (i32, i32)>,
-    /// Last size and fullscreen state sent to each client, so configures are
-    /// not flooded.
-    configured: HashMap<WindowId, (i32, i32, bool)>,
+    /// Last size, fullscreen and maximized state sent to each client, so
+    /// configures are not flooded.
+    configured: HashMap<WindowId, (i32, i32, bool, bool)>,
     /// In-flight window rectangles; the scene graph draws `current()`.
     animations: HashMap<WindowId, RectAnimator>,
     /// Windows playing their open animation (rise and fade in).
@@ -757,6 +757,21 @@ impl Veyron {
         }
     }
 
+    /// Maximize or restore because the client asked (title bar button or
+    /// double click). Like fullscreen, the client always hears back.
+    fn client_maximize(&mut self, surface: &ToplevelSurface, maximized: bool) {
+        let changed = self
+            .toplevel_id(surface)
+            .is_some_and(|id| self.wm.set_maximized(id, maximized));
+        if changed {
+            self.sync_layout();
+            self.sync_focus();
+            self.needs_redraw = true;
+        } else if surface.is_initial_configure_sent() {
+            surface.send_configure();
+        }
+    }
+
     fn toplevel_id(&self, surface: &ToplevelSurface) -> Option<WindowId> {
         self.windows
             .iter()
@@ -981,6 +996,14 @@ impl Veyron {
                             .map(|window| window.title().to_string())
                             .unwrap_or_default(),
                         opacity: placement.opacity,
+                        pinned: self.wm.is_pinned(placement.window),
+                        maximized: self.wm.is_maximized(placement.window),
+                        marks: self
+                            .wm
+                            .marks_of(placement.window)
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect(),
                     }
                 })
                 .collect(),
@@ -1296,7 +1319,7 @@ impl Veyron {
                     self.mapped.get(&placement.window),
                     self.configured.get(&placement.window),
                 ) {
-                    (Some((x, y)), Some((w, h, _))) => Rect::new(*x, *y, *w, *h),
+                    (Some((x, y)), Some((w, h, _, _))) => Rect::new(*x, *y, *w, *h),
                     // A window never configured before is new: it rises into
                     // place while it fades in.
                     (None, None) if placement.animate && slide == (0, 0) => {
@@ -1332,7 +1355,8 @@ impl Veyron {
             // picture-in-picture and fullscreen change their rectangle, and
             // only a configure makes the client follow. Unchanged sizes are
             // skipped below, so a floating client is not resized needlessly.
-            let target_size = (target.w, target.h, placement.fullscreen);
+            let maximized = self.wm.is_maximized(placement.window);
+            let target_size = (target.w, target.h, placement.fullscreen, maximized);
             if self.configured.get(&placement.window) == Some(&target_size) {
                 continue;
             }
@@ -1348,6 +1372,11 @@ impl Veyron {
                         state.states.set(xdg_toplevel::State::Fullscreen);
                     } else {
                         state.states.unset(xdg_toplevel::State::Fullscreen);
+                    }
+                    if maximized {
+                        state.states.set(xdg_toplevel::State::Maximized);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Maximized);
                     }
                 });
                 toplevel.send_configure();
@@ -1479,6 +1508,15 @@ impl Veyron {
             config.appearance.background_rgba()
         };
         let snapshot = self.wm.snapshot();
+        if snapshot.focused != self.chrome.last_focus {
+            self.chrome.last_focus = snapshot.focused;
+            if config.theme.design().dim_inactive > 0.0 {
+                if let Some(mode) = self.output.current_mode() {
+                    self.damage_tracker =
+                        OutputDamageTracker::new(mode.size, 1.0, Transform::Flipped180);
+                }
+            }
+        }
         self.chrome.fades = self
             .opening
             .iter()
@@ -1575,6 +1613,11 @@ struct Chrome {
     solid: HashMap<WindowId, [SolidColorBuffer; 4]>,
     /// Opacity of windows playing their open animation, for this frame.
     fades: HashMap<WindowId, f32>,
+    /// Darkening layers of unfocused square windows (`dim_inactive`).
+    dims: HashMap<WindowId, SolidColorBuffer>,
+    /// Focused window of the last frame: with `dim_inactive` a focus change
+    /// changes shader uniforms the damage tracker cannot see.
+    last_focus: Option<WindowId>,
 }
 
 impl Chrome {
@@ -1594,6 +1637,8 @@ impl Chrome {
         self.shaded
             .retain(|id, _| snapshot.placement_of(*id).is_some());
         self.solid
+            .retain(|id, _| snapshot.placement_of(*id).is_some());
+        self.dims
             .retain(|id, _| snapshot.placement_of(*id).is_some());
     }
 }
@@ -1671,6 +1716,11 @@ fn scene_elements(
         if !focused && !fullscreen {
             alpha *= design.inactive_opacity;
         }
+        let dim = if !focused && !fullscreen && placement.is_some() {
+            design.dim_inactive
+        } else {
+            0.0
+        };
         if let Some(fade) = id.and_then(|id| chrome.fades.get(&id)) {
             alpha *= fade;
         }
@@ -1718,18 +1768,37 @@ fn scene_elements(
                             clip,
                             design.corner_radius as f32,
                             style.frag_map,
+                            dim,
                         ))
                     }),
                 );
             }
-            _ => elements.extend(
-                window
-                    .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
-                        renderer, origin, scale, alpha,
-                    )
-                    .into_iter()
-                    .map(SceneElement::from),
-            ),
+            _ => {
+                // Square windows are darkened by a translucent black layer
+                // drawn in front of them.
+                if let Some(id) = id.filter(|_| dim > 0.0) {
+                    let buffer = chrome
+                        .dims
+                        .entry(id)
+                        .or_insert_with(|| SolidColorBuffer::new((0, 0), [0.0; 4]));
+                    buffer.update(window_rect.size, [0.0, 0.0, 0.0, dim * alpha]);
+                    elements.push(SceneElement::from(SolidColorRenderElement::from_buffer(
+                        buffer,
+                        window_rect.loc.to_physical_precise_round(1.0),
+                        scale,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
+                elements.extend(
+                    window
+                        .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                            renderer, origin, scale, alpha,
+                        )
+                        .into_iter()
+                        .map(SceneElement::from),
+                );
+            }
         }
 
         let Some(id) = id.filter(|_| placement.is_some() && !fullscreen) else {
@@ -1832,14 +1901,14 @@ fn binding_for(
 /// Modification time of the configuration file, `None` when it is absent.
 /// Modification times of every file the configuration comes from. Before a
 /// file exists (defaults in use) only the main path is watched.
-fn config_stamp(
-    path: &std::path::Path,
-    sources: &[PathBuf],
-) -> Vec<Option<std::time::SystemTime>> {
+fn config_stamp(path: &std::path::Path, sources: &[PathBuf]) -> Vec<Option<std::time::SystemTime>> {
     if sources.is_empty() {
         return vec![config_modified(path)];
     }
-    sources.iter().map(|source| config_modified(source)).collect()
+    sources
+        .iter()
+        .map(|source| config_modified(source))
+        .collect()
 }
 
 fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
@@ -2171,6 +2240,14 @@ impl XdgShellHandler for Veyron {
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
         self.client_fullscreen(&surface, false);
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        self.client_maximize(&surface, true);
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        self.client_maximize(&surface, false);
     }
 }
 

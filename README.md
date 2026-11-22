@@ -395,6 +395,7 @@ corner_radius = 12           # 0 keeps square corners
 shadow_size = 18             # 0 disables the drop shadow
 shadow_opacity = 0.35
 inactive_opacity = 1.0       # dim unfocused windows (0.1 .. 1.0)
+dim_inactive = 0.0           # darken unfocused windows (0.0 .. 0.9)
 # border_active = "#ffb4abff"  # override primary / outline_variant
 use_surface_background = true
 export = true                # write ~/.local/state/veyron/theme/*

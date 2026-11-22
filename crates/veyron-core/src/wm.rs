@@ -326,6 +326,14 @@ pub struct Wm {
     special_return: Option<usize>,
     /// Learned app -> output/workspace placement (smart workspace).
     affinities: crate::smart::Affinities,
+    /// Pinned floating windows; they follow the active workspace of their
+    /// output.
+    sticky: Vec<WindowId>,
+    /// Named windows for `focus-mark`.
+    marks: std::collections::BTreeMap<String, WindowId>,
+    /// Maximized windows and the floating rectangle to restore, or `None`
+    /// when they were tiled before.
+    maximized: HashMap<WindowId, Option<Rect>>,
 }
 
 impl Wm {
@@ -353,6 +361,9 @@ impl Wm {
             active_profile: None,
             special_return: None,
             affinities: crate::smart::Affinities::new(),
+            sticky: Vec::new(),
+            marks: Default::default(),
+            maximized: HashMap::new(),
         };
         if let Some(name) = wm.config.default_profile.clone() {
             wm.apply_profile(&name);
@@ -934,6 +945,9 @@ impl Wm {
         }
         self.scratchpad.retain(|window| *window != id);
         self.pip.remove(&id);
+        self.sticky.retain(|window| *window != id);
+        self.marks.retain(|_, window| *window != id);
+        self.maximized.remove(&id);
         self.focus_history.retain(|window| *window != id);
         for output in &mut self.outputs {
             for workspace in &mut output.workspaces {
@@ -1326,9 +1340,27 @@ impl Wm {
                 effects.focus_changed = effects.workspace_changed;
             }
             Action::CenterFloating => effects.layout_changed = self.center_focused_floating(),
+            Action::TogglePin => effects.layout_changed = self.toggle_pin(),
+            Action::ToggleMaximize => effects.layout_changed = self.toggle_maximize(),
+            Action::Mark { name } => {
+                if let Some(id) = self.focused_window() {
+                    self.marks.insert(name, id);
+                }
+            }
+            Action::Unmark { name } => self.unmark(name),
+            Action::FocusMark { name } => {
+                let target = self.marks.get(&name).copied();
+                effects.focus_changed = target
+                    .is_some_and(|id| self.focused_window() != Some(id) && self.focus_window(id));
+                effects.workspace_changed = effects.focus_changed;
+                effects.layout_changed = effects.focus_changed;
+            }
             Action::Gaps { delta } => effects.layout_changed = self.adjust_gap(delta),
             Action::Opacity { delta } => effects.layout_changed = self.adjust_opacity(delta),
             Action::Theme { op } => effects.theme_changed = self.apply_theme_op(op),
+        }
+        if self.carry_sticky() {
+            effects.layout_changed = true;
         }
 
         if effects.layout_changed {
@@ -2421,6 +2453,8 @@ impl Wm {
         window.set_floating_rect(rect);
         if changed {
             self.remember_geometry(id);
+            // Moved or resized by hand: no longer maximized.
+            self.maximized.remove(&id);
         }
         changed
     }
@@ -2443,6 +2477,8 @@ impl Wm {
         window.set_floating_rect(rect);
         if changed {
             self.remember_geometry(id);
+            // Moved or resized by hand: no longer maximized.
+            self.maximized.remove(&id);
         }
         changed
     }
@@ -2475,6 +2511,127 @@ impl Wm {
                 self.outputs[output].workspaces[workspace].fullscreen == Some(id)
             })
             .unwrap_or(false)
+    }
+
+    /// Pin or unpin the focused window. A tiled window is made floating
+    /// first, because only floating windows can follow every workspace.
+    fn toggle_pin(&mut self) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        if let Some(index) = self.sticky.iter().position(|window| *window == id) {
+            self.sticky.remove(index);
+            return true;
+        }
+        let floating = self.windows.get(&id).is_some_and(Window::is_floating);
+        if !floating && !self.toggle_floating() {
+            return false;
+        }
+        self.sticky.push(id);
+        true
+    }
+
+    /// Whether `id` is pinned to every workspace of its output.
+    pub fn is_pinned(&self, id: WindowId) -> bool {
+        self.sticky.contains(&id)
+    }
+
+    /// Move pinned windows onto the active workspace of their output after a
+    /// switch. Windows that stopped floating lose the pin.
+    fn carry_sticky(&mut self) -> bool {
+        let windows = &self.windows;
+        self.sticky
+            .retain(|id| windows.get(id).is_some_and(Window::is_floating));
+        let mut moved = false;
+        for id in self.sticky.clone() {
+            let Some((output, workspace, true)) = self.locate(id) else {
+                continue;
+            };
+            let active = self.outputs[output].active;
+            if workspace == active {
+                continue;
+            }
+            let source = &mut self.outputs[output].workspaces[workspace];
+            source.floating.retain(|window| *window != id);
+            if source.focused_floating == Some(id) {
+                source.focused_floating = None;
+            }
+            let destination = &mut self.outputs[output].workspaces[active];
+            destination.floating.push(id);
+            // On an empty workspace the pinned window is the one to type into.
+            if destination.focused_window().is_none() {
+                destination.focused_floating = Some(id);
+            }
+            moved = true;
+        }
+        moved
+    }
+
+    /// Remove mark `name`, or every mark of the focused window.
+    fn unmark(&mut self, name: Option<String>) {
+        match name {
+            Some(name) => {
+                self.marks.remove(&name);
+            }
+            None => {
+                if let Some(id) = self.focused_window() {
+                    self.marks.retain(|_, window| *window != id);
+                }
+            }
+        }
+    }
+
+    /// Marks carried by `id`, in name order.
+    pub fn marks_of(&self, id: WindowId) -> Vec<&str> {
+        self.marks
+            .iter()
+            .filter(|(_, window)| **window == id)
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
+    /// Maximize the focused window to the usable area (bars stay visible), or
+    /// put it back where it was: its old floating rectangle, or the layout.
+    fn toggle_maximize(&mut self) -> bool {
+        let Some(id) = self.focused_window() else {
+            return false;
+        };
+        if let Some(previous) = self.maximized.remove(&id) {
+            return match previous {
+                Some(rect) => self.make_floating(id, rect),
+                None => {
+                    self.windows.get(&id).is_some_and(Window::is_floating) && self.toggle_floating()
+                }
+            };
+        }
+        let previous = self
+            .windows
+            .get(&id)
+            .filter(|window| window.is_floating())
+            .map(Window::floating_rect);
+        let viewport = self.viewport();
+        let gap = smart_gap(&self.config.layout, 1).max(0);
+        if !self.make_floating(id, SnapZone::Maximize.rect(viewport, gap)) {
+            return false;
+        }
+        self.pip.remove(&id);
+        self.maximized.insert(id, previous);
+        true
+    }
+
+    /// Whether `id` is maximized with `maximize`.
+    pub fn is_maximized(&self, id: WindowId) -> bool {
+        self.maximized.contains_key(&id)
+    }
+
+    /// Maximize or restore `id`, as a client asks with
+    /// `xdg_toplevel.set_maximized` (the title bar button).
+    pub fn set_maximized(&mut self, id: WindowId, maximized: bool) -> bool {
+        if !self.windows.contains_key(&id) || self.is_maximized(id) == maximized {
+            return false;
+        }
+        self.focus_window(id);
+        self.focused_window() == Some(id) && self.toggle_maximize()
     }
 
     /// Keep floating windows on screen after an output resize or margin change.
@@ -3677,6 +3834,98 @@ mod tests {
             wm.active_output().active_workspace().name(),
             "2",
             "toggling again returns to the previous workspace"
+        );
+    }
+
+    #[test]
+    fn pinned_windows_float_and_follow_workspace_switches() {
+        let mut wm = wm();
+        let pinned = wm.create_window(NewWindow::default());
+        assert!(wm.dispatch(Action::TogglePin).layout_changed);
+        assert!(wm.is_pinned(pinned));
+        assert!(
+            wm.snapshot().is_floating(pinned),
+            "pinning floats the window"
+        );
+
+        wm.dispatch(Action::parse("workspace 2").expect("action"));
+        let snapshot = wm.snapshot();
+        assert_eq!(snapshot.workspace_index, 1);
+        assert!(
+            snapshot.placement_of(pinned).is_some(),
+            "the pinned window is shown on the new workspace"
+        );
+
+        wm.dispatch(Action::TogglePin);
+        wm.dispatch(Action::parse("workspace 1").expect("action"));
+        assert!(!wm.is_pinned(pinned));
+        assert!(
+            wm.snapshot().placement_of(pinned).is_none(),
+            "an unpinned window stays where it was"
+        );
+    }
+
+    #[test]
+    fn marks_jump_back_to_their_window_and_die_with_it() {
+        let mut wm = wm();
+        let browser = wm.create_window(NewWindow::default());
+        wm.dispatch(Action::Mark { name: "web".into() });
+        assert_eq!(wm.marks_of(browser), vec!["web"]);
+
+        wm.dispatch(Action::parse("workspace 2").expect("action"));
+        let _editor = wm.create_window(NewWindow::default());
+        let effects = wm.dispatch(Action::FocusMark { name: "web".into() });
+        assert!(effects.focus_changed && effects.workspace_changed);
+        assert_eq!(wm.focused_window(), Some(browser));
+        assert!(
+            !wm.dispatch(Action::FocusMark { name: "web".into() })
+                .focus_changed
+        );
+
+        wm.dispatch(Action::Unmark { name: None });
+        assert!(wm.marks_of(browser).is_empty());
+        wm.dispatch(Action::Mark { name: "web".into() });
+        wm.remove_window(browser);
+        assert!(
+            !wm.dispatch(Action::FocusMark { name: "web".into() })
+                .focus_changed
+        );
+    }
+
+    #[test]
+    fn maximize_fills_the_usable_area_and_restores_tiled_or_floating() {
+        let mut wm = wm();
+        let tiled = wm.create_window(NewWindow::default());
+        let viewport = wm.snapshot().viewport;
+        assert!(wm.dispatch(Action::ToggleMaximize).layout_changed);
+        assert!(wm.is_maximized(tiled));
+        let rect = wm.snapshot().placement_of(tiled).expect("placement").rect;
+        assert!(
+            rect.w >= viewport.w - 64 && rect.h >= viewport.h - 64,
+            "{rect:?}"
+        );
+        wm.dispatch(Action::ToggleMaximize);
+        assert!(!wm.is_maximized(tiled));
+        assert!(
+            !wm.snapshot().is_floating(tiled),
+            "a tiled window goes back to the layout"
+        );
+
+        wm.dispatch(Action::ToggleFloating);
+        let floating = wm.snapshot().placement_of(tiled).expect("placement").rect;
+        assert!(wm.set_maximized(tiled, true));
+        assert!(!wm.set_maximized(tiled, true));
+        assert!(wm.set_maximized(tiled, false));
+        assert_eq!(
+            wm.snapshot().placement_of(tiled).expect("placement").rect,
+            floating
+        );
+
+        wm.dispatch(Action::ToggleMaximize);
+        wm.resize_floating_to(tiled, Rect::new(viewport.x + 30, viewport.y + 30, 300, 200));
+        assert!(
+            !wm.is_maximized(tiled),
+            "moving by hand ends the maximized state"
         );
     }
 }

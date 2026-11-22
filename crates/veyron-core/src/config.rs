@@ -347,7 +347,6 @@ impl Config {
     }
 
     fn from_raw(raw: RawConfig) -> Result<Config, ConfigError> {
-
         let layout = raw.layout.unwrap_or_default();
         layout.validate().map_err(ConfigError::Invalid)?;
 
@@ -986,10 +985,8 @@ mod tests {
 
     /// A fresh directory for include tests.
     fn include_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "veyron-include-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("veyron-include-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create test directory");
         dir
@@ -1013,8 +1010,15 @@ mod tests {
 
         let config = Config::load(&dir.join("veyron.toml")).expect("loads with includes");
         assert_eq!(config.layout.gap, 6, "the including file wins");
-        assert_eq!(config.layout.outer_margin, 4, "untouched keys come from the include");
-        assert_eq!(config.rules.rules().len(), 2, "rules from both files are kept");
+        assert_eq!(
+            config.layout.outer_margin, 4,
+            "untouched keys come from the include"
+        );
+        assert_eq!(
+            config.rules.rules().len(),
+            2,
+            "rules from both files are kept"
+        );
         assert!(config.rules.resolve("mpv", "").floating);
         assert_eq!(
             config.sources,
