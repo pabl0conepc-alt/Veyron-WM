@@ -98,6 +98,9 @@ const BTN_RIGHT: u32 = 0x111;
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
 
+/// How far below its place a new window starts its open animation.
+const OPEN_RISE: i32 = 24;
+
 /// Size of one workspace tile in the `veyronctl overview` grid.
 const OVERVIEW_TILE: VSize = VSize::new(320, 200);
 /// Space between overview tiles.
@@ -228,6 +231,8 @@ pub struct Veyron {
     configured: HashMap<WindowId, (i32, i32, bool)>,
     /// In-flight window rectangles; the scene graph draws `current()`.
     animations: HashMap<WindowId, RectAnimator>,
+    /// Windows playing their open animation (rise and fade in).
+    opening: std::collections::HashSet<WindowId>,
     last_animation_frame: Instant,
     /// Workspace drawn last, so a switch can slide in from the right side.
     last_workspace_position: WorkspacePosition,
@@ -359,6 +364,7 @@ impl Veyron {
             mapped: HashMap::new(),
             configured: HashMap::new(),
             animations: HashMap::new(),
+            opening: Default::default(),
             last_animation_frame: Instant::now(),
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
@@ -398,6 +404,10 @@ impl Veyron {
                 animator.advance(dt);
             }
         }
+        // The frame that finishes an open animation is drawn fully opaque.
+        let animations = &self.animations;
+        self.opening
+            .retain(|id| animations.get(id).is_some_and(RectAnimator::is_running));
         if animating {
             self.needs_redraw = true;
         }
@@ -1117,6 +1127,12 @@ impl Veyron {
                     self.configured.get(&placement.window),
                 ) {
                     (Some((x, y)), Some((w, h, _))) => Rect::new(*x, *y, *w, *h),
+                    // A window never configured before is new: it rises into
+                    // place while it fades in.
+                    (None, None) if placement.animate && slide == (0, 0) => {
+                        self.opening.insert(placement.window);
+                        Rect::new(target.x, target.y + OPEN_RISE, target.w, target.h)
+                    }
                     // A workspace that just became active slides in from the
                     // direction the user travelled.
                     _ if placement.animate && slide != (0, 0) => {
@@ -1285,6 +1301,11 @@ impl Veyron {
             config.appearance.background_rgba()
         };
         let snapshot = self.wm.snapshot();
+        self.chrome.fades = self
+            .opening
+            .iter()
+            .filter_map(|id| Some((*id, self.animations.get(id)?.progress() as f32)))
+            .collect();
         let damage = {
             let (renderer, mut framebuffer) = backend.bind()?;
             let elements = scene_elements(
@@ -1374,6 +1395,8 @@ struct Chrome {
     shaders: Option<Option<Shaders>>,
     shaded: HashMap<WindowId, Decoration>,
     solid: HashMap<WindowId, [SolidColorBuffer; 4]>,
+    /// Opacity of windows playing their open animation, for this frame.
+    fades: HashMap<WindowId, f32>,
 }
 
 impl Chrome {
@@ -1460,6 +1483,9 @@ fn scene_elements(
         let mut alpha = placement.map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
         if !focused && !fullscreen {
             alpha *= design.inactive_opacity;
+        }
+        if let Some(fade) = id.and_then(|id| chrome.fades.get(&id)) {
+            alpha *= fade;
         }
         let geometry = window.geometry();
         let origin = (location - geometry.loc).to_physical_precise_round(1.0);
@@ -1885,6 +1911,7 @@ impl XdgShellHandler for Veyron {
             self.mapped.remove(&id);
             self.configured.remove(&id);
             self.animations.remove(&id);
+            self.opening.remove(&id);
             self.grab = self.grab.filter(|grab| grab.kind.window() != id);
             self.wm.remove_window(id);
             self.sync_layout();
