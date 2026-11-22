@@ -5,6 +5,19 @@ and `KNOWN_ISSUES.md`. States follow the master prompt: IMPLEMENTED requires
 runtime validation, which no feature has yet in a visible nested session, so
 code that compiles and passes tests is at most PARTIAL or UNVERIFIED.
 
+## One-line installer (branch `claude/curl-installer`, 2026-11-22)
+
+- `install.sh` works piped from curl: banner, detected system, plan, a menu
+  read from the tty, spinner, SHA-256 check, atomic replace, uninstall.
+- `installer.yml` builds x86_64 and aarch64 archives on glibc 2.35, installs
+  them in clean distribution containers and opens the nested compositor on
+  Xvfb and headless Weston hosts. Only a `v*` tag publishes a release.
+- Packaging fixes found on the way: the .deb lacked `libwayland-egl1` and
+  `libwayland-server0`; the Nix package lacked the X11 libraries needed to
+  run nested in an X11 session.
+- PR #8 was merged before the daily-use batch and research block 1 were
+  pushed, so those commits reach `main` with this branch.
+
 ## More layouts (branch `claude/more-layouts`)
 
 - **New `LayoutKind`s** in `tiling.rs`: `grid` (rows of `ceil(sqrt(n))`, last

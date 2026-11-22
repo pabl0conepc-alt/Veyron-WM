@@ -12,7 +12,11 @@
       # xkbcommon-dl and winit's EGL loader). They are not linked, so they must
       # be on the rpath of the installed binary and on LD_LIBRARY_PATH for the
       # headless tests and development shells.
-      runtimeLibs = [ pkgs.wayland pkgs.libxkbcommon pkgs.libGL pkgs.libffi ];
+      runtimeLibs = [
+        pkgs.wayland pkgs.libxkbcommon pkgs.libGL pkgs.libffi
+        # Nested in an X11 session.
+        pkgs.libx11 pkgs.libxcursor pkgs.libxi pkgs.libxcb
+      ];
       runtimeLibPath = pkgs.lib.makeLibraryPath runtimeLibs;
 
       veyron = pkgs.rustPlatform.buildRustPackage {

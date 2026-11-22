@@ -46,17 +46,60 @@ switched at runtime with `veyronctl theme …`.</sub>
 ## Quick start
 
 ```sh
-git clone https://github.com/pabl0conepc-alt/Veyron-WM
-cd Veyron-WM
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/pabl0conepc-alt/Veyron-WM/main/install.sh | sh
 ```
 
-The installer detects NixOS, Arch, Debian/Ubuntu and Fedora, installs the
-dependencies (asking before `sudo`), gets Rust 1.97+ through rustup when the
-system one is older, builds with one job on machines with less than 6 GiB of
-RAM, installs `veyron` and `veyronctl` into `~/.local/bin` and writes a
-starter configuration to `~/.config/veyron/veyron.toml`. Run it again to
-update; `./install.sh --uninstall` removes the binaries.
+```text
+  ██╗   ██╗███████╗██╗   ██╗██████╗  ██████╗ ███╗   ██╗
+  ██║   ██║██╔════╝╚██╗ ██╔╝██╔══██╗██╔═══██╗████╗  ██║
+  ██║   ██║█████╗   ╚████╔╝ ██████╔╝██║   ██║██╔██╗ ██║
+  ╚██╗ ██╔╝██╔══╝    ╚██╔╝  ██╔══██╗██║   ██║██║╚██╗██║
+   ╚████╔╝ ███████╗   ██║   ██║  ██║╚██████╔╝██║ ╚████║
+    ╚═══╝  ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+
+  ╭─ What will happen
+  │ Method      download the ready binary
+  │ File        veyron-wm-linux-x86_64.tar.gz
+  │ Into        ~/.local/bin
+  │ Packages    2 (asks for your password)
+  │ Config      create ~/.config/veyron/veyron.toml
+  ╰─
+
+  ❯ Install now
+    Show every detail
+    Build from source instead
+    Cancel
+```
+
+The installer detects the system, shows the plan and changes nothing until you
+choose *Install now* (it speaks English and Portuguese, following your locale):
+
+| System | What it installs |
+|---|---|
+| NixOS (x86_64) | the flake, in your Nix profile |
+| Debian 12+, Ubuntu 22.04+, Fedora, Arch, openSUSE Tumbleweed and their derivatives | the release binary (x86_64 or aarch64), verified with SHA-256, plus missing system libraries |
+| Those systems with an older glibc, another CPU, or before the first release | a source build, with Rust from rustup when needed |
+| Alpine and other musl systems | not supported yet |
+
+Binaries go to `~/.local/bin`. An existing configuration is never overwritten.
+Run the same command again to update. Options go after `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pabl0conepc-alt/Veyron-WM/main/install.sh | sh -s -- --dry-run
+```
+
+| Option | Does |
+|---|---|
+| `--yes` | do not ask (for scripts) |
+| `--dry-run` | show the plan and change nothing |
+| `--from-source` | build instead of downloading |
+| `--release v0.1.0` | install that release |
+| `--ref <branch>` | build a branch, tag or commit |
+| `--prefix <dir>` | install to `<dir>/bin` |
+| `--no-deps` | leave system packages alone |
+| `--uninstall` | remove Veyron, keep the configuration |
+
+From a clone, `./install.sh` builds that checkout.
 
 Then, from inside your current desktop:
 
@@ -215,6 +258,13 @@ development packages. The nested backend needs a running Wayland or X11 session.
 cargo build --release          # builds veyron and veyronctl
 cargo test                     # core, IPC and headless protocol suites
 ```
+
+### Releasing
+
+`.github/workflows/installer.yml` builds the downloads on every pull request
+and installs them on clean distributions. Pushing a tag that matches the
+version in `Cargo.toml` (for example `v0.1.0`) publishes them as a GitHub
+release once those jobs pass; until then the installer builds from source.
 
 ### Nix
 
