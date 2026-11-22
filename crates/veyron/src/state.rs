@@ -191,9 +191,9 @@ impl ClientData for ClientState {
 pub struct Veyron {
     start: Instant,
     config_path: PathBuf,
-    /// Modification time of the configuration file when it was last read, so
-    /// edits are picked up automatically.
-    config_stamp: Option<std::time::SystemTime>,
+    /// Modification times of the configuration file and its includes when
+    /// they were last read, so edits to any of them are picked up.
+    config_stamp: Vec<Option<std::time::SystemTime>>,
 
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
@@ -346,7 +346,7 @@ impl Veyron {
         let palette = wm.config().theme.palette();
         let mut state = Self {
             start: Instant::now(),
-            config_stamp: config_modified(&config_path),
+            config_stamp: config_stamp(&config_path, &wm.config().sources),
             config_path,
             compositor_state,
             xdg_shell_state,
@@ -1096,11 +1096,12 @@ impl Veyron {
     /// Reload when the configuration file changed since it was last read.
     /// Called periodically by the event loop.
     pub fn reload_config_if_changed(&mut self) {
-        let stamp = config_modified(&self.config_path);
+        let stamp = config_stamp(&self.config_path, &self.wm.config().sources);
         if stamp != self.config_stamp {
-            self.config_stamp = stamp;
             tracing::info!(path = %self.config_path.display(), "configuration file changed");
             self.reload_config();
+            // A reload can add or drop includes; watch the new set.
+            self.config_stamp = config_stamp(&self.config_path, &self.wm.config().sources);
         }
     }
 
@@ -1829,6 +1830,18 @@ fn binding_for(
 
 /// Lowercase keysym name, the form binding chords are stored in.
 /// Modification time of the configuration file, `None` when it is absent.
+/// Modification times of every file the configuration comes from. Before a
+/// file exists (defaults in use) only the main path is watched.
+fn config_stamp(
+    path: &std::path::Path,
+    sources: &[PathBuf],
+) -> Vec<Option<std::time::SystemTime>> {
+    if sources.is_empty() {
+        return vec![config_modified(path)];
+    }
+    sources.iter().map(|source| config_modified(source)).collect()
+}
+
 fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
