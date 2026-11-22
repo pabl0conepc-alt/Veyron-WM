@@ -348,6 +348,9 @@ Default keybindings (all configurable):
 | `super+comma` / `super+period` | focus the monitor to the left / right |
 | `super+shift+comma` / `super+shift+period` | move the focused window to the left / right monitor |
 | `super+ctrl+comma` / `super+ctrl+period` | move the active workspace to the left / right monitor |
+| `super+m` | maximize / restore the focused window |
+| `super+o` | pin the focused window to every workspace |
+| `super+wheel_down` / `super+wheel_up` | next / previous workspace |
 | `super+r` | reload the configuration |
 | `super+shift+e` | quit |
 
@@ -501,6 +504,35 @@ Window-management extras borrowed from other compositors:
 | `theme seed <#hex\|preset>` | | use a seed colour |
 | `theme design next` | `super+alt+t` | next decoration style |
 | `theme design <name>` | | `material`, `glass`, `flat`, `neon`, `minimal` |
+| `maximize` | `super+m` | fill the usable area (bars stay visible), again to restore; the title bar button does the same |
+| `pin` | `super+o` | float the window and keep it on every workspace (Hyprland `pin`, COSMIC sticky) |
+| `mark <name>` / `focus-mark <name>` / `unmark [name]` | | name a window and jump back to it from anywhere (sway/i3 marks) |
+| `workspace next\|prev` | `super+wheel_down` / `super+wheel_up` | wheel chords: `wheel_up`, `wheel_down`, `wheel_left`, `wheel_right` with any modifiers |
+
+More behaviour from other compositors, all off by default:
+
+```toml
+[behavior]
+focus_follows_mouse = true   # focus the window under the pointer
+cursor_hide_after = 5        # hide an idle pointer after 5 seconds
+
+[theme]
+dim_inactive = 0.25          # darken unfocused windows (Hyprland dim_inactive)
+
+[hot_corners]                # GNOME-style corners, any action
+top_left = "focus-cycle next"
+bottom_right = "spawn foot"
+```
+
+The configuration can be split into several files. Paths are relative to the
+including file (`~/` is your home); included files are read first and the
+including file wins, while `[[rules]]` from every file are kept:
+
+```
+# ~/.config/veyron/veyron.toml
+include = ["keys.toml", "rules.toml"]
+include_optional = ["local.toml"]   # skipped when the file does not exist
+```
 
 ### Designs
 

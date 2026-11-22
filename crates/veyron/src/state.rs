@@ -77,7 +77,8 @@ use smithay::{
     },
 };
 use veyron_core::{
-    workspace_slide, Action, Config, Design, Effects, Modifiers, NewWindow, Palette,
+    hotcorner::{CORNER_SIZE, REARM_DISTANCE},
+    workspace_slide, Action, Config, Corner, Design, Effects, Modifiers, NewWindow, Palette,
     Point as VPoint, Rect, RectAnimator, ResizeEdges, Session, Size as VSize, Snapshot, WindowId,
     Wm, WorkspacePosition,
 };
@@ -98,6 +99,8 @@ const BTN_RIGHT: u32 = 0x111;
 
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
+/// Touchpad scrolling that counts as one wheel-binding step.
+const WHEEL_STEP_PIXELS: f64 = 60.0;
 
 /// How far below its place a new window starts its open animation.
 const OPEN_RISE: i32 = 24;
@@ -241,6 +244,13 @@ pub struct Veyron {
     pointer_location: Point<f64, Logical>,
     /// Floating window being moved or resized with the pointer.
     grab: Option<PointerGrab>,
+    /// Corner the pointer fired last; it fires again only after leaving.
+    hot_corner: Option<Corner>,
+    /// Last pointer motion, for `cursor_hide_after`.
+    last_motion: Instant,
+    cursor_hidden: bool,
+    /// Touchpad scroll not yet turned into wheel-binding steps, per axis.
+    wheel_travel: [f64; 2],
     /// Layer surface accepting the keyboard (`on_demand`, or `exclusive` on a
     /// layer below windows) the user clicked into; it keeps the keyboard
     /// until a window is clicked or focused, or it stops accepting it.
@@ -374,6 +384,10 @@ impl Veyron {
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
             grab: None,
+            hot_corner: None,
+            last_motion: Instant::now(),
+            cursor_hidden: false,
+            wheel_travel: [0.0; 2],
             layer_focus: None,
             palette,
             chrome: Chrome::default(),
@@ -424,6 +438,9 @@ impl Veyron {
             self.render()?;
             self.send_frame_callbacks();
         }
+        if self.cursor_hide_in() == Some(Duration::ZERO) {
+            self.set_cursor_hidden(true);
+        }
         self.publish_events();
         Ok(())
     }
@@ -431,6 +448,11 @@ impl Veyron {
     /// Bound the event-loop sleep while an animation needs another frame.
     pub fn dispatch_wait(&self, idle_wait: Option<Duration>) -> Option<Duration> {
         const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+        // Wake up in time to hide an idle pointer.
+        let idle_wait = match (idle_wait, self.cursor_hide_in()) {
+            (Some(wait), Some(hide)) => Some(wait.min(hide)),
+            (wait, hide) => wait.or(hide),
+        };
         if self.animations.values().any(RectAnimator::is_running) {
             Some(idle_wait.map_or(FRAME_INTERVAL, |wait| wait.min(FRAME_INTERVAL)))
         } else {
@@ -521,6 +543,11 @@ impl Veyron {
             // The grabbed client does not see pointer motion during the grab.
             return;
         }
+        self.last_motion = Instant::now();
+        if self.cursor_hidden {
+            self.set_cursor_hidden(false);
+        }
+        self.check_hot_corner(location);
         if self.wm.config().behavior.focus_follows_mouse {
             self.focus_under_pointer();
         }
@@ -772,6 +799,90 @@ impl Veyron {
         }
     }
 
+    /// Run a hot-corner action when the pointer reaches a corner. The corner
+    /// fires once and re-arms only after the pointer has moved away from it.
+    fn check_hot_corner(&mut self, location: Point<f64, Logical>) {
+        if self.wm.config().hot_corners.is_empty() {
+            return;
+        }
+        let Some(output) = self.space.output_geometry(&self.output) else {
+            return;
+        };
+        let output = Rect::new(output.loc.x, output.loc.y, output.size.w, output.size.h);
+        if let Some(armed) = self.hot_corner {
+            if Corner::at(output, location.x, location.y, REARM_DISTANCE) != Some(armed) {
+                self.hot_corner = None;
+            }
+            return;
+        }
+        let Some(corner) = Corner::at(output, location.x, location.y, CORNER_SIZE) else {
+            return;
+        };
+        self.hot_corner = Some(corner);
+        if let Some(action) = self.wm.config().hot_corners.action(corner).cloned() {
+            self.apply_action(action);
+        }
+    }
+
+    /// Show or hide the pointer (`cursor_hide_after`). The nested backend
+    /// hides the host cursor over its window.
+    fn set_cursor_hidden(&mut self, hidden: bool) {
+        self.cursor_hidden = hidden;
+        if let Some(backend) = &self.backend {
+            backend.window().set_cursor_visible(!hidden);
+        }
+    }
+
+    /// Time left before the pointer hides, while hiding is enabled and the
+    /// pointer is shown.
+    fn cursor_hide_in(&self) -> Option<Duration> {
+        let after = self.wm.config().behavior.cursor_hide_after;
+        if after == 0 || self.cursor_hidden {
+            return None;
+        }
+        Some(Duration::from_secs(u64::from(after)).saturating_sub(self.last_motion.elapsed()))
+    }
+
+    /// Wheel bindings (`super+wheel_down = "workspace next"`): one action per
+    /// wheel notch, or per 60 px of touchpad scrolling. Returns whether a
+    /// binding took the event, so it is not also sent to the client.
+    fn wheel_binding(&mut self, axis: Axis, v120: Option<f64>, amount: Option<f64>) -> bool {
+        let state = self.keyboard.modifier_state();
+        let modifiers = Modifiers {
+            ctrl: state.ctrl,
+            alt: state.alt,
+            shift: state.shift,
+            logo: state.logo,
+        };
+        let (negative, positive, slot) = match axis {
+            Axis::Vertical => ("wheel_up", "wheel_down", 0),
+            Axis::Horizontal => ("wheel_left", "wheel_right", 1),
+        };
+        let config = self.wm.config();
+        if config.lookup(modifiers, negative).is_none()
+            && config.lookup(modifiers, positive).is_none()
+        {
+            return false;
+        }
+        let steps = match (v120, amount) {
+            (Some(v120), _) => (v120 / 120.0).round() as i32,
+            (None, Some(amount)) => {
+                self.wheel_travel[slot] += amount;
+                let steps = (self.wheel_travel[slot] / WHEEL_STEP_PIXELS).trunc();
+                self.wheel_travel[slot] -= steps * WHEEL_STEP_PIXELS;
+                steps as i32
+            }
+            (None, None) => 0,
+        };
+        let key = if steps < 0 { negative } else { positive };
+        if let Some(action) = config.lookup(modifiers, key).cloned() {
+            for _ in 0..steps.unsigned_abs().min(8) {
+                self.apply_action(action.clone());
+            }
+        }
+        true
+    }
+
     fn toplevel_id(&self, surface: &ToplevelSurface) -> Option<WindowId> {
         self.windows
             .iter()
@@ -783,6 +894,13 @@ impl Veyron {
     where
         E: PointerAxisEvent<WinitInput>,
     {
+        let mut taken = false;
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            taken |= self.wheel_binding(axis, event.amount_v120(axis), event.amount(axis));
+        }
+        if taken {
+            return;
+        }
         let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
         for axis in [Axis::Horizontal, Axis::Vertical] {
             let (v120, value) = axis_values(event.amount_v120(axis), event.amount(axis));
@@ -1897,8 +2015,6 @@ fn binding_for(
         .cloned()
 }
 
-/// Lowercase keysym name, the form binding chords are stored in.
-/// Modification time of the configuration file, `None` when it is absent.
 /// Modification times of every file the configuration comes from. Before a
 /// file exists (defaults in use) only the main path is watched.
 fn config_stamp(path: &std::path::Path, sources: &[PathBuf]) -> Vec<Option<std::time::SystemTime>> {
@@ -1911,12 +2027,14 @@ fn config_stamp(path: &std::path::Path, sources: &[PathBuf]) -> Vec<Option<std::
         .collect()
 }
 
+/// Modification time of the configuration file, `None` when it is absent.
 fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
 }
 
+/// Lowercase keysym name, the form binding chords are stored in.
 fn keysym_name(sym: xkb::Keysym) -> String {
     xkb::keysym_get_name(sym).to_ascii_lowercase()
 }

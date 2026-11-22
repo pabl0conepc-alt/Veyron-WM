@@ -187,6 +187,8 @@ pub struct Behavior {
     /// partly on screen still need a click, so focusing never scrolls the
     /// layout out from under the pointer.
     pub focus_follows_mouse: bool,
+    /// Hide the pointer after this many seconds without motion (0: never).
+    pub cursor_hide_after: u32,
 }
 
 impl Default for Behavior {
@@ -195,6 +197,7 @@ impl Default for Behavior {
             remember_geometry: true,
             smart_workspace: false,
             focus_follows_mouse: false,
+            cursor_hide_after: 0,
         }
     }
 }
@@ -214,6 +217,8 @@ pub struct Config {
     pub startup: Vec<String>,
     /// Named layout/motion presets usable with `profile <name>`.
     pub profiles: Profiles,
+    /// Actions run when the pointer is pushed into an output corner.
+    pub hot_corners: crate::hotcorner::HotCorners,
     /// Files this configuration was read from: the main file first, then
     /// every `include` in load order. Empty when parsed from a string.
     pub sources: Vec<PathBuf>,
@@ -297,6 +302,10 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+shift+t", "theme next"),
     ("super+ctrl+t", "theme variant next"),
     ("super+alt+t", "theme design next"),
+    ("super+m", "maximize"),
+    ("super+o", "pin"),
+    ("super+wheel_down", "workspace next"),
+    ("super+wheel_up", "workspace prev"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];
@@ -315,6 +324,7 @@ impl Default for Config {
             profiles: Profiles::default(),
             default_profile: None,
             workspaces: Vec::new(),
+            hot_corners: Default::default(),
             sources: Vec::new(),
         };
         for (chord, action) in DEFAULT_BINDINGS {
@@ -414,18 +424,28 @@ impl Config {
             }
         }
 
+        let behavior = raw.behavior.unwrap_or_default();
+        if behavior.cursor_hide_after > 3600 {
+            return Err(ConfigError::Invalid(format!(
+                "behavior.cursor_hide_after is in seconds, at most 3600, got {}",
+                behavior.cursor_hide_after
+            )));
+        }
+        let hot_corners = raw.hot_corners.unwrap_or_default().validate()?;
+
         Ok(Config {
             layout,
             appearance,
             theme,
             motion,
-            behavior: raw.behavior.unwrap_or_default(),
+            behavior,
             rules,
             bindings,
             startup: raw.startup.unwrap_or_default(),
             profiles,
             default_profile,
             workspaces,
+            hot_corners,
             sources: Vec::new(),
         })
     }
@@ -543,6 +563,7 @@ struct RawConfig {
     profiles: Option<Vec<Profile>>,
     default_profile: Option<String>,
     workspaces: Option<Vec<WorkspacePreset>>,
+    hot_corners: Option<crate::hotcorner::RawHotCorners>,
     /// Files merged under this one; resolved by [`Config::load`].
     include: Option<Vec<String>>,
     include_optional: Option<Vec<String>>,
