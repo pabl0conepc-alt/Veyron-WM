@@ -8,7 +8,7 @@
 use std::{sync::mpsc, time::Duration};
 
 use calloop::channel::Sender;
-use veyron_ipc::{Request, Response};
+use veyron_ipc::{Reply, Request, Response};
 
 /// How long a client waits for the compositor to answer before giving up.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -20,13 +20,20 @@ pub struct Job {
     pub reply: mpsc::Sender<Response>,
 }
 
-/// Handler given to the IPC server: forwards the request and waits for the reply.
-pub fn handle(sender: &Sender<Job>, request: Request) -> Response {
+/// Handler given to the IPC server: forwards the request and waits for the
+/// reply. A subscription instead hands the reply channel to the compositor,
+/// which keeps sending events on it.
+pub fn handle(sender: &Sender<Job>, request: Request) -> Reply {
+    let subscribe = request == Request::Subscribe;
     let (reply, receiver) = mpsc::channel();
     if sender.send(Job { request, reply }).is_err() {
         return Response::Error {
             message: "the compositor is shutting down".to_string(),
-        };
+        }
+        .into();
+    }
+    if subscribe {
+        return Reply::Stream(receiver);
     }
 
     match receiver.recv_timeout(REPLY_TIMEOUT) {
@@ -35,4 +42,5 @@ pub fn handle(sender: &Sender<Job>, request: Request) -> Response {
             message: "the compositor did not answer in time".to_string(),
         },
     }
+    .into()
 }

@@ -69,6 +69,7 @@ uniform float tint;
 uniform vec4 clip_rect;
 uniform float radius;
 uniform vec2 frag_map;
+uniform float dim;
 
 ROUNDED_BOX
 
@@ -85,6 +86,8 @@ void main() {
     vec2 half_size = clip_rect.zw * 0.5;
     float d = rounded_box(p - (clip_rect.xy + half_size), half_size, radius);
     color *= clamp(0.5 - d, 0.0, 1.0);
+    // Darken unfocused windows; premultiplied colour keeps alpha intact.
+    color.rgb *= 1.0 - dim;
 
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0)
@@ -172,6 +175,7 @@ impl Shaders {
                 UniformName::new("clip_rect", UniformType::_4f),
                 UniformName::new("radius", UniformType::_1f),
                 UniformName::new("frag_map", UniformType::_2f),
+                UniformName::new("dim", UniformType::_1f),
             ],
         )?;
         let decoration = renderer.compile_custom_pixel_shader(
@@ -191,13 +195,15 @@ impl Shaders {
     }
 
     /// Wrap one of a window's surface elements so it is clipped to the
-    /// window's rounded rectangle (`window` in output pixels).
+    /// window's rounded rectangle (`window` in output pixels) and darkened
+    /// by `dim` (0 leaves it as is).
     pub fn rounded(
         &self,
         inner: WaylandSurfaceRenderElement<GlesRenderer>,
         window: Rectangle<i32, Physical>,
         radius: f32,
         frag_map: [f32; 2],
+        dim: f32,
     ) -> RoundedSurface {
         RoundedSurface {
             inner,
@@ -214,6 +220,7 @@ impl Shaders {
                 ),
                 Uniform::new("radius", radius),
                 Uniform::new("frag_map", frag_map),
+                Uniform::new("dim", dim),
             ],
         }
     }

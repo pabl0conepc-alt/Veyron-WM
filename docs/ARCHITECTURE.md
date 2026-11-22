@@ -60,8 +60,10 @@ Policies:
   Stacking is always an explicit user action (`move left/right` moves the
   focused window into the neighbouring column). Predictability wins over
   guessing.
-- Fullscreen covers the viewport. The tiling strip is untouched, so leaving
-  fullscreen restores the exact previous layout.
+- The viewport is the output minus the edges panels reserve (layer-shell
+  exclusive zones, reported with `Wm::set_usable_area`) minus the outer
+  margin. Fullscreen covers the whole output instead. The tiling strip is
+  untouched, so leaving fullscreen restores the exact previous layout.
 - Floating windows are a separate list drawn above the strip. Toggling float off
   re-inserts the window as a column at the current focus, and toggling it on
   starts from the window's last tiled geometry, so the operation is reversible.
@@ -111,8 +113,20 @@ multi-output backend can drive without further core changes.
 - `master-stack` gives the first window `master_ratio` of the width and stacks
   the rest in the remaining column.
 - `dwindle` splits the usable area recursively, alternating axes.
+- `grid` places windows in rows of `ceil(sqrt(n))`, stretching the last row.
+- `center-tile` centres the master at `master_ratio` of the width and
+  alternates the stack between a right and a left column.
+- `deck` is `master-stack` with one visible stack window; `monocle` shows only
+  the focused window. Windows these two hide get no placement, so the
+  compositor unmaps them like windows on other workspaces.
+- `floating` tiles nothing: the workspace's tiled set is drawn at each
+  window's floating geometry, and switching back to a tiling layout tiles the
+  same windows again.
 - `auto` resolves to `master-stack` for up to three windows and to `dwindle`
   from four windows on (dynamic tiling).
+
+`center_focused_column` (`never`, `always`, `on-overflow`) only affects how the
+`scroll` strip follows the focus.
 
 The strip still owns window order, focus and column ratios for every layout, so
 there is one source of truth. In flat layouts `left/up` and `right/down` step
@@ -291,13 +305,20 @@ features.
   therefore converge without configure storms.
 - **Layer shell:** `zwlr_layer_shell_v1` surfaces are mapped into the output's
   layer map, arranged with their anchors, margins and exclusive zones, sent an
-  initial configure, re-arranged and re-configured on output resize, and given
-  frame callbacks. Panels, notification daemons, wallpapers and OSDs therefore
-  render without being part of `Wm`. Pointer and keyboard input on layer
-  surfaces is not forwarded yet.
-- **Focus:** keyboard focus follows the snapshot's focused window; activation
-  state is applied to every managed window. Pointer buttons focus the window
-  under the cursor and raise floating windows.
+  initial configure in reply to their initial commit, re-arranged and
+  re-configured on every commit, unmap and output resize, and given frame
+  callbacks. Panels, notification daemons, wallpapers and OSDs therefore
+  render without being part of `Wm`; after each arrangement the layer map's
+  non-exclusive zone is handed to `Wm::set_usable_area`, which retiles when
+  it changed. They receive pointer input with the same stacking they are
+  drawn with. While a window is fullscreen the top layer is drawn (and
+  hit-tested) below windows.
+- **Focus:** keyboard focus goes to, in order: the front-most mapped
+  overlay/top layer surface with `exclusive` keyboard interactivity, a layer
+  surface with `on_demand` interactivity the user clicked, then the
+  snapshot's focused window. Activation state is applied to every managed
+  window. Pointer buttons focus the window under the cursor (taking the
+  keyboard back from an on-demand layer) and raise floating windows.
 - **Input:** key events go through the XKB keyboard handle. The filter looks up
   the exact modifier set and keysym name in the configuration; unbound keys are
   forwarded to the focused client. Presses only trigger actions, releases are

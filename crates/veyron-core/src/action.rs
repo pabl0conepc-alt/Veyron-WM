@@ -252,6 +252,18 @@ pub enum Action {
     MoveToWorkspaceIndex { index: usize },
     /// Center the focused floating window in the viewport.
     CenterFloating,
+    /// Pin the focused window: it floats and follows every workspace switch
+    /// on its output (`pin` again unpins it).
+    TogglePin,
+    /// Maximize the focused window to the usable area, or restore it.
+    ToggleMaximize,
+    /// Name the focused window so `focus-mark` can jump back to it. A name
+    /// belongs to one window; marking another window moves it.
+    Mark { name: String },
+    /// Remove a mark, or every mark of the focused window when no name is given.
+    Unmark { name: Option<String> },
+    /// Focus the window carrying a mark, switching workspace if needed.
+    FocusMark { name: String },
     /// Grow or shrink the inner gap at runtime, in logical pixels.
     Gaps { delta: i32 },
     /// Change the focused window's opacity by a percentage (`opacity -10`).
@@ -491,6 +503,18 @@ impl Action {
                     })
             }
             "center-floating" | "centerwindow" => without_argument(rest, Action::CenterFloating),
+            "pin" | "toggle-pin" | "sticky" => without_argument(rest, Action::TogglePin),
+            "maximize" | "toggle-maximize" => without_argument(rest, Action::ToggleMaximize),
+            "mark" => Ok(Action::Mark {
+                name: mark_name("mark", rest)?,
+            }),
+            "unmark" if rest.is_empty() => Ok(Action::Unmark { name: None }),
+            "unmark" => Ok(Action::Unmark {
+                name: Some(mark_name("unmark", rest)?),
+            }),
+            "focus-mark" => Ok(Action::FocusMark {
+                name: mark_name("focus-mark", rest)?,
+            }),
             "gaps" => Ok(Action::Gaps {
                 delta: parse_signed("gaps", rest)?,
             }),
@@ -513,6 +537,22 @@ impl Action {
             "quit" | "exit" => without_argument(rest, Action::Quit),
             other => Err(ActionParseError::new(format!("unknown action '{other}'"))),
         }
+    }
+}
+
+/// A mark name: one word of letters, digits, `-` or `_`, at most 32 bytes.
+fn mark_name(action: &str, rest: &str) -> Result<String, ActionParseError> {
+    let valid = !rest.is_empty()
+        && rest.len() <= 32
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if valid {
+        Ok(rest.to_string())
+    } else {
+        Err(ActionParseError::new(format!(
+            "{action} needs a name of letters, digits, - or _ (at most 32), got '{rest}'"
+        )))
     }
 }
 
@@ -576,6 +616,12 @@ impl fmt::Display for Action {
             Action::FocusCycle { .. } => f.write_str("focus-cycle prev"),
             Action::MoveToWorkspaceIndex { index } => write!(f, "move-to-workspace {index}"),
             Action::CenterFloating => f.write_str("center-floating"),
+            Action::TogglePin => f.write_str("pin"),
+            Action::ToggleMaximize => f.write_str("maximize"),
+            Action::Mark { name } => write!(f, "mark {name}"),
+            Action::Unmark { name: None } => f.write_str("unmark"),
+            Action::Unmark { name: Some(name) } => write!(f, "unmark {name}"),
+            Action::FocusMark { name } => write!(f, "focus-mark {name}"),
             Action::Gaps { delta } => write!(f, "gaps {delta}"),
             Action::Opacity { delta } => write!(f, "opacity {delta}"),
             Action::Theme { op } => write!(f, "theme {op}"),
@@ -672,6 +718,14 @@ mod tests {
             Action::FocusCycle { delta: -1 },
             Action::MoveToWorkspaceIndex { index: 3 },
             Action::CenterFloating,
+            Action::TogglePin,
+            Action::ToggleMaximize,
+            Action::Mark { name: "web".into() },
+            Action::Unmark { name: None },
+            Action::Unmark {
+                name: Some("web".into()),
+            },
+            Action::FocusMark { name: "web".into() },
             Action::Gaps { delta: -4 },
             Action::Opacity { delta: 10 },
             Action::Theme {
@@ -843,6 +897,18 @@ mod tests {
             })
         );
         assert_eq!(Action::parse("layout next"), Ok(Action::LayoutNext));
+        for kind in LayoutKind::SELECTABLE {
+            assert_eq!(
+                Action::parse(&format!("set-layout {kind}")),
+                Ok(Action::Layout { kind })
+            );
+        }
+        assert_eq!(
+            Action::parse("layout float"),
+            Ok(Action::Layout {
+                kind: LayoutKind::Floating
+            })
+        );
         assert!(Action::parse("layout spiral-ish").is_err());
         assert!(Action::parse("scratchpad now").is_err());
     }

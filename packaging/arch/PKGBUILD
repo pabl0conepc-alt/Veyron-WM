@@ -20,7 +20,11 @@ license=('MIT')
 # so they are runtime dependencies even though the binary does not link them.
 depends=('glibc' 'libffi' 'libgcc' 'libglvnd' 'libxkbcommon' 'wayland')
 makedepends=('cargo' 'git' 'pkgconf')
-optdepends=('mesa: EGL/GLES driver for the nested renderer')
+optdepends=('mesa: EGL/GLES driver for the nested renderer'
+            'libxkbcommon-x11: run nested in an X11 session'
+            'libx11: run nested in an X11 session'
+            'libxcursor: run nested in an X11 session'
+            'libxi: run nested in an X11 session')
 provides=('veyron-wm')
 conflicts=('veyron-wm')
 source=("${_repo}::git+${url}.git")

@@ -30,6 +30,7 @@ workspace = true
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 # Debian/Ubuntu package, built with `cargo deb -p veyron` (see README.md).
 # libwayland-client, libxkbcommon and libEGL are opened with dlopen at runtime,
@@ -45,8 +46,8 @@ Material You theming, GPU window decorations and a JSON control socket \
 session; a standalone DRM/KMS session is not available yet."""
 section = "x11"
 priority = "optional"
-depends = "$auto, libwayland-client0, libxkbcommon0, libegl1, libffi8"
-recommends = "libegl-mesa0"
+depends = "$auto, libwayland-client0, libwayland-server0, libwayland-egl1, libxkbcommon0, libegl1, libffi8"
+recommends = "libegl-mesa0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxi6"
 assets = [
     ["target/release/veyron", "usr/bin/", "755"],
     ["target/release/veyronctl", "usr/bin/", "755"],

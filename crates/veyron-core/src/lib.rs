@@ -23,6 +23,7 @@ pub mod action;
 pub mod config;
 pub mod geometry;
 pub mod groups;
+pub mod hotcorner;
 pub mod launcher;
 pub mod layout;
 pub mod motion;
@@ -39,10 +40,11 @@ pub mod wm;
 
 pub use action::{Action, ActionParseError, Direction, ResizeAxis, ThemeOp};
 pub use config::{Behavior, Binding, Config, ConfigError, Modifiers, WorkspacePreset};
-pub use geometry::{Point, Rect, Size};
+pub use geometry::{Insets, Point, Rect, ResizeEdges, Size};
 pub use groups::{GroupId, GroupSet, WindowGroup};
+pub use hotcorner::{Corner, HotCorners};
 pub use launcher::{best_match, parse_entry, pick_terminal, split_exec, DesktopEntry};
-pub use layout::{LayoutConfig, Placement, ScrollLayout};
+pub use layout::{CenterFocusedColumn, LayoutConfig, Placement, ScrollLayout};
 pub use motion::{
     workspace_slide, Animator, Easing, MotionConfig, RectAnimator, Spring, SpringConfig,
 };

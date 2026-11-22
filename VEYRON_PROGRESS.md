@@ -5,7 +5,90 @@ and `KNOWN_ISSUES.md`. States follow the master prompt: IMPLEMENTED requires
 runtime validation, which no feature has yet in a visible nested session, so
 code that compiles and passes tests is at most PARTIAL or UNVERIFIED.
 
-## This session (branch `claude/render-input-wiring`)
+## One-line installer (branch `claude/curl-installer`, 2026-11-22)
+
+- `install.sh` works piped from curl: banner, detected system, plan, a menu
+  read from the tty, spinner, SHA-256 check, atomic replace, uninstall.
+- `installer.yml` builds x86_64 and aarch64 archives on glibc 2.35, installs
+  them in clean distribution containers and opens the nested compositor on
+  Xvfb and headless Weston hosts. Only a `v*` tag publishes a release.
+- Packaging fixes found on the way: the .deb lacked `libwayland-egl1` and
+  `libwayland-server0`; the Nix package lacked the X11 libraries needed to
+  run nested in an X11 session.
+- PR #8 was merged before the daily-use batch and research block 1 were
+  pushed, so those commits reach `main` with this branch.
+
+## More layouts (branch `claude/more-layouts`)
+
+- **New `LayoutKind`s** in `tiling.rs`: `grid` (rows of `ceil(sqrt(n))`, last
+  row stretched), `center-tile` (mango `center_tile` / dwm centeredmaster:
+  master centred at `master_ratio`, stack alternating right/left; a lone
+  window is centred and the master never moves as windows come and go),
+  `deck` (dwm: master plus one visible stack window, the focused or most
+  recently focused one) and `monocle` (focused window fills the area).
+  `arrange` takes the window to keep visible; monocle/deck give the others no
+  placement, and the compositor already unmaps unplaced windows, so
+  `state.rs` is unchanged. Focus next/prev wraps in monocle and deck, and
+  `focus-cycle` now walks the full tiled order, so hidden windows are
+  reachable.
+- **`floating` workspace layout** (COSMIC style). The workspace's tiled set
+  is drawn at each window's floating geometry; nothing moves between sets,
+  so switching back to a tiling layout re-tiles exactly the same windows.
+  Entering `floating` seeds every visible tiled window's floating rect from
+  the current frame, so windows stay put. New windows open centred or at the
+  remembered per-app geometry (also after a late `set_window_identity`).
+  Move/resize/center/canvas-pan/pointer drags and geometry memory accept these
+  windows (`Wm::floats`); output resizes clamp them. `toggle-floating` moves
+  a window to the real floating layer, so it stays floating once the
+  workspace tiles again. Fullscreen behaves as in every layout. Rules,
+  presets, profiles, `layout <name>` and `layout next` all go through
+  `Wm::set_workspace_layout`.
+- **`[layout] center_focused_column`** (niri): `never` (default, previous
+  behaviour), `always`, `on-overflow` (centre only when the focused column
+  does not fit next to the previously focused one; otherwise keep both
+  visible). Also patchable from `[profiles.layout]`.
+- `layout next` order: scroll, master-stack, dwindle, auto, grid,
+  center-tile, deck, monocle, floating (the original four keep their order).
+  Names and aliases parse in `mode`, rules, presets, profiles and actions;
+  unknown names are rejected. `veyronctl state` reports the new names.
+
+Tests: fmt and clippy `-D warnings` clean; 246 tests pass (178 core unit,
+33 core integration, 12 IPC, 7 compositor unit, 16 headless); 27 new core
+unit tests (8 `tiling`, 6 `layout`, 10 `wm`, 3 `config`) plus extended
+action/tiling tests. Not checked on screen: none of the new layouts or the
+centring modes has been seen in a nested session yet.
+
+## Layer-shell input and exclusive zones (branch `claude/layer-shell-input`)
+
+- **Exclusive zones shrink the viewport.** The core gained
+  `Wm::set_usable_area` (stored as `Insets` from the output edges, so it
+  survives resizes) and `OutputState::usable_area`; tiled and floating
+  windows are laid out in it. `state.rs::arrange_layers` re-arranges the
+  layer map on every layer commit, unmap/destroy and output resize and hands
+  `non_exclusive_zone()` to the core, retiling and reconfiguring on change.
+- **Fullscreen covers the whole output** (previously the margin-inset
+  viewport), and the top layer is drawn and hit-tested below a fullscreen
+  window; the overlay layer stays above.
+- **Keyboard interactivity.** `exclusive` overlay/top surfaces take the
+  keyboard while mapped (buffer attached) and give it back to the core's
+  focused window on unmap/destroy; window focus changes do not steal it and
+  compositor bindings keep working. `on_demand` surfaces (any layer) take it
+  on click; clicking or focusing a window, or a new window, takes it back.
+  `none` never gets it.
+- The first layer configure now answers the client's initial commit.
+
+Tests: fmt and clippy `-D warnings` clean; 210 tests pass (146 core unit,
+33 core integration, 10 IPC, 7 compositor unit, 14 headless). New:
+`geometry::tests::insets_*` (2),
+`wm::tests::panels_shrink_the_viewport_but_not_fullscreen`,
+`wm::tests::reserved_edges_follow_output_resizes_and_keep_floating_windows_clear`,
+`headless::a_panel_exclusive_zone_keeps_tiled_windows_clear_of_it`,
+`headless::an_exclusive_keyboard_layer_holds_the_keyboard_until_it_closes`
+(the harness client now speaks `zwlr_layer_shell_v1` and tracks
+`wl_keyboard` focus). Not tested: `on_demand` click focus (no pointer
+injection in the harness). Not visually checked with waybar, rofi or fuzzel.
+
+## Previous session (branch `claude/render-input-wiring`)
 
 Tooling: `nix develop` provides cargo 1.99 but neither clippy nor rustfmt
 (rustfmt came from `nix shell nixpkgs#rustfmt`). The headless tests need
@@ -121,7 +204,7 @@ which lands on pixel centres of `clip_rect`.
 Noted, not changed (doubtful or feature-sized):
 
 - The window viewport ignores layer-shell exclusive zones, so a bar such as
-  waybar overlaps tiled windows.
+  waybar overlaps tiled windows. (Fixed on `claude/layer-shell-input`.)
 - A drag restarts the position animation on every motion event, so the
   window trails the pointer instead of tracking it; pointer focus is not
   refreshed when a drag ends until the next motion. If the dragged window
@@ -132,7 +215,8 @@ Noted, not changed (doubtful or feature-sized):
   a desynchronised subsurface can leave the window's bounding box stale.
 - `new_layer_surface` sends the first configure before the client's initial
   commit (anvil sends it on that commit); fine with Smithay, unverified with
-  gtk-layer-shell clients.
+  gtk-layer-shell clients. (Fixed on `claude/layer-shell-input`: the first
+  configure now answers the initial commit.)
 - IPC: the socket is chmod-ed to 0600 after `bind` (a brief window with
   umask permissions, inside the 0700 runtime dir); one thread per
   connection is unbounded; `launch` scans desktop files on the compositor
@@ -198,17 +282,60 @@ rendering paths still need the nested-session check.
   smoke-tests the headless compositor over `veyronctl`. All four jobs passed.
   Not verified: the nested compositor on a real Debian or Ubuntu desktop.
 
+## Daily-use batch (2026-11-21)
+
+- **Pointer resize:** `super` + right drag resizes a floating window from the
+  edges nearest the pointer (thirds of the window). Core: `ResizeEdges`,
+  `Rect::resized`, `Wm::resize_floating_to` (minimum size, viewport clamp).
+- **Client requests:** `xdg_toplevel.move/resize` (title bars, borders of
+  client-side decorated apps) start the same grabs while the press is held;
+  `set_fullscreen`/`unset_fullscreen` toggle the core fullscreen state and
+  configures now carry the xdg `Fullscreen` state.
+- **`veyronctl subscribe`** (protocol v5): pushed `{changes, state}` events for
+  workspace, focus, windows, layout and theme changes; animations send none.
+  `veyronctl watch [--waybar]` uses it instead of polling.
+- **Open animation:** new windows rise 24 px and fade in over the motion
+  duration.
+- **Focus follows mouse:** `[behavior] focus_follows_mouse = true`, fully
+  visible windows only.
+- Tests: core unit tests for resize/fullscreen/config, IPC tests for change
+  detection and streaming, headless tests for subscriptions and client
+  fullscreen. Pointer grabs and the fade are not runtime-checked on screen.
+
+## Block 1 of the research batch (2026-11-22)
+
+Ideas taken from niri, Hyprland, sway/i3, mango, COSMIC and GNOME:
+
+- Config `include` / `include_optional` (niri 26.04), merged under the
+  including file; edits to any included file reload.
+- `pin` (`super+o`), `mark` / `focus-mark` / `unmark`, `maximize` (`super+m`,
+  and the title bar button through xdg maximize requests).
+- `[theme] dim_inactive`, `[behavior] cursor_hide_after`, `[hot_corners]`,
+  wheel chords (`super+wheel_up/down` switch workspaces).
+- The agent half: grid, center-tile, deck, monocle and floating layouts and
+  `center_focused_column` (section at the top).
+- All of it is covered by unit or headless tests; none of the visual parts
+  (dim, corners, wheel, cursor hiding, new layouts) was checked on screen.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
 |---|---|---|---|
 | WM | Scroll, master-stack, dwindle, auto layouts | PARTIAL | `layout.rs`, `tiling.rs`; nested visual check |
+| WM | Grid, center-tile, deck, monocle layouts | PARTIAL | `tiling.rs`, `wm.rs::shown_window`; unit-tested, nested visual check |
+| WM | Floating workspace layout (COSMIC style) | PARTIAL | `wm.rs::set_workspace_layout`, `Wm::floats`; unit-tested, pointer drag not runtime-checked |
+| WM | `center_focused_column` never/always/on-overflow (niri) | PARTIAL | `layout.rs::ensure_focus_visible`; unit-tested, nested visual check |
 | WM | Floating, fullscreen, smart gaps, rules, scratchpad | PARTIAL | `wm.rs`, `rules.rs`; nested check |
 | WM | Groups, PiP, snap zones, smart focus | PARTIAL | `groups.rs`, `snap.rs`; nested check |
-| WM | Pointer move of floating windows | PARTIAL | `state.rs::begin_drag`; runtime test |
-| WM | Pointer resize, client move/resize requests | MISSING | wire `XdgShellHandler::move_request/resize_request` |
+| WM | Pointer move/resize of floating windows (`super` + left/right drag) | PARTIAL | `state.rs::begin_super_grab`, `GrabKind`; core unit-tested, no input injection in the harness |
+| WM | Client move/resize requests, client fullscreen (F11) | PARTIAL | `XdgShellHandler::move_request/resize_request/fullscreen_request`; fullscreen headless-tested |
+| WM | Focus follows mouse (opt-in) | PARTIAL | `state.rs::focus_under_pointer`; fully visible windows only |
+| WM | Pin (sticky), marks, maximize (+ client maximize requests) | PARTIAL | `wm.rs::toggle_pin/carry_sticky/toggle_maximize`, marks; unit-tested |
+| WM | Wheel bindings, hot corners, idle cursor hiding | PARTIAL | `state.rs::wheel_binding/check_hot_corner`, `hotcorner.rs`; no pointer injection in tests |
+| Glass | Dim inactive windows | PARTIAL | clip-shader `dim` uniform, black layer for square windows; not seen on screen |
+| Config | Includes (`include`, `include_optional`) with reload on any file | PARTIAL | `config.rs::load_table`; unit-tested |
 | WM | Minimize | MISSING | needs core state + taskbar/foreign-toplevel |
-| Motion | Position animations, workspace slide, per-window opt-out | PARTIAL | `motion.rs`; open/close anims missing |
+| Motion | Position animations, workspace slide, open (rise + fade), per-window opt-out | PARTIAL | `motion.rs`, `state.rs::opening`; close animation missing |
 | Motion | Spring/physics, reduced motion | PARTIAL | `motion.rs`; renderer ignores profile motion |
 | Glass | Per-window opacity | PARTIAL | rendered now; needs visual check |
 | Glass | Rounded corners, shadows, designs | PARTIAL | `decoration.rs`; compiled, not seen on screen |
@@ -221,10 +348,10 @@ rendering paths still need the nested-session check.
 | Spaces | Overview | PARTIAL | IPC geometry only; no drawn overview |
 | Gestures | Touchpad/touch gestures | MISSING | winit backend gives no swipe events; needs libinput/udev backend |
 | Recall | Session save/restore | PARTIAL | `session.rs`; no app relaunch |
-| Command | IPC, veyronctl, structured responses | PARTIAL | `veyron-ipc`; owner-only socket |
+| Command | IPC, veyronctl, structured responses, `subscribe` event stream | PARTIAL | `veyron-ipc` v5; owner-only socket; headless-tested |
 | Profiles | Layout/motion profiles, cycling | PARTIAL | `profiles.rs` |
 | Smart | Smart workspace, app discovery, launcher | PARTIAL | `smart.rs`, `launcher.rs`, `apps.rs` |
-| Ecosystem | Layer-shell (bars, OSD, notifications) | PARTIAL | pointer now works; keyboard interactivity missing |
+| Ecosystem | Layer-shell (bars, OSD, notifications) | PARTIAL | pointer, exclusive zones and keyboard interactivity wired; zones and exclusive keyboard headless-tested; check waybar/rofi/fuzzel nested |
 | Ecosystem | Native panel, notifications, OSD, clipboard, screenshot, recorder, studio | MISSING | separate clients over layer-shell + IPC |
 | Wayland | Screencopy, screen sharing, XWayland | MISSING | see ADR 0002 |
 | Wayland | Multi-output, hotplug | PARTIAL | core only; backend has one output |

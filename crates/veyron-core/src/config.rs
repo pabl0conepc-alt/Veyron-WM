@@ -183,6 +183,12 @@ pub struct Behavior {
     /// Open a new window on the output and workspace where the same application
     /// already lives. Rules that pin a workspace always win over it.
     pub smart_workspace: bool,
+    /// Focus the window under the pointer without clicking. Windows only
+    /// partly on screen still need a click, so focusing never scrolls the
+    /// layout out from under the pointer.
+    pub focus_follows_mouse: bool,
+    /// Hide the pointer after this many seconds without motion (0: never).
+    pub cursor_hide_after: u32,
 }
 
 impl Default for Behavior {
@@ -190,6 +196,8 @@ impl Default for Behavior {
         Self {
             remember_geometry: true,
             smart_workspace: false,
+            focus_follows_mouse: false,
+            cursor_hide_after: 0,
         }
     }
 }
@@ -209,6 +217,11 @@ pub struct Config {
     pub startup: Vec<String>,
     /// Named layout/motion presets usable with `profile <name>`.
     pub profiles: Profiles,
+    /// Actions run when the pointer is pushed into an output corner.
+    pub hot_corners: crate::hotcorner::HotCorners,
+    /// Files this configuration was read from: the main file first, then
+    /// every `include` in load order. Empty when parsed from a string.
+    pub sources: Vec<PathBuf>,
     /// Profile applied when the compositor starts.
     pub default_profile: Option<String>,
     /// Named workspaces created at startup on the primary output.
@@ -289,6 +302,10 @@ const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("super+shift+t", "theme next"),
     ("super+ctrl+t", "theme variant next"),
     ("super+alt+t", "theme design next"),
+    ("super+m", "maximize"),
+    ("super+o", "pin"),
+    ("super+wheel_down", "workspace next"),
+    ("super+wheel_up", "workspace prev"),
     ("super+r", "reload"),
     ("super+shift+e", "quit"),
 ];
@@ -307,6 +324,8 @@ impl Default for Config {
             profiles: Profiles::default(),
             default_profile: None,
             workspaces: Vec::new(),
+            hot_corners: Default::default(),
+            sources: Vec::new(),
         };
         for (chord, action) in DEFAULT_BINDINGS {
             let binding = Binding::parse(
@@ -328,7 +347,16 @@ impl Config {
     /// bindings as a whole.
     pub fn from_toml_str(text: &str) -> Result<Config, ConfigError> {
         let raw: RawConfig = toml::from_str(text)?;
+        if raw.include.is_some() || raw.include_optional.is_some() {
+            return Err(ConfigError::Invalid(
+                "`include` works only in a configuration file, where paths have a base directory"
+                    .to_string(),
+            ));
+        }
+        Config::from_raw(raw)
+    }
 
+    fn from_raw(raw: RawConfig) -> Result<Config, ConfigError> {
         let layout = raw.layout.unwrap_or_default();
         layout.validate().map_err(ConfigError::Invalid)?;
 
@@ -396,27 +424,46 @@ impl Config {
             }
         }
 
+        let behavior = raw.behavior.unwrap_or_default();
+        if behavior.cursor_hide_after > 3600 {
+            return Err(ConfigError::Invalid(format!(
+                "behavior.cursor_hide_after is in seconds, at most 3600, got {}",
+                behavior.cursor_hide_after
+            )));
+        }
+        let hot_corners = raw.hot_corners.unwrap_or_default().validate()?;
+
         Ok(Config {
             layout,
             appearance,
             theme,
             motion,
-            behavior: raw.behavior.unwrap_or_default(),
+            behavior,
             rules,
             bindings,
             startup: raw.startup.unwrap_or_default(),
             profiles,
             default_profile,
             workspaces,
+            hot_corners,
+            sources: Vec::new(),
         })
     }
 
+    /// Load a configuration file and everything it includes.
+    ///
+    /// `include = ["keys.toml"]` and `include_optional = ["local.toml"]` name
+    /// files relative to the including file (`~/` is the home directory).
+    /// Included files are read first, in order, and the including file is
+    /// merged on top: tables merge key by key (later wins), arrays of tables
+    /// such as `[[rules]]` are appended. A missing optional file is skipped.
     pub fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
-        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        Config::from_toml_str(&text)
+        let mut sources = Vec::new();
+        let table = load_table(path, &mut Vec::new(), &mut sources)?;
+        let raw: RawConfig = table.try_into()?;
+        let mut config = Config::from_raw(raw)?;
+        config.sources = sources;
+        Ok(config)
     }
 
     /// Load the configuration, falling back to defaults when the file is absent.
@@ -516,6 +563,107 @@ struct RawConfig {
     profiles: Option<Vec<Profile>>,
     default_profile: Option<String>,
     workspaces: Option<Vec<WorkspacePreset>>,
+    hot_corners: Option<crate::hotcorner::RawHotCorners>,
+    /// Files merged under this one; resolved by [`Config::load`].
+    include: Option<Vec<String>>,
+    include_optional: Option<Vec<String>>,
+}
+
+/// How deep `include` may nest before it is treated as a mistake.
+const MAX_INCLUDE_DEPTH: usize = 8;
+
+/// Read `path` and the files it includes into one merged TOML table.
+/// `stack` holds the files being read, to report include cycles; every file
+/// read is appended to `sources` so callers can watch them all.
+fn load_table(
+    path: &std::path::Path,
+    stack: &mut Vec<PathBuf>,
+    sources: &mut Vec<PathBuf>,
+) -> Result<toml::Table, ConfigError> {
+    if stack.len() > MAX_INCLUDE_DEPTH {
+        return Err(ConfigError::Invalid(format!(
+            "includes nest deeper than {MAX_INCLUDE_DEPTH} files at {}",
+            path.display()
+        )));
+    }
+    let identity = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if stack.contains(&identity) {
+        return Err(ConfigError::Invalid(format!(
+            "{} includes itself",
+            path.display()
+        )));
+    }
+    let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut table: toml::Table = toml::from_str(&text).map_err(|error| ConfigError::InFile {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    sources.push(path.to_path_buf());
+
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    let mut merged = toml::Table::new();
+    stack.push(identity);
+    for (key, optional) in [("include", false), ("include_optional", true)] {
+        let Some(value) = table.remove(key) else {
+            continue;
+        };
+        let entries: Vec<String> = value.try_into().map_err(|_| {
+            ConfigError::Invalid(format!(
+                "`{key}` in {} must be a list of file names",
+                path.display()
+            ))
+        })?;
+        for entry in entries {
+            let included = resolve_include(base, &entry);
+            match load_table(&included, stack, sources) {
+                Ok(table) => merge_tables(&mut merged, table),
+                Err(ConfigError::Io { source, .. })
+                    if optional && source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    stack.pop();
+                    return Err(error);
+                }
+            }
+        }
+    }
+    stack.pop();
+    merge_tables(&mut merged, table);
+    Ok(merged)
+}
+
+/// An include path: `~/` is the home directory, relative paths start at the
+/// including file's directory.
+fn resolve_include(base: &std::path::Path, entry: &str) -> PathBuf {
+    if let Some(rest) = entry.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    base.join(entry)
+}
+
+/// Merge `top` into `base`: tables merge recursively, arrays of tables (such
+/// as `[[rules]]`) are appended, anything else in `top` replaces `base`.
+fn merge_tables(base: &mut toml::Table, top: toml::Table) {
+    for (key, value) in top {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(existing)), toml::Value::Table(table)) => {
+                merge_tables(existing, table);
+            }
+            (Some(toml::Value::Array(existing)), toml::Value::Array(array))
+                if array.iter().all(toml::Value::is_table)
+                    && existing.iter().all(toml::Value::is_table) =>
+            {
+                existing.extend(array);
+            }
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
 }
 
 /// Configuration failures.
@@ -529,6 +677,8 @@ pub enum ConfigError {
     },
     #[error("invalid configuration: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("invalid configuration in {path}: {message}")]
+    InFile { path: PathBuf, message: String },
     #[error("invalid configuration: {0}")]
     Invalid(String),
     #[error("invalid colour '{0}' (expected #rgb, #rrggbb or #rrggbbaa)")]
@@ -624,6 +774,14 @@ mod tests {
         let rgba = config.appearance.background_rgba();
         assert!((rgba[0] - 0.101_960_78).abs() < 1e-6);
         assert_eq!(rgba[3], 1.0);
+    }
+
+    #[test]
+    fn focus_follows_mouse_is_off_by_default_and_can_be_enabled() {
+        assert!(!Config::default().behavior.focus_follows_mouse);
+        let config = Config::from_toml_str("[behavior]\nfocus_follows_mouse = true\n")
+            .expect("valid configuration");
+        assert!(config.behavior.focus_follows_mouse);
     }
 
     #[test]
@@ -829,6 +987,87 @@ mod tests {
     }
 
     #[test]
+    fn every_layout_name_parses_in_mode_rules_presets_and_profiles() {
+        for kind in LayoutKind::SELECTABLE {
+            let name = kind.as_str();
+            let config = Config::from_toml_str(&format!(
+                "[layout]\nmode = \"{name}\"\n\n\
+                 [[rules]]\napp_id = \"app\"\nlayout = \"{name}\"\n\n\
+                 [[workspaces]]\nname = \"w\"\nlayout = \"{name}\"\n\n\
+                 [[profiles]]\nname = \"p\"\n[profiles.layout]\nmode = \"{name}\"\n"
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(config.layout.mode, kind);
+            assert_eq!(config.rules.resolve("app", "").layout, Some(kind));
+            assert_eq!(config.workspaces[0].layout, Some(kind));
+            assert_eq!(
+                config.profiles.get("p").expect("profile").layout.mode,
+                Some(kind)
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_layout_names_are_rejected() {
+        for text in [
+            "[layout]\nmode = \"tabbed\"\n",
+            "[layout]\nmode = \"center_tile\"\n",
+            "[[rules]]\napp_id = \"a\"\nlayout = \"stacking\"\n",
+            "[[workspaces]]\nname = \"w\"\nlayout = \"monocle-ish\"\n",
+        ] {
+            assert!(Config::from_toml_str(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn center_focused_column_is_parsed_and_validated() {
+        use crate::layout::CenterFocusedColumn;
+
+        assert_eq!(
+            Config::default().layout.center_focused_column,
+            CenterFocusedColumn::Never
+        );
+        for (text, expected) in [
+            ("never", CenterFocusedColumn::Never),
+            ("always", CenterFocusedColumn::Always),
+            ("on-overflow", CenterFocusedColumn::OnOverflow),
+        ] {
+            let config =
+                Config::from_toml_str(&format!("[layout]\ncenter_focused_column = \"{text}\"\n"))
+                    .expect("valid mode");
+            assert_eq!(config.layout.center_focused_column, expected);
+        }
+        assert!(
+            Config::from_toml_str("[layout]\ncenter_focused_column = \"on_overflow\"\n").is_err()
+        );
+        assert!(Config::from_toml_str("[layout]\ncenter_focused_column = true\n").is_err());
+
+        let config = Config::from_toml_str(
+            "[[profiles]]\nname = \"focus\"\n[profiles.layout]\ncenter_focused_column = \"always\"\n",
+        )
+        .expect("profile patch");
+        assert_eq!(
+            config
+                .profiles
+                .get("focus")
+                .expect("profile")
+                .layout
+                .center_focused_column,
+            Some(CenterFocusedColumn::Always)
+        );
+
+        // The option survives a print-config round trip.
+        let mut original = Config::default();
+        original.layout.center_focused_column = CenterFocusedColumn::OnOverflow;
+        let text = original.to_toml_string().expect("serializable");
+        let reparsed = Config::from_toml_str(&text).expect("reparse");
+        assert_eq!(
+            reparsed.layout.center_focused_column,
+            CenterFocusedColumn::OnOverflow
+        );
+    }
+
+    #[test]
     fn default_focus_chord_resolves_to_the_left_direction() {
         let config = Config::default();
         let action = config.lookup(
@@ -844,5 +1083,79 @@ mod tests {
                 direction: crate::action::Direction::Left
             })
         );
+    }
+
+    /// A fresh directory for include tests.
+    fn include_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("veyron-include-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test directory");
+        dir
+    }
+
+    #[test]
+    fn includes_merge_tables_append_rules_and_let_the_includer_win() {
+        let dir = include_dir("merge");
+        std::fs::create_dir_all(dir.join("parts")).expect("parts directory");
+        std::fs::write(
+            dir.join("parts/look.toml"),
+            "[layout]\ngap = 20\nouter_margin = 4\n\n[[rules]]\napp_id = \"mpv\"\nfloating = true\n",
+        )
+        .expect("write include");
+        std::fs::write(
+            dir.join("veyron.toml"),
+            "include = [\"parts/look.toml\"]\ninclude_optional = [\"missing.toml\"]\n\n\
+             [layout]\ngap = 6\n\n[[rules]]\napp_id = \"signal\"\nworkspace = \"chat\"\n",
+        )
+        .expect("write main file");
+
+        let config = Config::load(&dir.join("veyron.toml")).expect("loads with includes");
+        assert_eq!(config.layout.gap, 6, "the including file wins");
+        assert_eq!(
+            config.layout.outer_margin, 4,
+            "untouched keys come from the include"
+        );
+        assert_eq!(
+            config.rules.rules().len(),
+            2,
+            "rules from both files are kept"
+        );
+        assert!(config.rules.resolve("mpv", "").floating);
+        assert_eq!(
+            config.sources,
+            vec![dir.join("veyron.toml"), dir.join("parts/look.toml")]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_required_includes_and_cycles_are_errors() {
+        let dir = include_dir("errors");
+        std::fs::write(dir.join("a.toml"), "include = [\"gone.toml\"]\n").expect("write");
+        assert!(matches!(
+            Config::load(&dir.join("a.toml")),
+            Err(ConfigError::Io { .. })
+        ));
+
+        std::fs::write(dir.join("b.toml"), "include = [\"c.toml\"]\n").expect("write");
+        std::fs::write(dir.join("c.toml"), "include = [\"b.toml\"]\n").expect("write");
+        match Config::load(&dir.join("b.toml")) {
+            Err(ConfigError::Invalid(message)) => assert!(message.contains("includes itself")),
+            other => panic!("a cycle must be reported: {other:?}"),
+        }
+
+        std::fs::write(dir.join("d.toml"), "include = [\"e.toml\"]\n").expect("write");
+        std::fs::write(dir.join("e.toml"), "[layout\n").expect("write");
+        match Config::load(&dir.join("d.toml")) {
+            Err(ConfigError::InFile { path, .. }) => assert_eq!(path, dir.join("e.toml")),
+            other => panic!("a broken include must name its file: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn includes_need_a_file_to_be_relative_to() {
+        assert!(Config::from_toml_str("include = [\"keys.toml\"]\n").is_err());
     }
 }

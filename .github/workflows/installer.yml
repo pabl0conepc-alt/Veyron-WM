@@ -1,0 +1,179 @@
+name: Installer and downloads
+
+# Builds the archives install.sh downloads and installs them on clean
+# distributions. Only pushing a v* tag publishes a release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -s sh install.sh .github/scripts/test-installer.sh
+      - run: dash -n install.sh
+
+  build:
+    name: build archive (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    # The oldest supported glibc (2.35), so one archive fits every distribution.
+    container: ubuntu:22.04
+    steps:
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl ca-certificates git \
+            libwayland-dev libxkbcommon-dev libegl-dev libffi-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Test
+        run: |
+          XDG_RUNTIME_DIR="$(mktemp -d)"
+          export XDG_RUNTIME_DIR
+          cargo test --workspace --locked
+
+      - name: Build and pack
+        run: |
+          cargo build --release --locked --bin veyron --bin veyronctl
+          mkdir dist
+          strip target/release/veyron target/release/veyronctl
+          tar -C target/release --owner=0 --group=0 \
+            -czf "dist/veyron-wm-linux-${{ matrix.arch }}.tar.gz" veyron veyronctl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  install:
+    name: install (${{ matrix.image }}, ${{ matrix.arch }}, ${{ matrix.mode }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "ubuntu:24.04", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "ubuntu:24.04", arch: x86_64, runner: ubuntu-24.04, mode: user }
+          - { image: "debian:bookworm", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "debian:trixie", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "fedora:latest", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "archlinux:latest", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "opensuse/tumbleweed:latest", arch: x86_64, runner: ubuntu-24.04, mode: binary }
+          - { image: "debian:trixie", arch: aarch64, runner: ubuntu-24.04-arm, mode: binary }
+          - { image: "fedora:latest", arch: aarch64, runner: ubuntu-24.04-arm, mode: binary }
+          - { image: "debian:bookworm", arch: x86_64, runner: ubuntu-24.04, mode: source }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: archive-${{ matrix.arch }}
+          path: dist
+
+      - name: Start host displays
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb weston libgl1-mesa-dri libegl-mesa0
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          Xvfb :99 -ac -screen 0 1280x800x24 > xvfb.log 2>&1 &
+          mkdir -m 700 "$RUNNER_TEMP/display"
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/display" weston --backend=headless \
+            --socket=veyron-host --idle-time=0 > weston.log 2>&1 &
+          for _ in $(seq 1 100); do
+            [ -S "$RUNNER_TEMP/display/veyron-host" ] && [ -S /tmp/.X11-unix/X99 ] && break
+            sleep 0.2
+          done
+          test -S "$RUNNER_TEMP/display/veyron-host" || { cat weston.log; exit 1; }
+          chmod 755 "$RUNNER_TEMP/display"
+          chmod 777 "$RUNNER_TEMP/display/veyron-host"
+
+          docker run --rm \
+            -e DISPLAY=:99 -e LANG=C.UTF-8 \
+            -v /tmp/.X11-unix:/tmp/.X11-unix \
+            -v "$RUNNER_TEMP/display:/display" \
+            -v "$PWD:/repo:ro" -v "$PWD/dist:/dist:ro" \
+            "${{ matrix.image }}" \
+            sh /repo/.github/scripts/test-installer.sh ${{ matrix.mode }} \
+            "${{ github.event.pull_request.head.sha || github.sha }}"
+
+  nixos:
+    name: install (Nix flake)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The runner poses as NixOS in a mount namespace, the profile is private.
+      - name: Install, update and uninstall
+        run: |
+          export VEYRON_NIX_PROFILE="$RUNNER_TEMP/profile"
+          printf 'ID=nixos\nPRETTY_NAME="NixOS (CI)"\n' > "$RUNNER_TEMP/os-release"
+          sudo mount --bind "$RUNNER_TEMP/os-release" /etc/os-release
+          ./install.sh --yes
+          "$VEYRON_NIX_PROFILE/bin/veyron" --version
+          ./install.sh --yes
+          test "$(nix profile list --profile "$VEYRON_NIX_PROFILE" --json | jq '.elements | length')" = 1
+          ./install.sh --yes --uninstall
+          test ! -e "$VEYRON_NIX_PROFILE/bin/veyron"
+          sudo umount /etc/os-release
+
+  release:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, build, install, nixos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+            dist/*.tar.gz dist/SHA256SUMS install.sh

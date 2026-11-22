@@ -155,9 +155,156 @@ impl Rect {
     }
 }
 
+/// The edges of a rectangle an interactive resize moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct ResizeEdges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+impl ResizeEdges {
+    /// Edges nearest to `point`: the rectangle is split in thirds on each axis,
+    /// so grabbing near a corner resizes both axes and the middle of a side
+    /// resizes only that side.
+    pub fn nearest(rect: Rect, point: Point) -> Self {
+        let third_w = rect.w / 3;
+        let third_h = rect.h / 3;
+        let mut edges = Self {
+            left: point.x < rect.x + third_w,
+            right: point.x >= rect.right() - third_w,
+            top: point.y < rect.y + third_h,
+            bottom: point.y >= rect.bottom() - third_h,
+        };
+        if !(edges.left || edges.right || edges.top || edges.bottom) {
+            // The very centre: grow towards the bottom-right corner.
+            edges.right = true;
+            edges.bottom = true;
+        }
+        edges
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !(self.left || self.right || self.top || self.bottom)
+    }
+}
+
+impl Rect {
+    /// Resize by a pointer delta along `edges`, keeping the opposite edges
+    /// in place and never shrinking below `min`.
+    pub fn resized(&self, edges: ResizeEdges, dx: i32, dy: i32, min: Size) -> Rect {
+        let (mut x, mut w) = (self.x, self.w);
+        if edges.right {
+            w = self.w.saturating_add(dx).max(min.w);
+        } else if edges.left {
+            w = self.w.saturating_sub(dx).max(min.w);
+            x = self.right() - w;
+        }
+        let (mut y, mut h) = (self.y, self.h);
+        if edges.bottom {
+            h = self.h.saturating_add(dy).max(min.h);
+        } else if edges.top {
+            h = self.h.saturating_sub(dy).max(min.h);
+            y = self.bottom() - h;
+        }
+        Rect::new(x, y, w, h)
+    }
+}
+
+/// Space reserved along each edge of a rectangle, such as the exclusive zone
+/// a panel claims at the top of an output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct Insets {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl Insets {
+    pub const ZERO: Insets = Insets {
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+    };
+
+    /// The edges `inner` leaves free inside `outer`. Parts of `inner` outside
+    /// `outer` reserve nothing, so every inset is at least zero.
+    pub fn between(outer: Rect, inner: Rect) -> Insets {
+        Insets {
+            top: (inner.y - outer.y).max(0),
+            right: (outer.right() - inner.right()).max(0),
+            bottom: (outer.bottom() - inner.bottom()).max(0),
+            left: (inner.x - outer.x).max(0),
+        }
+    }
+
+    /// Shrink `rect` by these insets. A reservation that would leave nothing
+    /// is ignored, so the result is never empty for a non-empty `rect`.
+    pub fn shrink(&self, rect: Rect) -> Rect {
+        let inner = Rect::new(
+            rect.x.saturating_add(self.left),
+            rect.y.saturating_add(self.top),
+            rect.w.saturating_sub(self.left).saturating_sub(self.right),
+            rect.h.saturating_sub(self.top).saturating_sub(self.bottom),
+        );
+        if inner.is_empty() {
+            rect
+        } else {
+            inner
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_edges_follow_the_thirds_of_the_rectangle() {
+        let rect = Rect::new(0, 0, 300, 300);
+        let corner = ResizeEdges::nearest(rect, Point::new(10, 290));
+        assert!(corner.left && corner.bottom && !corner.right && !corner.top);
+        let side = ResizeEdges::nearest(rect, Point::new(295, 150));
+        assert!(side.right && !side.top && !side.bottom && !side.left);
+        let centre = ResizeEdges::nearest(rect, Point::new(150, 150));
+        assert!(centre.right && centre.bottom);
+        assert!(!centre.is_empty());
+    }
+
+    #[test]
+    fn resizing_keeps_the_opposite_edge_and_the_minimum_size() {
+        let rect = Rect::new(100, 100, 200, 200);
+        let min = Size::new(64, 48);
+        let top_left = ResizeEdges {
+            left: true,
+            top: true,
+            ..ResizeEdges::default()
+        };
+        let grown = rect.resized(top_left, -50, -20, min);
+        assert_eq!(grown, Rect::new(50, 80, 250, 220));
+        assert_eq!(grown.right(), rect.right());
+
+        let shrunk = rect.resized(top_left, 1000, 1000, min);
+        assert_eq!(shrunk.size(), min);
+        assert_eq!(
+            (shrunk.right(), shrunk.bottom()),
+            (rect.right(), rect.bottom())
+        );
+
+        let bottom_right = ResizeEdges {
+            right: true,
+            bottom: true,
+            ..ResizeEdges::default()
+        };
+        assert_eq!(
+            rect.resized(bottom_right, 30, -10, min),
+            Rect::new(100, 100, 230, 190)
+        );
+        assert_eq!(rect.resized(ResizeEdges::default(), 30, 30, min), rect);
+    }
 
     #[test]
     fn negative_extents_are_clamped() {
@@ -202,6 +349,44 @@ mod tests {
         assert_eq!(
             container.centered(Size::new(200, 20)),
             Rect::new(0, 15, 100, 20)
+        );
+    }
+
+    #[test]
+    fn insets_round_trip_through_an_inner_rectangle() {
+        let output = Rect::new(100, 0, 1280, 800);
+        // A 30 px bar on top and a 20 px dock on the left.
+        let usable = Rect::new(120, 30, 1260, 770);
+        let insets = Insets::between(output, usable);
+        assert_eq!(
+            insets,
+            Insets {
+                top: 30,
+                right: 0,
+                bottom: 0,
+                left: 20,
+            }
+        );
+        assert_eq!(insets.shrink(output), usable);
+        // Insets stay attached to the edges when the rectangle is resized.
+        assert_eq!(
+            insets.shrink(Rect::new(100, 0, 1920, 1080)),
+            Rect::new(120, 30, 1900, 1050)
+        );
+    }
+
+    #[test]
+    fn insets_never_empty_a_rectangle() {
+        let rect = Rect::new(0, 0, 100, 50);
+        let greedy = Insets {
+            top: 40,
+            bottom: 40,
+            ..Insets::ZERO
+        };
+        assert_eq!(greedy.shrink(rect), rect);
+        assert_eq!(
+            Insets::between(rect, Rect::new(-10, -10, 200, 200)),
+            Insets::ZERO
         );
     }
 }

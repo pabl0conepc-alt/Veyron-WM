@@ -26,9 +26,10 @@ switched at runtime with `veyronctl theme …`.</sub>
 
 ## Highlights
 
-- **Layouts:** endless scrolling columns, master-stack, dwindle and `auto`
-  (chosen from the window count), per workspace; floating, fullscreen,
-  scratchpad, snap zones, picture-in-picture and window groups.
+- **Layouts:** endless scrolling columns, master-stack, dwindle, grid,
+  center-tile, deck, monocle, floating workspaces and `auto` (chosen from the
+  window count), per workspace; floating windows, fullscreen, scratchpad, snap
+  zones, picture-in-picture and window groups.
 - **Looks:** five designs (`material`, `glass`, `flat`, `neon`, `minimal`) drawn
   on the GPU with rounded corners, rounded borders and soft shadows; server-side
   decorations, so apps do not draw their own title bars.
@@ -39,23 +40,66 @@ switched at runtime with `veyronctl theme …`.</sub>
   grid, with an overview and per-monitor workspaces in the core.
 - **Easy to configure:** one strict TOML file, reloaded automatically when you
   save it; `veyron --check-config` explains mistakes.
-- **Scriptable:** `veyronctl` for every action, `veyronctl watch --waybar` for
-  bars, session save/restore, app launcher and profiles.
+- **Scriptable:** `veyronctl` for every action, `veyronctl watch --waybar` and
+  `veyronctl subscribe` push changes to bars instantly, session save/restore, app launcher and profiles.
 
 ## Quick start
 
 ```sh
-git clone https://github.com/pabl0conepc-alt/Veyron-WM
-cd Veyron-WM
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/pabl0conepc-alt/Veyron-WM/main/install.sh | sh
 ```
 
-The installer detects NixOS, Arch, Debian/Ubuntu and Fedora, installs the
-dependencies (asking before `sudo`), gets Rust 1.97+ through rustup when the
-system one is older, builds with one job on machines with less than 6 GiB of
-RAM, installs `veyron` and `veyronctl` into `~/.local/bin` and writes a
-starter configuration to `~/.config/veyron/veyron.toml`. Run it again to
-update; `./install.sh --uninstall` removes the binaries.
+```text
+  ██╗   ██╗███████╗██╗   ██╗██████╗  ██████╗ ███╗   ██╗
+  ██║   ██║██╔════╝╚██╗ ██╔╝██╔══██╗██╔═══██╗████╗  ██║
+  ██║   ██║█████╗   ╚████╔╝ ██████╔╝██║   ██║██╔██╗ ██║
+  ╚██╗ ██╔╝██╔══╝    ╚██╔╝  ██╔══██╗██║   ██║██║╚██╗██║
+   ╚████╔╝ ███████╗   ██║   ██║  ██║╚██████╔╝██║ ╚████║
+    ╚═══╝  ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+
+  ╭─ What will happen
+  │ Method      download the ready binary
+  │ File        veyron-wm-linux-x86_64.tar.gz
+  │ Into        ~/.local/bin
+  │ Packages    2 (asks for your password)
+  │ Config      create ~/.config/veyron/veyron.toml
+  ╰─
+
+  ❯ Install now
+    Show every detail
+    Build from source instead
+    Cancel
+```
+
+The installer detects the system, shows the plan and changes nothing until you
+choose *Install now* (it speaks English and Portuguese, following your locale):
+
+| System | What it installs |
+|---|---|
+| NixOS (x86_64) | the flake, in your Nix profile |
+| Debian 12+, Ubuntu 22.04+, Fedora, Arch, openSUSE Tumbleweed and their derivatives | the release binary (x86_64 or aarch64), verified with SHA-256, plus missing system libraries |
+| Those systems with an older glibc, another CPU, or before the first release | a source build, with Rust from rustup when needed |
+| Alpine and other musl systems | not supported yet |
+
+Binaries go to `~/.local/bin`. An existing configuration is never overwritten.
+Run the same command again to update. Options go after `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pabl0conepc-alt/Veyron-WM/main/install.sh | sh -s -- --dry-run
+```
+
+| Option | Does |
+|---|---|
+| `--yes` | do not ask (for scripts) |
+| `--dry-run` | show the plan and change nothing |
+| `--from-source` | build instead of downloading |
+| `--release v0.1.0` | install that release |
+| `--ref <branch>` | build a branch, tag or commit |
+| `--prefix <dir>` | install to `<dir>/bin` |
+| `--no-deps` | leave system packages alone |
+| `--uninstall` | remove Veyron, keep the configuration |
+
+From a clone, `./install.sh` builds that checkout.
 
 Then, from inside your current desktop:
 
@@ -72,6 +116,7 @@ veyron
 | Switch workspace / send the window there | `super+1..5` / `super+shift+1..5` |
 | Alt-tab | `alt+tab` |
 | Float a window, then drag it | `super+space`, `super+left drag` |
+| Resize a floating window | `super+right drag` (grab near an edge or corner) |
 | Next design / dark-light / next colour | `super+alt+t` / `super+t` / `super+shift+t` |
 | Quit | `super+shift+e` |
 
@@ -111,8 +156,10 @@ What works:
 - Rust workspace with three crates and no `unsafe` code.
 - Scrollable tiling engine: columns, stacking, focus, viewport scrolling,
   column resizing, floating layer, fullscreen, on-demand workspaces.
-- Additional tiling layouts: `master-stack`, `dwindle` and `auto` (dynamic
-  tiling that resolves from the window count), selectable per workspace.
+- Additional tiling layouts: `master-stack`, `dwindle`, `grid`,
+  `center-tile`, `deck`, `monocle`, `floating` and `auto` (dynamic tiling that
+  resolves from the window count), selectable per workspace; see
+  [Layouts](#layouts).
 - Smart gaps, per-application window rules (float, opacity, blur, animation,
   scratchpad, named workspace, layout), scratchpad layer and per-app floating
   geometry memory.
@@ -159,8 +206,11 @@ What works:
   scales each workspace's windows into its tile; `veyronctl overview [--json]`
   exposes it for bars, scripts and a future overview surface.
 - Layer-shell: `zwlr_layer_shell_v1` clients (waybar, notification daemons,
-  wallpapers, OSDs) are mapped on the output with their exclusive zones, and
-  their frame callbacks are delivered.
+  wallpapers, OSDs, launchers) are mapped on the output and get frame
+  callbacks and pointer input; their exclusive zones keep tiled and floating
+  windows clear of them (fullscreen still covers the whole output), and a
+  launcher asking for exclusive keyboard interactivity holds the keyboard
+  while it is open.
 - Smart workspace: with `behavior.smart_workspace`, every window the core places
   teaches it where that app lives, and its next window opens on the same output
   and workspace without switching the user away. Rules still win.
@@ -170,7 +220,12 @@ What works:
   tests) with no GPU or display server required.
 - TOML configuration with strict validation and a documented default keymap.
 - Versioned line-delimited JSON control protocol on a Unix socket
-  (`veyronctl`) with request/response, size limits and stale-socket handling.
+  (`veyronctl`) with request/response, size limits and stale-socket handling,
+  plus `veyronctl subscribe`: a pushed event stream (`workspace`, `focus`,
+  `windows`, `layout`, `theme` changes with the new state) for bars and shells.
+- Pointer: `super` + left drag moves and `super` + right drag resizes floating
+  windows; client title bars can move/resize them (`xdg_toplevel.move/resize`),
+  and F11 / video-player fullscreen requests are honoured.
 - Nested (winit) Wayland compositor: `xdg-shell` toplevels, SHM buffers,
   keyboard, pointer, wheel, `wl_output`, popups tracked, tiled layout rendered
   through Smithay's scene graph.
@@ -188,8 +243,8 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 - No cursor image is drawn yet. Only window positions animate: there are no
   opening/closing transitions, and client sizes still jump to their target.
 - Popup grabs, screencopy, idle, input-method and session-lock protocols are not
-  implemented. Layer-shell surfaces receive pointer clicks but not keyboard
-  focus, and their exclusive zones do not yet shrink the tiling area.
+  implemented. Layer-shell keyboard focus and exclusive zones are tested
+  headlessly but not yet checked with real bars and launchers.
 - Blur is not drawn. On Intel HD Graphics the faint edge of shadows shows a
   slight dotted dithering pattern in the nested window; the `flat` design
   avoids it.
@@ -203,6 +258,13 @@ development packages. The nested backend needs a running Wayland or X11 session.
 cargo build --release          # builds veyron and veyronctl
 cargo test                     # core, IPC and headless protocol suites
 ```
+
+### Releasing
+
+`.github/workflows/installer.yml` builds the downloads on every pull request
+and installs them on clean distributions. Pushing a tag that matches the
+version in `Cargo.toml` (for example `v0.1.0`) publishes them as a GitHub
+release once those jobs pass; until then the installer builds from source.
 
 ### Nix
 
@@ -329,7 +391,7 @@ Default keybindings (all configurable):
 | `super+c` | center the focused column |
 | `super+f` | toggle fullscreen |
 | `super+space` | toggle floating |
-| `super+shift+l` | cycle tiling layout (scroll → master-stack → dwindle → auto) |
+| `super+shift+l` | cycle layout (scroll → master-stack → dwindle → auto → grid → center-tile → deck → monocle → floating) |
 | `super+p` | apply the next profile (cycles through `[[profiles]]`) |
 | `super+shift+s` | send the focused window to / recall it from the scratchpad |
 | `super+1` … `super+5` | switch workspace |
@@ -339,6 +401,9 @@ Default keybindings (all configurable):
 | `super+comma` / `super+period` | focus the monitor to the left / right |
 | `super+shift+comma` / `super+shift+period` | move the focused window to the left / right monitor |
 | `super+ctrl+comma` / `super+ctrl+period` | move the active workspace to the left / right monitor |
+| `super+m` | maximize / restore the focused window |
+| `super+o` | pin the focused window to every workspace |
+| `super+wheel_down` / `super+wheel_up` | next / previous workspace |
 | `super+r` | reload the configuration |
 | `super+shift+e` | quit |
 
@@ -364,9 +429,11 @@ outer_margin = 12            # margin around the tiled area
 default_column_ratio = 0.5   # new column width, fraction of the viewport
 min_column_ratio = 0.2
 max_column_ratio = 1.0
-mode = "scroll"              # scroll | master-stack | dwindle | auto
+mode = "scroll"              # scroll | master-stack | dwindle | grid |
+                             # center-tile | deck | monocle | floating | auto
 smart_gaps = false           # 0 gap for one window, tighter when dense
-master_ratio = 0.6           # master width in master-stack
+master_ratio = 0.6           # master width in master-stack, deck, center-tile
+center_focused_column = "never"  # scroll: never | always | on-overflow
 
 [appearance]
 background = "#101014"
@@ -386,6 +453,7 @@ corner_radius = 12           # 0 keeps square corners
 shadow_size = 18             # 0 disables the drop shadow
 shadow_opacity = 0.35
 inactive_opacity = 1.0       # dim unfocused windows (0.1 .. 1.0)
+dim_inactive = 0.0           # darken unfocused windows (0.0 .. 0.9)
 # border_active = "#ffb4abff"  # override primary / outline_variant
 use_surface_background = true
 export = true                # write ~/.local/state/veyron/theme/*
@@ -398,6 +466,7 @@ reduce_motion = false        # snap instantly for reduced-motion preferences
 [behavior]
 remember_geometry = true     # restore floating geometry per app id
 smart_workspace = false      # new windows open where their app already lives
+focus_follows_mouse = false  # focus the window under the pointer
 
 # Per-application rules, evaluated in order; later fields win.
 [[rules]]
@@ -490,6 +559,84 @@ Window-management extras borrowed from other compositors:
 | `theme seed <#hex\|preset>` | | use a seed colour |
 | `theme design next` | `super+alt+t` | next decoration style |
 | `theme design <name>` | | `material`, `glass`, `flat`, `neon`, `minimal` |
+| `maximize` | `super+m` | fill the usable area (bars stay visible), again to restore; the title bar button does the same |
+| `pin` | `super+o` | float the window and keep it on every workspace (Hyprland `pin`, COSMIC sticky) |
+| `mark <name>` / `focus-mark <name>` / `unmark [name]` | | name a window and jump back to it from anywhere (sway/i3 marks) |
+| `workspace next\|prev` | `super+wheel_down` / `super+wheel_up` | wheel chords: `wheel_up`, `wheel_down`, `wheel_left`, `wheel_right` with any modifiers |
+
+More behaviour from other compositors, all off by default:
+
+```toml
+[behavior]
+focus_follows_mouse = true   # focus the window under the pointer
+cursor_hide_after = 5        # hide an idle pointer after 5 seconds
+
+[theme]
+dim_inactive = 0.25          # darken unfocused windows (Hyprland dim_inactive)
+
+[hot_corners]                # GNOME-style corners, any action
+top_left = "focus-cycle next"
+bottom_right = "spawn foot"
+```
+
+The configuration can be split into several files. Paths are relative to the
+including file (`~/` is your home); included files are read first and the
+including file wins, while `[[rules]]` from every file are kept:
+
+```
+# ~/.config/veyron/veyron.toml
+include = ["keys.toml", "rules.toml"]
+include_optional = ["local.toml"]   # skipped when the file does not exist
+```
+
+### Layouts
+
+Every workspace has its own layout. Set the default with `[layout] mode`, pin
+one per workspace with `[[workspaces]] layout`, switch a workspace from a rule
+with `layout = "..."`, or at runtime with `layout <name>` (alias
+`set-layout <name>`) and `layout next` (alias `next-layout`, `super+shift+l`).
+
+| Layout | Inspired by | Does |
+|---|---|---|
+| `scroll` | niri | endless strip of columns; the default |
+| `master-stack` | dwm, Hyprland | master on the left (`master_ratio`), stack on the right |
+| `dwindle` | Hyprland | recursive spiral splits |
+| `grid` | dwm gaplessgrid | near-square grid; the last row is stretched to fill the width |
+| `center-tile` | mango, dwm centeredmaster | master centred at `master_ratio`, stack alternating right/left; a lone window is centred |
+| `deck` | dwm deck | master plus one visible stack window (the focused or last focused one) |
+| `monocle` | dwm, mango | the focused window fills the area; the others are hidden |
+| `floating` | COSMIC | nothing is tiled; windows keep their place and move/resize freely |
+| `auto` | | `master-stack` for up to three windows, `dwindle` from four |
+
+In `monocle` and `deck`, `focus left/right` cycles through every window
+(wrapping around) and `focus-cycle` reaches the hidden ones too.
+
+Switching a workspace to `floating` leaves each window where the tiling put it;
+new windows open centred, or where their application was last placed when
+`remember_geometry` is on. Switching back to a tiling layout tiles the same
+windows again. `toggle-floating` on a floating workspace moves the window to
+the floating layer, so it stays floating after the workspace tiles again.
+Fullscreen works the same in every layout.
+
+`center_focused_column` controls how `scroll` follows the focus, like niri:
+`never` scrolls as little as needed, `always` keeps the focused column centred,
+and `on-overflow` centres it only when it does not fit on screen next to the
+previously focused column.
+
+```toml
+[layout]
+mode = "center-tile"
+master_ratio = 0.5
+center_focused_column = "on-overflow"
+
+[[workspaces]]
+name = "float"
+layout = "floating"
+
+[[rules]]
+app_id = "gimp"
+layout = "floating"
+```
 
 ### Designs
 
@@ -510,7 +657,8 @@ Switching a design at runtime drops the per-field overrides so the style shows
 as designed. If the GPU driver rejects the shaders, Veyron logs a warning and
 falls back to square solid borders.
 
-Floating windows can also be dragged with `super` + left button. Keys are
+Floating windows can also be dragged with `super` + left button and resized
+with `super` + right button. Keys are
 matched by their unshifted symbol, so `super+shift+1` means the `1` key on any
 layout.
 
@@ -557,6 +705,7 @@ veyronctl workspace-output right
 veyronctl resize width 32
 veyronctl move-floating right 32
 veyronctl layout master-stack
+veyronctl layout monocle
 veyronctl layout next
 veyronctl overview --json
 veyronctl profile coding

@@ -27,7 +27,7 @@ use smithay::{
                 AsRenderElements, Kind,
             },
             gles::{element::PixelShaderElement, GlesRenderer},
-            utils::on_commit_buffer_handler,
+            utils::{on_commit_buffer_handler, with_renderer_surface_state},
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
     },
@@ -42,6 +42,7 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_server::{
         backend::{ClientData, ClientId, DisconnectReason},
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
@@ -63,7 +64,8 @@ use smithay::{
         },
         shell::{
             wlr_layer::{
-                Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+                KeyboardInteractivity, Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData,
+                WlrLayerShellHandler, WlrLayerShellState,
             },
             xdg::{
                 decoration::{XdgDecorationHandler, XdgDecorationState},
@@ -75,12 +77,14 @@ use smithay::{
     },
 };
 use veyron_core::{
-    workspace_slide, Action, Config, Design, Effects, Modifiers, NewWindow, Palette, Rect,
-    RectAnimator, Session, Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
+    hotcorner::{CORNER_SIZE, REARM_DISTANCE},
+    workspace_slide, Action, Config, Corner, Design, Effects, Modifiers, NewWindow, Palette,
+    Point as VPoint, Rect, RectAnimator, ResizeEdges, Session, Size as VSize, Snapshot, WindowId,
+    Wm, WorkspacePosition,
 };
 use veyron_ipc::{
-    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, ThemeReport,
-    WindowReport, MAX_LINE_BYTES,
+    Change, EventReport, OverviewReport, OverviewTileReport, OverviewWindowReport, Response,
+    StateReport, ThemeReport, WindowReport, MAX_LINE_BYTES,
 };
 
 use crate::{
@@ -90,14 +94,90 @@ use crate::{
 
 /// Linux input event code of the left mouse button.
 const BTN_LEFT: u32 = 0x110;
+/// Linux input event code of the right mouse button.
+const BTN_RIGHT: u32 = 0x111;
 
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
+/// Touchpad scrolling that counts as one wheel-binding step.
+const WHEEL_STEP_PIXELS: f64 = 60.0;
+
+/// How far below its place a new window starts its open animation.
+const OPEN_RISE: i32 = 24;
 
 /// Size of one workspace tile in the `veyronctl overview` grid.
 const OVERVIEW_TILE: VSize = VSize::new(320, 200);
 /// Space between overview tiles.
 const OVERVIEW_GAP: i32 = 16;
+
+/// A floating window following the pointer until `button` is released.
+#[derive(Debug, Clone, Copy)]
+struct PointerGrab {
+    kind: GrabKind,
+    button: u32,
+    /// Started by the client (`xdg_toplevel.move`/`resize`) rather than by a
+    /// `super` binding, so the client saw the press and must see the release.
+    from_client: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GrabKind {
+    /// The pointer keeps its offset from the window's top-left corner.
+    Move {
+        window: WindowId,
+        offset: Point<f64, Logical>,
+    },
+    /// `edges` follow the pointer's travel since `origin`, starting from the
+    /// window rectangle `start`.
+    Resize {
+        window: WindowId,
+        edges: ResizeEdges,
+        start: Rect,
+        origin: Point<f64, Logical>,
+        min: VSize,
+    },
+}
+
+impl GrabKind {
+    fn window(&self) -> WindowId {
+        match *self {
+            GrabKind::Move { window, .. } | GrabKind::Resize { window, .. } => window,
+        }
+    }
+
+    /// Apply a pointer position to the core. Returns whether the window changed.
+    fn update(&self, wm: &mut Wm, pointer: Point<f64, Logical>) -> bool {
+        match *self {
+            GrabKind::Move { window, offset } => {
+                let corner = pointer - offset;
+                wm.move_floating_to(window, corner.x.round() as i32, corner.y.round() as i32)
+            }
+            GrabKind::Resize {
+                window,
+                edges,
+                start,
+                origin,
+                min,
+            } => {
+                let delta = pointer - origin;
+                let rect =
+                    start.resized(edges, delta.x.round() as i32, delta.y.round() as i32, min);
+                wm.resize_floating_to(window, rect)
+            }
+        }
+    }
+}
+
+/// Edges an `xdg_toplevel.resize` request names.
+fn xdg_edges(edge: xdg_toplevel::ResizeEdge) -> ResizeEdges {
+    use xdg_toplevel::ResizeEdge as Edge;
+    ResizeEdges {
+        left: matches!(edge, Edge::Left | Edge::TopLeft | Edge::BottomLeft),
+        right: matches!(edge, Edge::Right | Edge::TopRight | Edge::BottomRight),
+        top: matches!(edge, Edge::Top | Edge::TopLeft | Edge::TopRight),
+        bottom: matches!(edge, Edge::Bottom | Edge::BottomLeft | Edge::BottomRight),
+    }
+}
 
 /// Per-client protocol state (required by `smithay`'s compositor handler).
 #[derive(Debug, Default)]
@@ -114,9 +194,9 @@ impl ClientData for ClientState {
 pub struct Veyron {
     start: Instant,
     config_path: PathBuf,
-    /// Modification time of the configuration file when it was last read, so
-    /// edits are picked up automatically.
-    config_stamp: Option<std::time::SystemTime>,
+    /// Modification times of the configuration file and its includes when
+    /// they were last read, so edits to any of them are picked up.
+    config_stamp: Vec<Option<std::time::SystemTime>>,
 
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
@@ -150,22 +230,40 @@ pub struct Veyron {
     /// Last location a window was mapped at, so the scene graph is only touched
     /// when the layout really moved it (avoiding pointless z-order churn).
     mapped: HashMap<WindowId, (i32, i32)>,
-    /// Last size sent to each client, so configures are not flooded.
-    configured: HashMap<WindowId, (i32, i32)>,
+    /// Last size, fullscreen and maximized state sent to each client, so
+    /// configures are not flooded.
+    configured: HashMap<WindowId, (i32, i32, bool, bool)>,
     /// In-flight window rectangles; the scene graph draws `current()`.
     animations: HashMap<WindowId, RectAnimator>,
+    /// Windows playing their open animation (rise and fade in).
+    opening: std::collections::HashSet<WindowId>,
     last_animation_frame: Instant,
     /// Workspace drawn last, so a switch can slide in from the right side.
     last_workspace_position: WorkspacePosition,
 
     pointer_location: Point<f64, Logical>,
-    /// Floating window being dragged with `super` + left button, and the
-    /// pointer's offset from its top-left corner when the drag started.
-    drag: Option<(WindowId, Point<f64, Logical>)>,
+    /// Floating window being moved or resized with the pointer.
+    grab: Option<PointerGrab>,
+    /// Corner the pointer fired last; it fires again only after leaving.
+    hot_corner: Option<Corner>,
+    /// Last pointer motion, for `cursor_hide_after`.
+    last_motion: Instant,
+    cursor_hidden: bool,
+    /// Touchpad scroll not yet turned into wheel-binding steps, per axis.
+    wheel_travel: [f64; 2],
+    /// Layer surface accepting the keyboard (`on_demand`, or `exclusive` on a
+    /// layer below windows) the user clicked into; it keeps the keyboard
+    /// until a window is clicked or focused, or it stops accepting it.
+    layer_focus: Option<WlSurface>,
     /// Material You scheme generated from `[theme]`.
     palette: Palette,
     /// Window decorations (borders, shadows, rounded corners) kept across frames.
     chrome: Chrome,
+    /// `veyronctl subscribe` connections and the state they were last sent.
+    subscribers: Vec<std::sync::mpsc::Sender<Response>>,
+    published: Option<StateReport>,
+    /// The scheme changed since subscribers last heard about it.
+    theme_unpublished: bool,
     needs_redraw: bool,
     /// Set when the compositor should exit.
     pub exit: bool,
@@ -258,7 +356,7 @@ impl Veyron {
         let palette = wm.config().theme.palette();
         let mut state = Self {
             start: Instant::now(),
-            config_stamp: config_modified(&config_path),
+            config_stamp: config_stamp(&config_path, &wm.config().sources),
             config_path,
             compositor_state,
             xdg_shell_state,
@@ -281,12 +379,21 @@ impl Veyron {
             mapped: HashMap::new(),
             configured: HashMap::new(),
             animations: HashMap::new(),
+            opening: Default::default(),
             last_animation_frame: Instant::now(),
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
-            drag: None,
+            grab: None,
+            hot_corner: None,
+            last_motion: Instant::now(),
+            cursor_hidden: false,
+            wheel_travel: [0.0; 2],
+            layer_focus: None,
             palette,
             chrome: Chrome::default(),
+            subscribers: Vec::new(),
+            published: None,
+            theme_unpublished: false,
             needs_redraw: true,
             exit: false,
         };
@@ -317,6 +424,10 @@ impl Veyron {
                 animator.advance(dt);
             }
         }
+        // The frame that finishes an open animation is drawn fully opaque.
+        let animations = &self.animations;
+        self.opening
+            .retain(|id| animations.get(id).is_some_and(RectAnimator::is_running));
         if animating {
             self.needs_redraw = true;
         }
@@ -327,12 +438,21 @@ impl Veyron {
             self.render()?;
             self.send_frame_callbacks();
         }
+        if self.cursor_hide_in() == Some(Duration::ZERO) {
+            self.set_cursor_hidden(true);
+        }
+        self.publish_events();
         Ok(())
     }
 
     /// Bound the event-loop sleep while an animation needs another frame.
     pub fn dispatch_wait(&self, idle_wait: Option<Duration>) -> Option<Duration> {
         const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+        // Wake up in time to hide an idle pointer.
+        let idle_wait = match (idle_wait, self.cursor_hide_in()) {
+            (Some(wait), Some(hide)) => Some(wait.min(hide)),
+            (wait, hide) => wait.or(hide),
+        };
         if self.animations.values().any(RectAnimator::is_running) {
             Some(idle_wait.map_or(FRAME_INTERVAL, |wait| wait.min(FRAME_INTERVAL)))
         } else {
@@ -415,17 +535,21 @@ impl Veyron {
             Point::from((surface_position.x / scale, surface_position.y / scale));
         self.pointer_location = location;
 
-        if let Some((id, offset)) = self.drag {
-            let corner = location - offset;
-            if self
-                .wm
-                .move_floating_to(id, corner.x.round() as i32, corner.y.round() as i32)
-            {
+        if let Some(grab) = self.grab {
+            if grab.kind.update(&mut self.wm, location) {
                 self.sync_layout();
                 self.needs_redraw = true;
             }
-            // The dragged client does not see pointer motion during the grab.
+            // The grabbed client does not see pointer motion during the grab.
             return;
+        }
+        self.last_motion = Instant::now();
+        if self.cursor_hidden {
+            self.set_cursor_hidden(false);
+        }
+        self.check_hot_corner(location);
+        if self.wm.config().behavior.focus_follows_mouse {
+            self.focus_under_pointer();
         }
 
         let target = self.surface_under(location);
@@ -449,24 +573,37 @@ impl Veyron {
     where
         E: PointerButtonEvent<WinitInput>,
     {
-        // Only the left button ends a drag: the press that started it was never
-        // sent to the client, while other buttons pressed meanwhile were, and
-        // swallowing their release would leave them stuck in that client.
-        if event.state() == ButtonState::Released
-            && event.button_code() == BTN_LEFT
-            && self.drag.take().is_some()
-        {
-            return;
+        // Only the button that started a grab ends it. A `super` grab began with
+        // a press the client never saw, so its release is swallowed too; other
+        // buttons pressed meanwhile were sent, and swallowing their release
+        // would leave them stuck in that client. A grab the client asked for
+        // began with a press it did see, so it gets the release.
+        if event.state() == ButtonState::Released {
+            if let Some(grab) = self.grab.filter(|grab| grab.button == event.button_code()) {
+                self.grab = None;
+                if !grab.from_client {
+                    return;
+                }
+            }
         }
         // A click on a panel, OSD or notification above the windows belongs
         // to that layer surface; it must not focus, raise or drag the window
-        // underneath.
-        let over_layer = self
-            .layer_surface_under(self.pointer_location, &[Layer::Overlay, Layer::Top])
-            .is_some();
-        if event.state() == ButtonState::Pressed && !over_layer {
-            if let Some(drag) = self.begin_drag(event.button_code()) {
-                self.drag = Some(drag);
+        // underneath. A launcher or panel that accepts the keyboard on demand
+        // takes it with the click.
+        let clicked_layer = if event.state() == ButtonState::Pressed {
+            self.layer_under(self.pointer_location)
+        } else {
+            None
+        };
+        if let Some(layer) = &clicked_layer {
+            if layer.can_receive_keyboard_focus() {
+                self.layer_focus = Some(layer.wl_surface().clone());
+                self.sync_keyboard_focus();
+            }
+        }
+        if event.state() == ButtonState::Pressed && clicked_layer.is_none() {
+            if let Some(grab) = self.begin_super_grab(event.button_code()) {
+                self.grab = Some(grab);
                 return;
             }
             let window = self
@@ -475,7 +612,11 @@ impl Veyron {
                 .map(|(window, _)| window.clone());
             if let Some(window) = window {
                 if let Some(id) = self.window_id(&window) {
-                    if self.wm.focus_window(id) {
+                    // Clicking a window takes the keyboard back from a layer
+                    // surface focused on demand, even if the window already
+                    // had focus in the model.
+                    let from_layer = self.layer_focus.take().is_some();
+                    if self.wm.focus_window(id) || from_layer {
                         self.sync_focus();
                     }
                     if self.wm.snapshot().is_floating(id) {
@@ -500,32 +641,266 @@ impl Veyron {
         pointer.frame(self);
     }
 
-    /// Start dragging the floating window under the pointer when the left
-    /// button is pressed with `super` held. Tiled windows are left to the
-    /// layout, so the press is forwarded to them as usual.
-    fn begin_drag(&mut self, button: u32) -> Option<(WindowId, Point<f64, Logical>)> {
-        if button != BTN_LEFT || !self.keyboard.modifier_state().logo {
+    /// Start moving (`super` + left button) or resizing (`super` + right
+    /// button) the floating window under the pointer. Tiled windows are left
+    /// to the layout, so the press is forwarded to them as usual.
+    fn begin_super_grab(&mut self, button: u32) -> Option<PointerGrab> {
+        if !self.keyboard.modifier_state().logo {
             return None;
         }
+        let resize = match button {
+            BTN_LEFT => false,
+            BTN_RIGHT => true,
+            _ => return None,
+        };
         let (window, _) = self.space.element_under(self.pointer_location)?;
         let window = window.clone();
         let id = self.window_id(&window)?;
-        if !self.wm.snapshot().is_floating(id) {
+        let edges = resize.then(|| {
+            let rect = self
+                .wm
+                .snapshot()
+                .placement_of(id)
+                .map(|placement| placement.rect);
+            let pointer = VPoint::new(
+                self.pointer_location.x.round() as i32,
+                self.pointer_location.y.round() as i32,
+            );
+            rect.map(|rect| ResizeEdges::nearest(rect, pointer))
+                .unwrap_or_default()
+        });
+        self.start_grab(id, edges, button, false)
+    }
+
+    /// Grab floating window `id` for a move (`edges` is `None`) or a resize
+    /// along `edges`, focusing and raising it.
+    fn start_grab(
+        &mut self,
+        id: WindowId,
+        edges: Option<ResizeEdges>,
+        button: u32,
+        from_client: bool,
+    ) -> Option<PointerGrab> {
+        let snapshot = self.wm.snapshot();
+        if !snapshot.is_floating(id) || snapshot.is_fullscreen(id) {
             return None;
         }
-        let corner = self.space.element_location(&window)?;
-        if self.wm.focus_window(id) {
+        let start = snapshot.placement_of(id)?.rect;
+        let kind = match edges {
+            None => GrabKind::Move {
+                window: id,
+                offset: self.pointer_location - Point::from((start.x as f64, start.y as f64)),
+            },
+            Some(edges) if edges.is_empty() => return None,
+            Some(edges) => GrabKind::Resize {
+                window: id,
+                edges,
+                start,
+                origin: self.pointer_location,
+                min: self.wm.min_floating_size(id),
+            },
+        };
+        let from_layer = self.layer_focus.take().is_some();
+        if self.wm.focus_window(id) || from_layer {
             self.sync_focus();
         }
-        self.space.raise_element(&window, false);
+        if let Some(window) = self.windows.get(&id).cloned() {
+            self.space.raise_element(&window, false);
+        }
         self.needs_redraw = true;
-        Some((id, self.pointer_location - corner.to_f64()))
+        Some(PointerGrab {
+            kind,
+            button,
+            from_client,
+        })
+    }
+
+    /// Start the move or resize a client asked for from its own title bar or
+    /// border. Only honoured while the press with that serial is still held,
+    /// and only for floating windows: tiled ones belong to the layout.
+    fn client_grab(
+        &mut self,
+        surface: &ToplevelSurface,
+        serial: Serial,
+        edges: Option<ResizeEdges>,
+    ) {
+        if self.grab.is_some() || !self.pointer.has_grab(serial) {
+            return;
+        }
+        let Some(button) = self.pointer.grab_start_data().map(|start| start.button) else {
+            return;
+        };
+        let Some(id) = self.toplevel_id(surface) else {
+            return;
+        };
+        self.grab = self.start_grab(id, edges, button, true);
+    }
+
+    /// Enter or leave fullscreen because the client asked (F11, a video
+    /// player's fullscreen button). The client always gets a configure, so
+    /// it learns the answer even when nothing changed.
+    fn client_fullscreen(&mut self, surface: &ToplevelSurface, fullscreen: bool) {
+        let changed = self
+            .toplevel_id(surface)
+            .is_some_and(|id| self.wm.set_fullscreen(id, fullscreen));
+        if changed {
+            self.sync_layout();
+            self.sync_focus();
+            self.needs_redraw = true;
+        } else if surface.is_initial_configure_sent() {
+            surface.send_configure();
+        }
+    }
+
+    /// `focus_follows_mouse`: focus the window under the pointer when it is
+    /// entirely on screen. A partly visible window would scroll the layout
+    /// under the pointer and bounce focus between neighbours, so it still
+    /// takes a click. Bars and overlays above the windows block it.
+    fn focus_under_pointer(&mut self) {
+        let location = self.pointer_location;
+        if self
+            .layer_surface_under(location, &[Layer::Overlay, Layer::Top])
+            .is_some()
+        {
+            return;
+        }
+        let Some(id) = self
+            .space
+            .element_under(location)
+            .and_then(|(window, _)| self.window_id(window))
+        else {
+            return;
+        };
+        let snapshot = self.wm.snapshot();
+        let fully_visible = snapshot.placement_of(id).is_some_and(|placement| {
+            placement.rect.intersection(snapshot.viewport) == Some(placement.rect)
+        });
+        if snapshot.focused != Some(id) && fully_visible && self.wm.focus_window(id) {
+            // Like a click, entering a window takes the keyboard back from
+            // a panel the user clicked into.
+            self.layer_focus = None;
+            self.sync_focus();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Maximize or restore because the client asked (title bar button or
+    /// double click). Like fullscreen, the client always hears back.
+    fn client_maximize(&mut self, surface: &ToplevelSurface, maximized: bool) {
+        let changed = self
+            .toplevel_id(surface)
+            .is_some_and(|id| self.wm.set_maximized(id, maximized));
+        if changed {
+            self.sync_layout();
+            self.sync_focus();
+            self.needs_redraw = true;
+        } else if surface.is_initial_configure_sent() {
+            surface.send_configure();
+        }
+    }
+
+    /// Run a hot-corner action when the pointer reaches a corner. The corner
+    /// fires once and re-arms only after the pointer has moved away from it.
+    fn check_hot_corner(&mut self, location: Point<f64, Logical>) {
+        if self.wm.config().hot_corners.is_empty() {
+            return;
+        }
+        let Some(output) = self.space.output_geometry(&self.output) else {
+            return;
+        };
+        let output = Rect::new(output.loc.x, output.loc.y, output.size.w, output.size.h);
+        if let Some(armed) = self.hot_corner {
+            if Corner::at(output, location.x, location.y, REARM_DISTANCE) != Some(armed) {
+                self.hot_corner = None;
+            }
+            return;
+        }
+        let Some(corner) = Corner::at(output, location.x, location.y, CORNER_SIZE) else {
+            return;
+        };
+        self.hot_corner = Some(corner);
+        if let Some(action) = self.wm.config().hot_corners.action(corner).cloned() {
+            self.apply_action(action);
+        }
+    }
+
+    /// Show or hide the pointer (`cursor_hide_after`). The nested backend
+    /// hides the host cursor over its window.
+    fn set_cursor_hidden(&mut self, hidden: bool) {
+        self.cursor_hidden = hidden;
+        if let Some(backend) = &self.backend {
+            backend.window().set_cursor_visible(!hidden);
+        }
+    }
+
+    /// Time left before the pointer hides, while hiding is enabled and the
+    /// pointer is shown.
+    fn cursor_hide_in(&self) -> Option<Duration> {
+        let after = self.wm.config().behavior.cursor_hide_after;
+        if after == 0 || self.cursor_hidden {
+            return None;
+        }
+        Some(Duration::from_secs(u64::from(after)).saturating_sub(self.last_motion.elapsed()))
+    }
+
+    /// Wheel bindings (`super+wheel_down = "workspace next"`): one action per
+    /// wheel notch, or per 60 px of touchpad scrolling. Returns whether a
+    /// binding took the event, so it is not also sent to the client.
+    fn wheel_binding(&mut self, axis: Axis, v120: Option<f64>, amount: Option<f64>) -> bool {
+        let state = self.keyboard.modifier_state();
+        let modifiers = Modifiers {
+            ctrl: state.ctrl,
+            alt: state.alt,
+            shift: state.shift,
+            logo: state.logo,
+        };
+        let (negative, positive, slot) = match axis {
+            Axis::Vertical => ("wheel_up", "wheel_down", 0),
+            Axis::Horizontal => ("wheel_left", "wheel_right", 1),
+        };
+        let config = self.wm.config();
+        if config.lookup(modifiers, negative).is_none()
+            && config.lookup(modifiers, positive).is_none()
+        {
+            return false;
+        }
+        let steps = match (v120, amount) {
+            (Some(v120), _) => (v120 / 120.0).round() as i32,
+            (None, Some(amount)) => {
+                self.wheel_travel[slot] += amount;
+                let steps = (self.wheel_travel[slot] / WHEEL_STEP_PIXELS).trunc();
+                self.wheel_travel[slot] -= steps * WHEEL_STEP_PIXELS;
+                steps as i32
+            }
+            (None, None) => 0,
+        };
+        let key = if steps < 0 { negative } else { positive };
+        if let Some(action) = config.lookup(modifiers, key).cloned() {
+            for _ in 0..steps.unsigned_abs().min(8) {
+                self.apply_action(action.clone());
+            }
+        }
+        true
+    }
+
+    fn toplevel_id(&self, surface: &ToplevelSurface) -> Option<WindowId> {
+        self.windows
+            .iter()
+            .find(|(_, window)| window.toplevel() == Some(surface))
+            .map(|(id, _)| *id)
     }
 
     fn on_pointer_axis<E>(&mut self, event: &E)
     where
         E: PointerAxisEvent<WinitInput>,
     {
+        let mut taken = false;
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            taken |= self.wheel_binding(axis, event.amount_v120(axis), event.amount(axis));
+        }
+        if taken {
+            return;
+        }
         let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
         for axis in [Axis::Horizontal, Axis::Vertical] {
             let (v120, value) = axis_values(event.amount_v120(axis), event.amount(axis));
@@ -574,6 +949,11 @@ impl Veyron {
             self.reload_config();
         }
 
+        if effects.focus_changed {
+            // An explicit window focus change (keyboard, IPC) ends on-demand
+            // layer focus; an exclusive layer keeps the keyboard regardless.
+            self.layer_focus = None;
+        }
         if effects.layout_changed || effects.workspace_changed || effects.focus_changed {
             self.sync_layout();
             self.sync_focus();
@@ -645,6 +1025,11 @@ impl Veyron {
                 self.apply_action(Action::Quit);
                 Response::Ok
             }
+            veyron_ipc::Request::Subscribe => {
+                // The reply channel becomes the subscription.
+                self.subscribe(job.reply);
+                return;
+            }
             veyron_ipc::Request::Action { action } => match Action::parse(&action) {
                 Ok(action) => {
                     self.apply_action(action);
@@ -656,6 +1041,46 @@ impl Veyron {
             },
         };
         let _ = job.reply.send(response);
+    }
+
+    /// Register a subscriber and send it the current state.
+    fn subscribe(&mut self, events: std::sync::mpsc::Sender<Response>) {
+        let state = self.state_report();
+        let first = EventReport {
+            changes: Change::ALL.to_vec(),
+            state: state.clone(),
+        };
+        if events.send(Response::Event(first)).is_ok() {
+            self.subscribers.push(events);
+            self.published.get_or_insert(state);
+        }
+    }
+
+    /// Tell subscribers what changed since the last event. Called once per
+    /// loop iteration; geometry-only changes (animations) send nothing.
+    fn publish_events(&mut self) {
+        if self.subscribers.is_empty() {
+            self.published = None;
+            self.theme_unpublished = false;
+            return;
+        }
+        let state = self.state_report();
+        let mut changes = self
+            .published
+            .as_ref()
+            .map(|old| Change::between(old, &state))
+            .unwrap_or_else(|| Change::ALL.to_vec());
+        if std::mem::take(&mut self.theme_unpublished) && !changes.contains(&Change::Theme) {
+            changes.push(Change::Theme);
+        }
+        self.published = Some(state.clone());
+        if changes.is_empty() {
+            return;
+        }
+        let event = Response::Event(EventReport { changes, state });
+        // A closed connection drops its receiver, which ends the subscription.
+        self.subscribers
+            .retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
 
     fn state_report(&self) -> StateReport {
@@ -689,6 +1114,14 @@ impl Veyron {
                             .map(|window| window.title().to_string())
                             .unwrap_or_default(),
                         opacity: placement.opacity,
+                        pinned: self.wm.is_pinned(placement.window),
+                        maximized: self.wm.is_maximized(placement.window),
+                        marks: self
+                            .wm
+                            .marks_of(placement.window)
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect(),
                     }
                 })
                 .collect(),
@@ -764,6 +1197,7 @@ impl Veyron {
         let theme = &self.wm.config().theme;
         self.palette = theme.palette();
         self.needs_redraw = true;
+        self.theme_unpublished = true;
         if !theme.export || self.backend.is_none() {
             return;
         }
@@ -803,11 +1237,12 @@ impl Veyron {
     /// Reload when the configuration file changed since it was last read.
     /// Called periodically by the event loop.
     pub fn reload_config_if_changed(&mut self) {
-        let stamp = config_modified(&self.config_path);
+        let stamp = config_stamp(&self.config_path, &self.wm.config().sources);
         if stamp != self.config_stamp {
-            self.config_stamp = stamp;
             tracing::info!(path = %self.config_path.display(), "configuration file changed");
             self.reload_config();
+            // A reload can add or drop includes; watch the new set.
+            self.config_stamp = config_stamp(&self.config_path, &self.wm.config().sources);
         }
     }
 
@@ -861,14 +1296,123 @@ impl Veyron {
         self.damage_tracker = OutputDamageTracker::new(window_size, 1.0, Transform::Flipped180);
 
         // Panels and notification surfaces get exclusive zones and sizes
-        // recomputed, then a configure for their new geometry.
-        let layers: Vec<_> = {
+        // recomputed for the new output size.
+        self.arrange_layers();
+    }
+
+    /// Lay out layer surfaces and hand the area their exclusive zones leave
+    /// free to the core, retiling windows when it changed.
+    ///
+    /// `LayerMap::arrange` sends each configured layer surface a configure
+    /// when its size changes, so panels follow on their own.
+    fn arrange_layers(&mut self) {
+        let zone = {
             let mut map = layer_map_for_output(&self.output);
             map.arrange();
-            map.layers().cloned().collect()
+            map.non_exclusive_zone()
         };
-        for layer in layers {
-            layer.layer_surface().send_pending_configure();
+        // The only output sits at the origin, so its local coordinates are
+        // global ones.
+        let area = Rect::new(zone.loc.x, zone.loc.y, zone.size.w, zone.size.h);
+        if self.wm.set_usable_area(self.wm.active_output_index(), area) {
+            self.sync_layout();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Whether a fullscreen window is shown: the top layer (bars) then sits
+    /// below windows, so only the overlay layer stays in front.
+    fn fullscreen_active(&self) -> bool {
+        self.wm
+            .snapshot()
+            .placements
+            .iter()
+            .any(|placement| placement.fullscreen)
+    }
+
+    /// Layers drawn above windows, front first.
+    fn layers_above_windows(&self) -> &'static [Layer] {
+        if self.fullscreen_active() {
+            &[Layer::Overlay]
+        } else {
+            &[Layer::Overlay, Layer::Top]
+        }
+    }
+
+    /// Layers drawn below windows, front first.
+    fn layers_below_windows(&self) -> &'static [Layer] {
+        if self.fullscreen_active() {
+            &[Layer::Top, Layer::Bottom, Layer::Background]
+        } else {
+            &[Layer::Bottom, Layer::Background]
+        }
+    }
+
+    /// The surface that should hold the keyboard:
+    ///
+    /// 1. the front-most mapped layer surface above windows that asked for
+    ///    `exclusive` keyboard interactivity (launchers such as rofi or
+    ///    fuzzel), for as long as it stays mapped;
+    /// 2. a layer surface the user clicked into, if it still accepts focus;
+    /// 3. the focused window of the core.
+    fn keyboard_target(&self) -> Option<WlSurface> {
+        if let Some(surface) = self.exclusive_layer() {
+            return Some(surface);
+        }
+        if let Some(surface) = &self.layer_focus {
+            return Some(surface.clone());
+        }
+        self.wm
+            .snapshot()
+            .focused
+            .and_then(|id| self.windows.get(&id))
+            .and_then(Window::toplevel)
+            .map(|toplevel| toplevel.wl_surface().clone())
+    }
+
+    /// The front-most mapped layer surface above windows that asked for
+    /// `exclusive` keyboard interactivity.
+    fn exclusive_layer(&self) -> Option<WlSurface> {
+        let layers = self.layers_above_windows();
+        let map = layer_map_for_output(&self.output);
+        layers.iter().find_map(|layer| {
+            map.layers_on(*layer)
+                .rev()
+                .find(|surface| {
+                    has_buffer(surface.wl_surface())
+                        && surface.cached_state().keyboard_interactivity
+                            == KeyboardInteractivity::Exclusive
+                })
+                .map(|surface| surface.wl_surface().clone())
+        })
+    }
+
+    /// Whether `surface` is a mapped layer surface that accepts keyboard
+    /// focus (`exclusive` or `on_demand` interactivity).
+    fn layer_accepts_keyboard(&self, surface: &WlSurface) -> bool {
+        layer_map_for_output(&self.output)
+            .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+            .is_some_and(|layer| {
+                layer.can_receive_keyboard_focus() && has_buffer(layer.wl_surface())
+            })
+    }
+
+    /// Give the keyboard to [`Self::keyboard_target`] if it does not have it
+    /// already. Cheap enough to run on every layer commit.
+    fn sync_keyboard_focus(&mut self) {
+        if self
+            .layer_focus
+            .as_ref()
+            .is_some_and(|surface| !self.layer_accepts_keyboard(surface))
+        {
+            // The clicked layer unmapped or gave up keyboard interactivity.
+            self.layer_focus = None;
+        }
+        let target = self.keyboard_target();
+        if self.keyboard.current_focus() != target {
+            let serial = SERIAL_COUNTER.next_serial();
+            let keyboard = self.keyboard.clone();
+            keyboard.set_focus(self, target, serial);
         }
     }
 
@@ -893,7 +1437,13 @@ impl Veyron {
                     self.mapped.get(&placement.window),
                     self.configured.get(&placement.window),
                 ) {
-                    (Some((x, y)), Some((w, h))) => Rect::new(*x, *y, *w, *h),
+                    (Some((x, y)), Some((w, h, _, _))) => Rect::new(*x, *y, *w, *h),
+                    // A window never configured before is new: it rises into
+                    // place while it fades in.
+                    (None, None) if placement.animate && slide == (0, 0) => {
+                        self.opening.insert(placement.window);
+                        Rect::new(target.x, target.y + OPEN_RISE, target.w, target.h)
+                    }
                     // A workspace that just became active slides in from the
                     // direction the user travelled.
                     _ if placement.animate && slide != (0, 0) => {
@@ -923,7 +1473,8 @@ impl Veyron {
             // picture-in-picture and fullscreen change their rectangle, and
             // only a configure makes the client follow. Unchanged sizes are
             // skipped below, so a floating client is not resized needlessly.
-            let target_size = (target.w, target.h);
+            let maximized = self.wm.is_maximized(placement.window);
+            let target_size = (target.w, target.h, placement.fullscreen, maximized);
             if self.configured.get(&placement.window) == Some(&target_size) {
                 continue;
             }
@@ -933,6 +1484,18 @@ impl Veyron {
                 // can never mark every tiled window as active.
                 toplevel.with_pending_state(|state| {
                     state.size = Some((target_size.0, target_size.1).into());
+                    // Clients such as video players and browsers hide their
+                    // own chrome only when told they are fullscreen.
+                    if placement.fullscreen {
+                        state.states.set(xdg_toplevel::State::Fullscreen);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Fullscreen);
+                    }
+                    if maximized {
+                        state.states.set(xdg_toplevel::State::Maximized);
+                    } else {
+                        state.states.unset(xdg_toplevel::State::Maximized);
+                    }
                 });
                 toplevel.send_configure();
                 self.configured.insert(placement.window, target_size);
@@ -958,18 +1521,11 @@ impl Veyron {
         }
     }
 
-    /// Move keyboard focus to the focused window of the active workspace.
+    /// Move keyboard focus to the focused window of the active workspace
+    /// (unless a layer surface holds it) and update window activation.
     fn sync_focus(&mut self) {
+        self.sync_keyboard_focus();
         let snapshot = self.wm.snapshot();
-        let focused_surface = snapshot
-            .focused
-            .and_then(|id| self.windows.get(&id))
-            .and_then(Window::toplevel)
-            .map(|toplevel| toplevel.wl_surface().clone());
-
-        let serial = SERIAL_COUNTER.next_serial();
-        let keyboard = self.keyboard.clone();
-        keyboard.set_focus(self, focused_surface, serial);
 
         for (id, window) in &self.windows {
             // `set_activated` only stages the xdg state; the configure that
@@ -999,11 +1555,11 @@ impl Veyron {
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         // Panels, OSDs and notifications above windows take the pointer first;
         // wallpapers and desktop layers below only receive it where no window is.
-        if let Some(hit) = self.layer_surface_under(location, &[Layer::Overlay, Layer::Top]) {
+        if let Some(hit) = self.layer_surface_under(location, self.layers_above_windows()) {
             return Some(hit);
         }
         let Some((window, _)) = self.space.element_under(location) else {
-            return self.layer_surface_under(location, &[Layer::Bottom, Layer::Background]);
+            return self.layer_surface_under(location, self.layers_below_windows());
         };
         // Smithay expects the focused surface's origin in global coordinates and
         // derives surface-local positions from it; subsurfaces and popups are
@@ -1031,6 +1587,21 @@ impl Veyron {
         })
     }
 
+    /// The layer surface that takes a click at `location`, with the same
+    /// stacking as [`Self::surface_under`].
+    fn layer_under(&self, location: Point<f64, Logical>) -> Option<DesktopLayerSurface> {
+        let above = self.layers_above_windows();
+        let below = self.layers_below_windows();
+        let window_under = self.space.element_under(location).is_some();
+        let map = layer_map_for_output(&self.output);
+        let find = |layers: &[Layer]| {
+            layers
+                .iter()
+                .find_map(|layer| map.layer_under(*layer, location).cloned())
+        };
+        find(above).or_else(|| if window_under { None } else { find(below) })
+    }
+
     fn window_id(&self, window: &Window) -> Option<WindowId> {
         self.windows
             .iter()
@@ -1055,6 +1626,20 @@ impl Veyron {
             config.appearance.background_rgba()
         };
         let snapshot = self.wm.snapshot();
+        if snapshot.focused != self.chrome.last_focus {
+            self.chrome.last_focus = snapshot.focused;
+            if config.theme.design().dim_inactive > 0.0 {
+                if let Some(mode) = self.output.current_mode() {
+                    self.damage_tracker =
+                        OutputDamageTracker::new(mode.size, 1.0, Transform::Flipped180);
+                }
+            }
+        }
+        self.chrome.fades = self
+            .opening
+            .iter()
+            .filter_map(|id| Some((*id, self.animations.get(id)?.progress() as f32)))
+            .collect();
         let damage = {
             let (renderer, mut framebuffer) = backend.bind()?;
             let elements = scene_elements(
@@ -1144,6 +1729,13 @@ struct Chrome {
     shaders: Option<Option<Shaders>>,
     shaded: HashMap<WindowId, Decoration>,
     solid: HashMap<WindowId, [SolidColorBuffer; 4]>,
+    /// Opacity of windows playing their open animation, for this frame.
+    fades: HashMap<WindowId, f32>,
+    /// Darkening layers of unfocused square windows (`dim_inactive`).
+    dims: HashMap<WindowId, SolidColorBuffer>,
+    /// Focused window of the last frame: with `dim_inactive` a focus change
+    /// changes shader uniforms the damage tracker cannot see.
+    last_focus: Option<WindowId>,
 }
 
 impl Chrome {
@@ -1164,12 +1756,15 @@ impl Chrome {
             .retain(|id, _| snapshot.placement_of(*id).is_some());
         self.solid
             .retain(|id, _| snapshot.placement_of(*id).is_some());
+        self.dims
+            .retain(|id, _| snapshot.placement_of(*id).is_some());
     }
 }
 
 /// Build the frame's render elements front to back: overlay and top layer
 /// surfaces, then windows from the top of the stack down, each followed by
-/// its decoration, then bottom and background layer surfaces.
+/// its decoration, then bottom and background layer surfaces. While a window
+/// is fullscreen the top layer moves below the windows.
 ///
 /// A window's popups are drawn unclipped in front of it; its own surface tree
 /// is clipped to rounded corners when the design asks for them. The output is
@@ -1204,8 +1799,16 @@ fn scene_elements(
                 }
             }
         };
+    // A fullscreen window covers bars on the top layer; only overlays (OSDs,
+    // lock screens) stay in front of it.
+    let fullscreen = snapshot
+        .placements
+        .iter()
+        .any(|placement| placement.fullscreen);
     push_layers(&mut elements, Layer::Overlay, renderer);
-    push_layers(&mut elements, Layer::Top, renderer);
+    if !fullscreen {
+        push_layers(&mut elements, Layer::Top, renderer);
+    }
 
     let design = style.design;
     let shaders = if design.needs_shader() {
@@ -1230,6 +1833,14 @@ fn scene_elements(
         let mut alpha = placement.map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
         if !focused && !fullscreen {
             alpha *= design.inactive_opacity;
+        }
+        let dim = if !focused && !fullscreen && placement.is_some() {
+            design.dim_inactive
+        } else {
+            0.0
+        };
+        if let Some(fade) = id.and_then(|id| chrome.fades.get(&id)) {
+            alpha *= fade;
         }
         let geometry = window.geometry();
         let origin = (location - geometry.loc).to_physical_precise_round(1.0);
@@ -1275,18 +1886,37 @@ fn scene_elements(
                             clip,
                             design.corner_radius as f32,
                             style.frag_map,
+                            dim,
                         ))
                     }),
                 );
             }
-            _ => elements.extend(
-                window
-                    .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
-                        renderer, origin, scale, alpha,
-                    )
-                    .into_iter()
-                    .map(SceneElement::from),
-            ),
+            _ => {
+                // Square windows are darkened by a translucent black layer
+                // drawn in front of them.
+                if let Some(id) = id.filter(|_| dim > 0.0) {
+                    let buffer = chrome
+                        .dims
+                        .entry(id)
+                        .or_insert_with(|| SolidColorBuffer::new((0, 0), [0.0; 4]));
+                    buffer.update(window_rect.size, [0.0, 0.0, 0.0, dim * alpha]);
+                    elements.push(SceneElement::from(SolidColorRenderElement::from_buffer(
+                        buffer,
+                        window_rect.loc.to_physical_precise_round(1.0),
+                        scale,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
+                elements.extend(
+                    window
+                        .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                            renderer, origin, scale, alpha,
+                        )
+                        .into_iter()
+                        .map(SceneElement::from),
+                );
+            }
         }
 
         let Some(id) = id.filter(|_| placement.is_some() && !fullscreen) else {
@@ -1359,6 +1989,9 @@ fn scene_elements(
     }
     chrome.forget_hidden(snapshot);
 
+    if fullscreen {
+        push_layers(&mut elements, Layer::Top, renderer);
+    }
     push_layers(&mut elements, Layer::Bottom, renderer);
     push_layers(&mut elements, Layer::Background, renderer);
     elements
@@ -1382,7 +2015,18 @@ fn binding_for(
         .cloned()
 }
 
-/// Lowercase keysym name, the form binding chords are stored in.
+/// Modification times of every file the configuration comes from. Before a
+/// file exists (defaults in use) only the main path is watched.
+fn config_stamp(path: &std::path::Path, sources: &[PathBuf]) -> Vec<Option<std::time::SystemTime>> {
+    if sources.is_empty() {
+        return vec![config_modified(path)];
+    }
+    sources
+        .iter()
+        .map(|source| config_modified(source))
+        .collect()
+}
+
 /// Modification time of the configuration file, `None` when it is absent.
 fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path)
@@ -1390,6 +2034,7 @@ fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
         .ok()
 }
 
+/// Lowercase keysym name, the form binding chords are stored in.
 fn keysym_name(sym: xkb::Keysym) -> String {
     xkb::keysym_get_name(sym).to_ascii_lowercase()
 }
@@ -1456,6 +2101,12 @@ fn spawn(command: &str) -> Option<u32> {
     }
 }
 
+/// Whether a surface has a buffer attached, i.e. is mapped. Layer surfaces
+/// unmap by committing a null buffer without being destroyed.
+fn has_buffer(surface: &WlSurface) -> bool {
+    with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
+}
+
 /// Deliver frame callbacks to a toplevel or layer surface tree and to its
 /// popups, which are separate surface trees.
 fn send_frames_surface_and_popups(surface: &WlSurface, time: u32) {
@@ -1501,21 +2152,31 @@ impl CompositorHandler for Veyron {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
 
-        if self
+        if let Some(layer) = self
             .space
             .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-            .is_some()
         {
-            let rearranged = { layer_map_for_output(&self.output).arrange() };
-            if rearranged {
-                let layers: Vec<_> = layer_map_for_output(&self.output)
-                    .layers()
-                    .cloned()
-                    .collect();
-                for layer in layers {
-                    layer.layer_surface().send_pending_configure();
-                }
+            // A commit can change anchors, size, exclusive zone or keyboard
+            // interactivity, and attaching or dropping a buffer maps or
+            // unmaps the surface: re-arrange, retile and move the keyboard.
+            self.arrange_layers();
+            // The protocol wants the first configure in reply to the initial
+            // commit, when the client has set its size and anchors.
+            let initial_configure_sent = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<LayerSurfaceData>()
+                    .map(|data| {
+                        data.lock()
+                            .expect("layer surface attributes are not poisoned")
+                            .initial_configure_sent
+                    })
+                    .unwrap_or(true)
+            });
+            if !initial_configure_sent {
+                layer.layer_surface().send_configure();
             }
+            self.sync_keyboard_focus();
             self.needs_redraw = true;
             return;
         }
@@ -1611,6 +2272,9 @@ impl XdgShellHandler for Veyron {
         let window = Window::new_wayland_window(surface);
         let id = self.wm.create_window(NewWindow::default());
         self.windows.insert(id, window);
+        // A new window takes the keyboard from a layer focused on demand,
+        // but not from an exclusive one such as an open launcher.
+        self.layer_focus = None;
         self.sync_layout();
         self.sync_focus();
         self.needs_redraw = true;
@@ -1655,6 +2319,8 @@ impl XdgShellHandler for Veyron {
             self.mapped.remove(&id);
             self.configured.remove(&id);
             self.animations.remove(&id);
+            self.opening.remove(&id);
+            self.grab = self.grab.filter(|grab| grab.kind.window() != id);
             self.wm.remove_window(id);
             self.sync_layout();
             self.sync_focus();
@@ -1668,17 +2334,39 @@ impl XdgShellHandler for Veyron {
         self.needs_redraw = true;
     }
 
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        self.client_grab(&surface, serial, None);
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: wl_seat::WlSeat,
+        serial: Serial,
+        edges: xdg_toplevel::ResizeEdge,
+    ) {
+        self.client_grab(&surface, serial, Some(xdg_edges(edges)));
+    }
+
     fn fullscreen_request(
         &mut self,
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
-        // Fullscreen is compositor policy in Veyron: acknowledge the request
-        // without changing the layout.
-        surface.send_configure();
+        self.client_fullscreen(&surface, true);
     }
 
-    fn unfullscreen_request(&mut self, _surface: ToplevelSurface) {}
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.client_fullscreen(&surface, false);
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        self.client_maximize(&surface, true);
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        self.client_maximize(&surface, false);
+    }
 }
 
 impl WlrLayerShellHandler for Veyron {
@@ -1708,8 +2396,8 @@ impl WlrLayerShellHandler for Veyron {
             tracing::warn!("could not map a layer surface");
             return;
         }
-        // Mapping arranged the surface, so this is its initial configure.
-        layer_surface.layer_surface().send_configure();
+        // The initial configure is sent when the client's initial commit
+        // arrives (see `commit`), once its size and anchors are known.
         self.needs_redraw = true;
     }
 
@@ -1720,6 +2408,14 @@ impl WlrLayerShellHandler for Veyron {
             .cloned();
         if let Some(layer) = doomed {
             layer_map_for_output(&self.output).unmap_layer(&layer);
+            if self.layer_focus.as_ref() == Some(layer.wl_surface()) {
+                self.layer_focus = None;
+            }
+            // A panel going away gives its exclusive zone back to windows; a
+            // launcher going away gives the keyboard back to the focused
+            // window.
+            self.arrange_layers();
+            self.sync_keyboard_focus();
             self.needs_redraw = true;
         }
     }

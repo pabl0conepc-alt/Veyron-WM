@@ -6,11 +6,12 @@
 - Sparse 2D workspace navigation, transfer and state coordinates now have
   passing CI coverage. The visible nested title indicator and navigation still
   need validation in the target Plasma session.
-- Floating windows can be moved and resized by keyboard or IPC, and moved with
-  `super` + left-button drag (clamped to the viewport, sharing
-  `Wm::move_floating_to` with the keyboard path). Pointer resize, client-
-  initiated `xdg_toplevel.move/resize`, popup grabs and drag-and-drop are not
-  wired; the drag has not been runtime-tested in a nested session.
+- Floating windows can be moved (`super` + left drag) and resized (`super` +
+  right drag) with the pointer, and clients can start the same grabs from
+  their own title bars (`xdg_toplevel.move/resize`). Tiled windows ignore
+  pointer grabs (use the `width`/`height`/`resize` actions). Popup grabs and
+  drag-and-drop are not wired, and the grabs have not been runtime-tested in a
+  nested session (the harness cannot inject pointer input).
 - Rendering now uses Smithay's output damage tracker and buffer age when
   available. The nested implementation has not yet been runtime-checked on the
   target EGL driver, and must fall back to full redraw if age is unavailable.
@@ -20,8 +21,9 @@
   commit, but they have not been visually validated in a nested session.
 - The nested scene graph animates window positions between layouts and slides a
   newly active workspace in from the direction of travel, with a per-rule
-  `animation = false` opt-out. Client sizes still configure at their target,
-  opening and closing are not animated, and no visible nested-session check has
+  `animation = false` opt-out. New windows rise
+  24 px and fade in; client sizes still configure at their target, closing is
+  not animated, and no visible nested-session check has
   been performed.
 - The renderer draws each window with the opacity its rules request (scene
   elements are built per window instead of with one space-wide alpha). Blur
@@ -40,10 +42,22 @@
   directly. It refuses `Terminal=true` entries, ignores desktop actions and does
   not use D-Bus activation, so applications relying on either need an explicit
   `spawn` binding.
-- `zwlr_layer_shell_v1` surfaces render with their exclusive zones and receive
-  frame callbacks, and now receive pointer input: overlay/top layers above
-  windows, bottom/background layers where no window is. Keyboard
-  interactivity on layer surfaces is not implemented yet.
+- `zwlr_layer_shell_v1` surfaces receive frame callbacks and pointer input
+  (overlay/top layers above windows, bottom/background layers where no window
+  is), and their exclusive zones shrink the tiling/floating viewport.
+  Keyboard interactivity is honoured: a mapped overlay/top surface asking for
+  `exclusive` holds the keyboard until it unmaps (compositor bindings still
+  work), `on_demand` surfaces take it on click and give it back when a window
+  is clicked or focused, `none` never gets it. Exclusive zones and exclusive
+  keyboard focus are covered by headless tests; click-to-focus for
+  `on_demand` is untested (the harness cannot inject pointer input), and none
+  of it has been checked with real waybar/rofi/fuzzel in a nested session.
+- While a window is fullscreen it covers the whole output (no outer margin,
+  no panel zone) and top-layer surfaces such as bars are drawn below it; a
+  launcher on the top layer is therefore hidden and does not take the
+  keyboard during fullscreen. Launchers on the overlay layer are unaffected.
+- Only one exclusive layer surface holds the keyboard at a time (the
+  front-most, overlay before top); with several, the others wait.
 - Pointer focus previously passed a surface-relative point where Smithay
   expects the surface's global origin, so clients saw wrong local coordinates;
   this is fixed and subsurfaces/popups under the pointer are now resolved.
@@ -82,5 +96,6 @@
 - On Intel HD Graphics 3000 in the nested window, the faint outer edge of the
   GPU shadows shows a slight dotted (dithered) pattern. It is cosmetic; the
   `flat` design draws no shadows and avoids it.
-- `veyronctl watch` samples the state four times a second instead of receiving
-  pushed events; it emits a line only when the state changes.
+- `install.sh` supports glibc systems only (no Alpine or other musl systems)
+  and cannot install system packages on image-based systems such as Fedora
+  Atomic: it warns and leaves the libraries to the user.
