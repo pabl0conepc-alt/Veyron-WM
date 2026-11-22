@@ -11,8 +11,99 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     snap::{PipCorner, SnapZone},
+    theme::ThemeMode,
     tiling::LayoutKind,
 };
+
+/// Runtime theme changes (`theme <op>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "kebab-case")]
+pub enum ThemeOp {
+    /// Switch between dark and light (`theme toggle`).
+    Toggle,
+    /// Force a mode (`theme dark`, `theme light`).
+    Mode { mode: ThemeMode },
+    /// Use a seed colour or preset name (`theme seed #0061a4`, `theme seed ocean`).
+    Seed { seed: String },
+    /// Use the next preset seed (`theme next`).
+    NextPreset,
+    /// Use a scheme variant (`theme variant vibrant`).
+    Variant { variant: String },
+    /// Use the next scheme variant (`theme variant next`).
+    NextVariant,
+    /// Use a decoration style (`theme design glass`).
+    Design { design: String },
+    /// Use the next decoration style (`theme design next`).
+    NextDesign,
+}
+
+impl ThemeOp {
+    fn parse(rest: &str) -> Result<ThemeOp, ActionParseError> {
+        let (head, value) = match rest.split_once(char::is_whitespace) {
+            Some((head, value)) => (head, value.trim()),
+            None => (rest, ""),
+        };
+        let op = match (head.to_ascii_lowercase().as_str(), value) {
+            ("toggle", "") => ThemeOp::Toggle,
+            ("dark", "") => ThemeOp::Mode {
+                mode: ThemeMode::Dark,
+            },
+            ("light", "") => ThemeOp::Mode {
+                mode: ThemeMode::Light,
+            },
+            ("next", "") => ThemeOp::NextPreset,
+            ("seed", seed) if !seed.is_empty() => {
+                crate::theme::resolve_seed(seed).map_err(ActionParseError::new)?;
+                ThemeOp::Seed {
+                    seed: seed.to_string(),
+                }
+            }
+            ("variant", "next") => ThemeOp::NextVariant,
+            ("variant", variant) if !variant.is_empty() => {
+                crate::theme::parse_variant(variant).map_err(ActionParseError::new)?;
+                ThemeOp::Variant {
+                    variant: variant.to_string(),
+                }
+            }
+            ("design", "next") => ThemeOp::NextDesign,
+            ("design", design) if !design.is_empty() => {
+                crate::theme::Design::preset(design).map_err(ActionParseError::new)?;
+                ThemeOp::Design {
+                    design: design.to_ascii_lowercase(),
+                }
+            }
+            _ => {
+                return Err(ActionParseError::new(format!(
+                    "theme expects toggle, dark, light, next, seed <colour|preset>, \
+                     variant <name|next> or design <name|next>, got '{rest}'"
+                )))
+            }
+        };
+        Ok(op)
+    }
+}
+
+impl fmt::Display for ThemeOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ThemeOp::Toggle => f.write_str("toggle"),
+            ThemeOp::Mode { mode } => f.write_str(mode.as_str()),
+            ThemeOp::Seed { seed } => write!(f, "seed {seed}"),
+            ThemeOp::NextPreset => f.write_str("next"),
+            ThemeOp::Variant { variant } => write!(f, "variant {variant}"),
+            ThemeOp::NextVariant => f.write_str("variant next"),
+            ThemeOp::Design { design } => write!(f, "design {design}"),
+            ThemeOp::NextDesign => f.write_str("design next"),
+        }
+    }
+}
+
+/// Parse a signed integer argument for `name`.
+fn parse_signed(name: &str, rest: &str) -> Result<i32, ActionParseError> {
+    rest.trim_start_matches('+')
+        .parse::<i32>()
+        .map_err(|_| ActionParseError::new(format!("{name} needs an integer, got '{rest}'")))
+}
 
 /// A spatial direction used by focus and move actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -154,6 +245,21 @@ pub enum Action {
     GroupToggle,
     /// Cycle focus inside the focused window's group.
     GroupCycle { delta: i32 },
+    /// Cycle focus through the visible windows of the active workspace in
+    /// draw order, like alt-tab (`focus-cycle next|prev`).
+    FocusCycle { delta: i32 },
+    /// Move the focused window to a 1-based workspace index and follow it.
+    MoveToWorkspaceIndex { index: usize },
+    /// Center the focused floating window in the viewport.
+    CenterFloating,
+    /// Grow or shrink the inner gap at runtime, in logical pixels.
+    Gaps { delta: i32 },
+    /// Change the focused window's opacity by a percentage (`opacity -10`).
+    Opacity { delta: i32 },
+    /// Change the Material You theme at runtime.
+    Theme { op: ThemeOp },
+    /// Open the preferred terminal: `$TERMINAL`, or the first one installed.
+    Terminal,
     /// Run a shell command.
     Spawn { command: String },
     /// Reload the configuration file.
@@ -367,6 +473,34 @@ impl Action {
             "group-prev" | "group-previous" => {
                 without_argument(rest, Action::GroupCycle { delta: -1 })
             }
+            "focus-cycle" | "cycle" | "cyclenext" => match rest.to_ascii_lowercase().as_str() {
+                "" | "next" => Ok(Action::FocusCycle { delta: 1 }),
+                "prev" | "previous" => Ok(Action::FocusCycle { delta: -1 }),
+                other => Err(ActionParseError::new(format!(
+                    "focus-cycle takes 'next' or 'prev', got '{other}'"
+                ))),
+            },
+            "move-to-workspace" | "movetoworkspace" => {
+                let index = rest.parse::<usize>().ok().filter(|index| *index > 0);
+                index
+                    .map(|index| Action::MoveToWorkspaceIndex { index })
+                    .ok_or_else(|| {
+                        ActionParseError::new(format!(
+                            "move-to-workspace needs a workspace number from 1, got '{rest}'"
+                        ))
+                    })
+            }
+            "center-floating" | "centerwindow" => without_argument(rest, Action::CenterFloating),
+            "gaps" => Ok(Action::Gaps {
+                delta: parse_signed("gaps", rest)?,
+            }),
+            "opacity" => Ok(Action::Opacity {
+                delta: parse_signed("opacity", rest)?,
+            }),
+            "theme" => Ok(Action::Theme {
+                op: ThemeOp::parse(rest)?,
+            }),
+            "terminal" | "spawn-terminal" => without_argument(rest, Action::Terminal),
             "spawn" | "exec" => {
                 if rest.is_empty() {
                     return Err(ActionParseError::new("spawn needs a command"));
@@ -438,6 +572,14 @@ impl fmt::Display for Action {
             Action::GroupToggle => f.write_str("group"),
             Action::GroupCycle { delta } if *delta > 0 => f.write_str("group next"),
             Action::GroupCycle { .. } => f.write_str("group prev"),
+            Action::FocusCycle { delta } if *delta > 0 => f.write_str("focus-cycle next"),
+            Action::FocusCycle { .. } => f.write_str("focus-cycle prev"),
+            Action::MoveToWorkspaceIndex { index } => write!(f, "move-to-workspace {index}"),
+            Action::CenterFloating => f.write_str("center-floating"),
+            Action::Gaps { delta } => write!(f, "gaps {delta}"),
+            Action::Opacity { delta } => write!(f, "opacity {delta}"),
+            Action::Theme { op } => write!(f, "theme {op}"),
+            Action::Terminal => f.write_str("terminal"),
             Action::Spawn { command } => write!(f, "spawn {command}"),
             Action::ReloadConfig => f.write_str("reload"),
             Action::Quit => f.write_str("quit"),
@@ -526,6 +668,45 @@ mod tests {
             Action::GroupToggle,
             Action::GroupCycle { delta: 1 },
             Action::GroupCycle { delta: -1 },
+            Action::FocusCycle { delta: 1 },
+            Action::FocusCycle { delta: -1 },
+            Action::MoveToWorkspaceIndex { index: 3 },
+            Action::CenterFloating,
+            Action::Gaps { delta: -4 },
+            Action::Opacity { delta: 10 },
+            Action::Theme {
+                op: ThemeOp::Toggle,
+            },
+            Action::Theme {
+                op: ThemeOp::Mode {
+                    mode: ThemeMode::Light,
+                },
+            },
+            Action::Theme {
+                op: ThemeOp::Seed {
+                    seed: "#0061a4".into(),
+                },
+            },
+            Action::Theme {
+                op: ThemeOp::NextPreset,
+            },
+            Action::Theme {
+                op: ThemeOp::Variant {
+                    variant: "vibrant".into(),
+                },
+            },
+            Action::Theme {
+                op: ThemeOp::NextVariant,
+            },
+            Action::Theme {
+                op: ThemeOp::Design {
+                    design: "glass".into(),
+                },
+            },
+            Action::Theme {
+                op: ThemeOp::NextDesign,
+            },
+            Action::Terminal,
             Action::Spawn {
                 command: "alacritty --class veyron".into(),
             },

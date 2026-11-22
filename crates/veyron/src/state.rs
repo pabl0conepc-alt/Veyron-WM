@@ -19,7 +19,15 @@ use smithay::{
             PointerAxisEvent, PointerButtonEvent,
         },
         renderer::{
-            damage::OutputDamageTracker, gles::GlesRenderer, utils::on_commit_buffer_handler,
+            damage::OutputDamageTracker,
+            element::{
+                render_elements,
+                solid::{SolidColorBuffer, SolidColorRenderElement},
+                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
+                AsRenderElements, Kind,
+            },
+            gles::{element::PixelShaderElement, GlesRenderer},
+            utils::on_commit_buffer_handler,
         },
         winit::{WinitEvent, WinitGraphicsBackend, WinitInput},
     },
@@ -28,17 +36,18 @@ use smithay::{
         Window, WindowSurfaceType,
     },
     input::{
-        keyboard::{xkb, FilterResult, KeyboardHandle, KeysymHandle},
+        keyboard::{xkb, FilterResult, KeyboardHandle},
         pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent, PointerHandle},
         Seat, SeatHandler, SeatState,
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
+    reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode,
     reexports::wayland_server::{
         backend::{ClientData, ClientId, DisconnectReason},
         protocol::{wl_buffer, wl_output, wl_seat, wl_shm, wl_surface::WlSurface},
         Client, DisplayHandle,
     },
-    utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, Scale, Serial, Transform, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{
@@ -57,6 +66,7 @@ use smithay::{
                 Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState,
             },
             xdg::{
+                decoration::{XdgDecorationHandler, XdgDecorationState},
                 PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
                 XdgToplevelSurfaceData,
             },
@@ -65,15 +75,21 @@ use smithay::{
     },
 };
 use veyron_core::{
-    workspace_slide, Action, Config, Effects, Modifiers, NewWindow, Rect, RectAnimator, Session,
-    Size as VSize, WindowId, Wm, WorkspacePosition,
+    workspace_slide, Action, Config, Design, Effects, Modifiers, NewWindow, Palette, Rect,
+    RectAnimator, Session, Size as VSize, Snapshot, WindowId, Wm, WorkspacePosition,
 };
 use veyron_ipc::{
-    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, WindowReport,
-    MAX_LINE_BYTES,
+    OverviewReport, OverviewTileReport, OverviewWindowReport, Response, StateReport, ThemeReport,
+    WindowReport, MAX_LINE_BYTES,
 };
 
-use crate::ipc::Job;
+use crate::{
+    decoration::{Decoration, DecorationParams, RoundedSurface, Shaders},
+    ipc::Job,
+};
+
+/// Linux input event code of the left mouse button.
+const BTN_LEFT: u32 = 0x110;
 
 /// Pixel offset applied per wheel notch when the backend reports discrete steps.
 const AXIS_STEP_PIXELS: f64 = 15.0;
@@ -98,6 +114,9 @@ impl ClientData for ClientState {
 pub struct Veyron {
     start: Instant,
     config_path: PathBuf,
+    /// Modification time of the configuration file when it was last read, so
+    /// edits are picked up automatically.
+    config_stamp: Option<std::time::SystemTime>,
 
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
@@ -109,6 +128,9 @@ pub struct Veyron {
     /// Serves `zwlr_layer_shell_v1`: panels, notification daemons, wallpapers
     /// and OSDs are ordinary clients of this protocol.
     layer_shell_state: WlrLayerShellState,
+    /// Serves `zxdg_decoration_manager_v1`: Veyron draws borders, shadows and
+    /// rounded corners itself, so clients are asked not to draw title bars.
+    _decoration_state: XdgDecorationState,
     popup_manager: PopupManager,
 
     /// Kept alive so the seat and its globals stay registered.
@@ -137,6 +159,13 @@ pub struct Veyron {
     last_workspace_position: WorkspacePosition,
 
     pointer_location: Point<f64, Logical>,
+    /// Floating window being dragged with `super` + left button, and the
+    /// pointer's offset from its top-left corner when the drag started.
+    drag: Option<(WindowId, Point<f64, Logical>)>,
+    /// Material You scheme generated from `[theme]`.
+    palette: Palette,
+    /// Window decorations (borders, shadows, rounded corners) kept across frames.
+    chrome: Chrome,
     needs_redraw: bool,
     /// Set when the compositor should exit.
     pub exit: bool,
@@ -195,6 +224,7 @@ impl Veyron {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let decoration_state = XdgDecorationState::new::<Self>(&dh);
         let popup_manager = PopupManager::default();
 
         let output = Output::new(
@@ -225,8 +255,10 @@ impl Veyron {
         let startup = config.startup.clone();
         let wm = Wm::new(config, "VEYRON-1", size);
 
-        let state = Self {
+        let palette = wm.config().theme.palette();
+        let mut state = Self {
             start: Instant::now(),
+            config_stamp: config_modified(&config_path),
             config_path,
             compositor_state,
             xdg_shell_state,
@@ -235,6 +267,7 @@ impl Veyron {
             data_device_state,
             _output_manager_state: output_manager_state,
             layer_shell_state,
+            _decoration_state: decoration_state,
             popup_manager,
             _seat: seat,
             keyboard,
@@ -251,11 +284,15 @@ impl Veyron {
             last_animation_frame: Instant::now(),
             last_workspace_position: WorkspacePosition::default(),
             pointer_location: (0.0, 0.0).into(),
+            drag: None,
+            palette,
+            chrome: Chrome::default(),
             needs_redraw: true,
             exit: false,
         };
 
         state.output.create_global::<Self>(&dh);
+        state.refresh_theme();
 
         for command in startup {
             spawn(&command);
@@ -345,15 +382,19 @@ impl Veyron {
                 if key_state != KeyState::Pressed {
                     return FilterResult::Forward;
                 }
-                let name = keysym_name(&keysym);
                 let modifiers = Modifiers {
                     ctrl: modifiers.ctrl,
                     alt: modifiers.alt,
                     shift: modifiers.shift,
                     logo: modifiers.logo,
                 };
-                match data.wm.config().lookup(modifiers, &name) {
-                    Some(action) => FilterResult::Intercept(action.clone()),
+                match binding_for(
+                    data.wm.config(),
+                    modifiers,
+                    keysym.raw_latin_sym_or_raw_current_sym(),
+                    keysym.modified_sym(),
+                ) {
+                    Some(action) => FilterResult::Intercept(action),
                     None => FilterResult::Forward,
                 }
             },
@@ -373,6 +414,19 @@ impl Veyron {
         let location: Point<f64, Logical> =
             Point::from((surface_position.x / scale, surface_position.y / scale));
         self.pointer_location = location;
+
+        if let Some((id, offset)) = self.drag {
+            let corner = location - offset;
+            if self
+                .wm
+                .move_floating_to(id, corner.x.round() as i32, corner.y.round() as i32)
+            {
+                self.sync_layout();
+                self.needs_redraw = true;
+            }
+            // The dragged client does not see pointer motion during the grab.
+            return;
+        }
 
         let target = self.surface_under(location);
         let serial = SERIAL_COUNTER.next_serial();
@@ -395,7 +449,26 @@ impl Veyron {
     where
         E: PointerButtonEvent<WinitInput>,
     {
-        if event.state() == ButtonState::Pressed {
+        // Only the left button ends a drag: the press that started it was never
+        // sent to the client, while other buttons pressed meanwhile were, and
+        // swallowing their release would leave them stuck in that client.
+        if event.state() == ButtonState::Released
+            && event.button_code() == BTN_LEFT
+            && self.drag.take().is_some()
+        {
+            return;
+        }
+        // A click on a panel, OSD or notification above the windows belongs
+        // to that layer surface; it must not focus, raise or drag the window
+        // underneath.
+        let over_layer = self
+            .layer_surface_under(self.pointer_location, &[Layer::Overlay, Layer::Top])
+            .is_some();
+        if event.state() == ButtonState::Pressed && !over_layer {
+            if let Some(drag) = self.begin_drag(event.button_code()) {
+                self.drag = Some(drag);
+                return;
+            }
             let window = self
                 .space
                 .element_under(self.pointer_location)
@@ -427,18 +500,40 @@ impl Veyron {
         pointer.frame(self);
     }
 
+    /// Start dragging the floating window under the pointer when the left
+    /// button is pressed with `super` held. Tiled windows are left to the
+    /// layout, so the press is forwarded to them as usual.
+    fn begin_drag(&mut self, button: u32) -> Option<(WindowId, Point<f64, Logical>)> {
+        if button != BTN_LEFT || !self.keyboard.modifier_state().logo {
+            return None;
+        }
+        let (window, _) = self.space.element_under(self.pointer_location)?;
+        let window = window.clone();
+        let id = self.window_id(&window)?;
+        if !self.wm.snapshot().is_floating(id) {
+            return None;
+        }
+        let corner = self.space.element_location(&window)?;
+        if self.wm.focus_window(id) {
+            self.sync_focus();
+        }
+        self.space.raise_element(&window, false);
+        self.needs_redraw = true;
+        Some((id, self.pointer_location - corner.to_f64()))
+    }
+
     fn on_pointer_axis<E>(&mut self, event: &E)
     where
         E: PointerAxisEvent<WinitInput>,
     {
         let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
         for axis in [Axis::Horizontal, Axis::Vertical] {
-            if let Some(steps) = event.amount_v120(axis) {
-                frame = frame
-                    .v120(axis, (steps / 120.0).round() as i32)
-                    .value(axis, steps / 120.0 * AXIS_STEP_PIXELS);
-            } else if let Some(amount) = event.amount(axis) {
-                frame = frame.value(axis, amount);
+            let (v120, value) = axis_values(event.amount_v120(axis), event.amount(axis));
+            if let Some(v120) = v120 {
+                frame = frame.v120(axis, v120);
+            }
+            if let Some(value) = value {
+                frame = frame.value(axis, value);
             }
         }
         let pointer = self.pointer.clone();
@@ -463,6 +558,18 @@ impl Veyron {
             spawn(command);
         }
 
+        if effects.spawn_terminal {
+            let preferred = std::env::var("TERMINAL").ok();
+            match veyron_core::pick_terminal(preferred.as_deref(), on_path) {
+                Some(terminal) => {
+                    spawn(&terminal);
+                }
+                None => tracing::warn!(
+                    "no terminal found: set $TERMINAL or install foot, kitty or alacritty"
+                ),
+            }
+        }
+
         if effects.reload_config {
             self.reload_config();
         }
@@ -474,6 +581,10 @@ impl Veyron {
 
         if effects.workspace_changed {
             self.update_workspace_indicator();
+        }
+
+        if effects.theme_changed {
+            self.refresh_theme();
         }
 
         if effects.needs_redraw() {
@@ -489,6 +600,7 @@ impl Veyron {
     pub fn handle_ipc(&mut self, job: Job) {
         let response = match job.request {
             veyron_ipc::Request::Ping => Response::Pong,
+            veyron_ipc::Request::Theme => self.theme_report(),
             veyron_ipc::Request::State => Response::State(self.state_report()),
             veyron_ipc::Request::Overview => Response::Overview(self.overview_report()),
             veyron_ipc::Request::CaptureSession => match self.wm.capture_session().to_toml() {
@@ -640,11 +752,71 @@ impl Veyron {
         self.apply_effects(effects);
     }
 
+    /// Regenerate the Material palette from `[theme]` and, in a real session,
+    /// write it to `$XDG_STATE_HOME/veyron/theme/` for waybar, GTK and shell
+    /// widgets. Headless runs never touch the user's state directory.
+    fn refresh_theme(&mut self) {
+        // Corner radius and colours live in shader uniforms the damage tracker
+        // cannot see, so a theme change redraws the whole output once.
+        if let Some(mode) = self.output.current_mode() {
+            self.damage_tracker = OutputDamageTracker::new(mode.size, 1.0, Transform::Flipped180);
+        }
+        let theme = &self.wm.config().theme;
+        self.palette = theme.palette();
+        self.needs_redraw = true;
+        if !theme.export || self.backend.is_none() {
+            return;
+        }
+        let Some(dir) = veyron_core::theme::export_dir() else {
+            tracing::warn!("no HOME or XDG_STATE_HOME: theme files not exported");
+            return;
+        };
+        match veyron_core::theme::export(&self.palette, &dir) {
+            Ok(0) => {}
+            Ok(written) => {
+                tracing::info!(written, dir = %dir.display(), "theme exported");
+            }
+            Err(error) => {
+                tracing::warn!(%error, dir = %dir.display(), "could not export theme");
+            }
+        }
+    }
+
+    fn theme_report(&self) -> Response {
+        let theme = &self.wm.config().theme;
+        Response::Theme(ThemeReport {
+            mode: theme.mode.as_str().to_string(),
+            seed: theme.seed.clone(),
+            variant: theme.variant.clone(),
+            colors: self
+                .palette
+                .roles
+                .iter()
+                .map(|(role, hex)| ((*role).to_string(), hex.clone()))
+                .collect(),
+            export_dir: veyron_core::theme::export_dir()
+                .filter(|_| theme.export)
+                .map(|dir| dir.display().to_string()),
+        })
+    }
+
+    /// Reload when the configuration file changed since it was last read.
+    /// Called periodically by the event loop.
+    pub fn reload_config_if_changed(&mut self) {
+        let stamp = config_modified(&self.config_path);
+        if stamp != self.config_stamp {
+            self.config_stamp = stamp;
+            tracing::info!(path = %self.config_path.display(), "configuration file changed");
+            self.reload_config();
+        }
+    }
+
     fn reload_config(&mut self) {
         match Config::load_or_default(&self.config_path) {
             Ok(config) => {
                 tracing::info!(path = %self.config_path.display(), "configuration reloaded");
                 self.wm.set_config(config);
+                self.refresh_theme();
             }
             Err(error) => {
                 tracing::error!(%error, path = %self.config_path.display(), "could not reload configuration");
@@ -747,11 +919,10 @@ impl Veyron {
                 self.space.map_element(window.clone(), location, false);
                 self.mapped.insert(placement.window, location);
             }
-            // Floating windows keep the size their client chose.
-            if placement.floating {
-                continue;
-            }
-
+            // Floating windows are configured too: `resize`, snap zones,
+            // picture-in-picture and fullscreen change their rectangle, and
+            // only a configure makes the client follow. Unchanged sizes are
+            // skipped below, so a floating client is not resized needlessly.
             let target_size = (target.w, target.h);
             if self.configured.get(&placement.window) == Some(&target_size) {
                 continue;
@@ -826,12 +997,38 @@ impl Veyron {
         &self,
         location: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let (window, _) = self.space.element_under(location)?;
-        let origin = self.space.element_location(window)?;
-        let toplevel = window.toplevel()?;
-        let surface_location =
-            Point::from((location.x - origin.x as f64, location.y - origin.y as f64));
-        Some((toplevel.wl_surface().clone(), surface_location))
+        // Panels, OSDs and notifications above windows take the pointer first;
+        // wallpapers and desktop layers below only receive it where no window is.
+        if let Some(hit) = self.layer_surface_under(location, &[Layer::Overlay, Layer::Top]) {
+            return Some(hit);
+        }
+        let Some((window, _)) = self.space.element_under(location) else {
+            return self.layer_surface_under(location, &[Layer::Bottom, Layer::Background]);
+        };
+        // Smithay expects the focused surface's origin in global coordinates and
+        // derives surface-local positions from it; subsurfaces and popups are
+        // resolved so they receive their own events.
+        let origin = self.space.element_location(window)? - window.geometry().loc;
+        window
+            .surface_under(location - origin.to_f64(), WindowSurfaceType::ALL)
+            .map(|(surface, offset)| (surface, (origin + offset).to_f64()))
+    }
+
+    /// The layer-shell surface (or one of its subsurfaces) under `location`,
+    /// searching `layers` in order, with that surface's global origin.
+    fn layer_surface_under(
+        &self,
+        location: Point<f64, Logical>,
+        layers: &[Layer],
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let map = layer_map_for_output(&self.output);
+        layers.iter().find_map(|layer| {
+            let surface = map.layer_under(*layer, location)?;
+            let origin = map.layer_geometry(surface)?.loc;
+            surface
+                .surface_under(location - origin.to_f64(), WindowSurfaceType::ALL)
+                .map(|(wl_surface, offset)| (wl_surface, (origin + offset).to_f64()))
+        })
     }
 
     fn window_id(&self, window: &Window) -> Option<WindowId> {
@@ -849,12 +1046,26 @@ impl Veyron {
         // After the first bind, the EGL surface remains current between swaps.
         // A missing or unavailable age forces a correct full redraw in Smithay.
         let age = backend.buffer_age().unwrap_or(0);
-        let background = self.wm.config().appearance.background_rgba();
+        let config = self.wm.config();
+        let background = if config.theme.use_surface_background {
+            self.palette
+                .rgba("surface")
+                .unwrap_or_else(|| config.appearance.background_rgba())
+        } else {
+            config.appearance.background_rgba()
+        };
+        let snapshot = self.wm.snapshot();
         let damage = {
             let (renderer, mut framebuffer) = backend.bind()?;
-            let elements = self
-                .space
-                .render_elements_for_output(renderer, &self.output, 1.0)?;
+            let elements = scene_elements(
+                renderer,
+                &self.space,
+                &self.output,
+                &self.windows,
+                &snapshot,
+                &mut self.chrome,
+                Style::new(self.wm.config(), &self.palette, snapshot.output.h),
+            );
             let rendered = self.damage_tracker.render_output(
                 renderer,
                 &mut framebuffer,
@@ -875,7 +1086,7 @@ impl Veyron {
         let time = self.start.elapsed().as_millis() as u32;
         for window in self.windows.values() {
             if let Some(toplevel) = window.toplevel() {
-                send_frames_surface_tree(toplevel.wl_surface(), time);
+                send_frames_surface_and_popups(toplevel.wl_surface(), time);
             }
         }
         // Panels and other layer clients animate on frame callbacks too.
@@ -884,23 +1095,373 @@ impl Veyron {
             .cloned()
             .collect();
         for layer in layers {
-            send_frames_surface_tree(layer.wl_surface(), time);
+            send_frames_surface_and_popups(layer.wl_surface(), time);
         }
     }
 }
 
-fn keysym_name(handle: &KeysymHandle<'_>) -> String {
-    xkb::keysym_get_name(handle.modified_sym()).to_ascii_lowercase()
+render_elements! {
+    /// Everything a frame is made of: client surfaces (optionally clipped to
+    /// rounded corners), shader-drawn decorations and solid fallback borders.
+    pub SceneElement<=GlesRenderer>;
+    Surface=WaylandSurfaceRenderElement<GlesRenderer>,
+    Rounded=RoundedSurface,
+    Decoration=PixelShaderElement,
+    Solid=SolidColorRenderElement,
 }
 
-fn spawn(command: &str) {
+/// Window decoration appearance for one frame: the active design with the
+/// Material palette's colours.
+#[derive(Debug, Clone, Copy)]
+struct Style {
+    design: Design,
+    active: [f32; 4],
+    inactive: [f32; 4],
+    shadow: [f32; 4],
+    /// Maps framebuffer rows to output rows for the clip shader; the nested
+    /// winit output is drawn vertically flipped.
+    frag_map: [f32; 2],
+}
+
+impl Style {
+    fn new(config: &Config, palette: &Palette, output_height: i32) -> Self {
+        Self {
+            design: config.theme.design(),
+            active: palette.border_active_rgba(),
+            inactive: palette.border_inactive_rgba(),
+            shadow: palette.rgba("shadow").unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            frag_map: [output_height as f32, -1.0],
+        }
+    }
+}
+
+/// Per-window decoration state kept across frames so unchanged decorations
+/// cause no damage, plus the lazily compiled shaders.
+#[derive(Debug, Default)]
+struct Chrome {
+    /// `None` until the first frame tries to compile; `Some(None)` when the
+    /// driver rejected the shaders and square solid borders are used.
+    shaders: Option<Option<Shaders>>,
+    shaded: HashMap<WindowId, Decoration>,
+    solid: HashMap<WindowId, [SolidColorBuffer; 4]>,
+}
+
+impl Chrome {
+    fn shaders(&mut self, renderer: &mut GlesRenderer) -> Option<Shaders> {
+        self.shaders
+            .get_or_insert_with(|| match Shaders::compile(renderer) {
+                Ok(shaders) => Some(shaders),
+                Err(error) => {
+                    tracing::warn!(%error, "decoration shaders unavailable, using square borders");
+                    None
+                }
+            })
+            .clone()
+    }
+
+    fn forget_hidden(&mut self, snapshot: &Snapshot) {
+        self.shaded
+            .retain(|id, _| snapshot.placement_of(*id).is_some());
+        self.solid
+            .retain(|id, _| snapshot.placement_of(*id).is_some());
+    }
+}
+
+/// Build the frame's render elements front to back: overlay and top layer
+/// surfaces, then windows from the top of the stack down, each followed by
+/// its decoration, then bottom and background layer surfaces.
+///
+/// A window's popups are drawn unclipped in front of it; its own surface tree
+/// is clipped to rounded corners when the design asks for them. The output is
+/// unscaled (scale 1.0), so logical and physical coordinates coincide.
+fn scene_elements(
+    renderer: &mut GlesRenderer,
+    space: &Space<Window>,
+    output: &Output,
+    windows: &HashMap<WindowId, Window>,
+    snapshot: &Snapshot,
+    chrome: &mut Chrome,
+    style: Style,
+) -> Vec<SceneElement> {
+    let scale = Scale::from(1.0);
+    let mut elements = Vec::new();
+    let map = layer_map_for_output(output);
+    let push_layers =
+        |elements: &mut Vec<SceneElement>, layer: Layer, renderer: &mut GlesRenderer| {
+            for surface in map.layers_on(layer).rev() {
+                if let Some(geometry) = map.layer_geometry(surface) {
+                    elements.extend(
+                        surface
+                            .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                                renderer,
+                                geometry.loc.to_physical_precise_round(1.0),
+                                scale,
+                                1.0,
+                            )
+                            .into_iter()
+                            .map(SceneElement::from),
+                    );
+                }
+            }
+        };
+    push_layers(&mut elements, Layer::Overlay, renderer);
+    push_layers(&mut elements, Layer::Top, renderer);
+
+    let design = style.design;
+    let shaders = if design.needs_shader() {
+        chrome.shaders(renderer)
+    } else {
+        None
+    };
+
+    // `Space::elements` yields bottom to top; elements are drawn front first.
+    let stacked: Vec<&Window> = space.elements().collect();
+    for window in stacked.into_iter().rev() {
+        let Some(location) = space.element_location(window) else {
+            continue;
+        };
+        let id = windows
+            .iter()
+            .find(|(_, candidate)| *candidate == window)
+            .map(|(id, _)| *id);
+        let placement = id.and_then(|id| snapshot.placement_of(id));
+        let focused = id.is_some() && snapshot.focused == id;
+        let fullscreen = placement.is_some_and(|placement| placement.fullscreen);
+        let mut alpha = placement.map_or(1.0, |placement| placement.opacity.clamp(0.0, 1.0));
+        if !focused && !fullscreen {
+            alpha *= design.inactive_opacity;
+        }
+        let geometry = window.geometry();
+        let origin = (location - geometry.loc).to_physical_precise_round(1.0);
+        let window_rect = Rectangle::new(location, geometry.size);
+
+        match (&shaders, window.toplevel()) {
+            (Some(shaders), Some(toplevel)) if design.corner_radius > 0 && !fullscreen => {
+                let surface = toplevel.wl_surface();
+                for (popup, offset) in PopupManager::popups_for_surface(surface) {
+                    let popup_origin = origin
+                        + (geometry.loc + offset - popup.geometry().loc)
+                            .to_physical_precise_round(1.0);
+                    elements.extend(
+                        render_elements_from_surface_tree::<
+                            _,
+                            WaylandSurfaceRenderElement<GlesRenderer>,
+                        >(
+                            renderer,
+                            popup.wl_surface(),
+                            popup_origin,
+                            scale,
+                            alpha,
+                            Kind::Unspecified,
+                        )
+                        .into_iter()
+                        .map(SceneElement::from),
+                    );
+                }
+                let clip = window_rect.to_physical_precise_round(1.0);
+                elements.extend(
+                    render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
+                        renderer,
+                        surface,
+                        origin,
+                        scale,
+                        alpha,
+                        Kind::Unspecified,
+                    )
+                    .into_iter()
+                    .map(|element| {
+                        SceneElement::from(shaders.rounded(
+                            element,
+                            clip,
+                            design.corner_radius as f32,
+                            style.frag_map,
+                        ))
+                    }),
+                );
+            }
+            _ => elements.extend(
+                window
+                    .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                        renderer, origin, scale, alpha,
+                    )
+                    .into_iter()
+                    .map(SceneElement::from),
+            ),
+        }
+
+        let Some(id) = id.filter(|_| placement.is_some() && !fullscreen) else {
+            continue;
+        };
+        let mut border = if focused {
+            style.active
+        } else {
+            style.inactive
+        };
+        border[3] *= alpha;
+
+        if let Some(shaders) = &shaders {
+            let mut shadow = if design.glow && focused {
+                style.active
+            } else {
+                style.shadow
+            };
+            shadow[3] = design.shadow_opacity * alpha;
+            let params = DecorationParams {
+                window: window_rect,
+                radius: design.corner_radius,
+                border_width: design.border_width,
+                border_color: border,
+                shadow_color: shadow,
+                shadow_size: design.shadow_size,
+                shadow_offset: design.shadow_offset,
+                frag_map: style.frag_map,
+            };
+            let decoration = chrome
+                .shaded
+                .entry(id)
+                .or_insert_with(|| Decoration::new(shaders.decoration_program(), params));
+            decoration.update(params);
+            elements.push(SceneElement::from(decoration.element()));
+            continue;
+        }
+
+        if design.border_width <= 0 {
+            continue;
+        }
+        let (x, y, w, h, b) = (
+            location.x,
+            location.y,
+            geometry.size.w,
+            geometry.size.h,
+            design.border_width,
+        );
+        // Top, bottom, left, right: the frame sits just outside the window.
+        let sides = [
+            (x - b, y - b, w + 2 * b, b),
+            (x - b, y + h, w + 2 * b, b),
+            (x - b, y, b, h),
+            (x + w, y, b, h),
+        ];
+        let buffers = chrome
+            .solid
+            .entry(id)
+            .or_insert_with(|| std::array::from_fn(|_| SolidColorBuffer::new((0, 0), [0.0; 4])));
+        for (buffer, (sx, sy, sw, sh)) in buffers.iter_mut().zip(sides) {
+            buffer.update((sw, sh), border);
+            elements.push(SceneElement::from(SolidColorRenderElement::from_buffer(
+                buffer,
+                (sx, sy),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            )));
+        }
+    }
+    chrome.forget_hidden(snapshot);
+
+    push_layers(&mut elements, Layer::Bottom, renderer);
+    push_layers(&mut elements, Layer::Background, renderer);
+    elements
+}
+
+/// The action bound to a key press. The unmodified (level 1) symbol is used,
+/// preferring a Latin layout, so `super+shift+1` matches the `1` key instead
+/// of `exclam`, `alt+shift+tab` matches `tab` instead of `iso_left_tab`, and
+/// bindings keep working on non-Latin layouts. A chord written with the typed
+/// symbol (`super+shift+plus`, as before raw symbols were used) still matches
+/// when no binding uses the unshifted key.
+fn binding_for(
+    config: &Config,
+    modifiers: Modifiers,
+    raw: Option<xkb::Keysym>,
+    modified: xkb::Keysym,
+) -> Option<Action> {
+    raw.into_iter()
+        .chain(std::iter::once(modified))
+        .find_map(|sym| config.lookup(modifiers, &keysym_name(sym)))
+        .cloned()
+}
+
+/// Lowercase keysym name, the form binding chords are stored in.
+/// Modification time of the configuration file, `None` when it is absent.
+fn config_modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+fn keysym_name(sym: xkb::Keysym) -> String {
+    xkb::keysym_get_name(sym).to_ascii_lowercase()
+}
+
+/// Discrete and continuous scroll amounts for one axis of a pointer-axis
+/// event: the `v120` value (120 per wheel notch) and the scroll distance.
+fn axis_values(v120: Option<f64>, amount: Option<f64>) -> (Option<i32>, Option<f64>) {
+    match v120 {
+        // Smithay expects the raw v120 value, not a notch count: passing
+        // notches made every wheel click 1/120 of a step for clients.
+        Some(v120) => (
+            Some(v120.round() as i32),
+            Some(v120 / 120.0 * AXIS_STEP_PIXELS),
+        ),
+        None => (None, amount),
+    }
+}
+
+/// Wait for a child on a small background thread. A dropped `Child` is never
+/// waited for, so every exited application stayed a zombie process until the
+/// compositor itself exited.
+pub(crate) fn reap(mut child: std::process::Child) {
+    let reaper = std::thread::Builder::new()
+        .name("veyron-reaper".to_string())
+        .stack_size(64 * 1024)
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    if let Err(error) = reaper {
+        tracing::warn!(%error, "could not start a thread to reap a child process");
+    }
+}
+
+/// Run a shell command, returning the child's process id.
+/// Whether `program` is an executable file in a `PATH` directory.
+fn on_path(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        std::fs::metadata(dir.join(program))
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    })
+}
+
+fn spawn(command: &str) -> Option<u32> {
     match std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .spawn()
     {
-        Ok(_) => tracing::info!(command, "spawned command"),
-        Err(error) => tracing::error!(%error, command, "could not spawn command"),
+        Ok(child) => {
+            tracing::info!(command, "spawned command");
+            let pid = child.id();
+            reap(child);
+            Some(pid)
+        }
+        Err(error) => {
+            tracing::error!(%error, command, "could not spawn command");
+            None
+        }
+    }
+}
+
+/// Deliver frame callbacks to a toplevel or layer surface tree and to its
+/// popups, which are separate surface trees.
+fn send_frames_surface_and_popups(surface: &WlSurface, time: u32) {
+    send_frames_surface_tree(surface, time);
+    for (popup, _) in PopupManager::popups_for_surface(surface) {
+        send_frames_surface_tree(popup.wl_surface(), time);
     }
 }
 
@@ -959,6 +1520,15 @@ impl CompositorHandler for Veyron {
             return;
         }
         self.popup_manager.commit(surface);
+        // A popup may not attach a buffer before its first configure, and
+        // nothing else sends one: without this, menus never appear.
+        if let Some(PopupKind::Xdg(popup)) = self.popup_manager.find_popup(surface) {
+            if !popup.is_initial_configure_sent() {
+                if let Err(error) = popup.send_configure() {
+                    tracing::warn!(?error, "could not configure a popup");
+                }
+            }
+        }
 
         let mut committed = None;
         for (id, window) in &self.windows {
@@ -974,6 +1544,14 @@ impl CompositorHandler for Veyron {
 
         if let Some(id) = committed {
             self.sync_identity(id);
+            // `sync_layout` only configures windows that have a placement; one
+            // opened behind a fullscreen window has none yet, and a client
+            // may not draw before its first configure.
+            if let Some(toplevel) = self.windows.get(&id).and_then(Window::toplevel) {
+                if !toplevel.is_initial_configure_sent() {
+                    toplevel.send_configure();
+                }
+            }
         }
 
         self.needs_redraw = true;
@@ -1158,9 +1736,109 @@ impl WlrLayerShellHandler for Veyron {
 }
 
 smithay::delegate_layer_shell!(Veyron);
+
+/// Every toplevel gets server-side decorations: Veyron draws its own borders,
+/// shadows and rounded corners, and client title bars would sit inside them.
+impl XdgDecorationHandler for Veyron {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        set_server_side(&toplevel);
+    }
+
+    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
+        set_server_side(&toplevel);
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        set_server_side(&toplevel);
+    }
+}
+
+fn set_server_side(toplevel: &ToplevelSurface) {
+    toplevel.with_pending_state(|state| {
+        state.decoration_mode = Some(DecorationMode::ServerSide);
+    });
+    // Before the initial configure the mode simply rides along with it.
+    if toplevel.is_initial_configure_sent() {
+        toplevel.send_pending_configure();
+    }
+}
+
+smithay::delegate_xdg_decoration!(Veyron);
 smithay::delegate_compositor!(Veyron);
 smithay::delegate_xdg_shell!(Veyron);
 smithay::delegate_shm!(Veyron);
 smithay::delegate_seat!(Veyron);
 smithay::delegate_data_device!(Veyron);
 smithay::delegate_output!(Veyron);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_notches_are_reported_in_v120_units() {
+        // One notch is 120: clients divide by 120 themselves, and Smithay
+        // derives `axis_discrete` for older clients from whole multiples.
+        assert_eq!(
+            axis_values(Some(120.0), None),
+            (Some(120), Some(AXIS_STEP_PIXELS))
+        );
+        assert_eq!(
+            axis_values(Some(-240.0), None),
+            (Some(-240), Some(-2.0 * AXIS_STEP_PIXELS))
+        );
+        assert_eq!(axis_values(None, Some(3.5)), (None, Some(3.5)));
+        assert_eq!(axis_values(None, None), (None, None));
+    }
+
+    #[test]
+    fn bindings_match_the_unshifted_key_and_fall_back_to_the_typed_symbol() {
+        let config = Config::from_toml_str(
+            r#"
+            [bindings]
+            "super+shift+1" = "move-to-workspace 1"
+            "super+shift+plus" = "gaps 4"
+            "#,
+        )
+        .expect("valid config");
+        let shifted = Modifiers {
+            shift: true,
+            logo: true,
+            ..Modifiers::default()
+        };
+        // US layout: shift+1 types `exclam`, shift+equal types `plus`.
+        assert_eq!(
+            binding_for(&config, shifted, Some(xkb::Keysym::_1), xkb::Keysym::exclam),
+            Some(Action::MoveToWorkspaceIndex { index: 1 })
+        );
+        assert_eq!(
+            binding_for(
+                &config,
+                shifted,
+                Some(xkb::Keysym::equal),
+                xkb::Keysym::plus
+            ),
+            Some(Action::Gaps { delta: 4 }),
+            "a chord written with the shifted symbol keeps working"
+        );
+        assert_eq!(
+            binding_for(&config, shifted, Some(xkb::Keysym::_2), xkb::Keysym::at),
+            None
+        );
+    }
+
+    #[test]
+    fn spawned_commands_do_not_linger_as_zombies() {
+        let pid = spawn("exit 0").expect("sh is available");
+        let stat = PathBuf::from(format!("/proc/{pid}/stat"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // `/proc/<pid>` disappears once the exited child has been reaped.
+        while stat.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "child {pid} exited but was never reaped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}

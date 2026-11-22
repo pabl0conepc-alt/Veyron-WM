@@ -30,3 +30,26 @@ workspace = true
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+
+# Debian/Ubuntu package, built with `cargo deb -p veyron` (see README.md).
+# libwayland-client, libxkbcommon and libEGL are opened with dlopen at runtime,
+# so dpkg-shlibdeps cannot see them: they are listed explicitly next to $auto.
+[package.metadata.deb]
+name = "veyron-wm"
+maintainer = "Pablo Arraes <327252850+pabl0conepc-alt@users.noreply.github.com>"
+copyright = "2026, Pablo Arraes"
+extended-description = """\
+VEYRON WM is a scrollable tiling Wayland compositor written in Rust with \
+Material You theming, GPU window decorations and a JSON control socket \
+(veyronctl). It currently runs nested inside an existing Wayland or X11 \
+session; a standalone DRM/KMS session is not available yet."""
+section = "x11"
+priority = "optional"
+depends = "$auto, libwayland-client0, libxkbcommon0, libegl1, libffi8"
+recommends = "libegl-mesa0"
+assets = [
+    ["target/release/veyron", "usr/bin/", "755"],
+    ["target/release/veyronctl", "usr/bin/", "755"],
+    ["../../packaging/veyron.desktop", "usr/share/wayland-sessions/", "644"],
+    ["../../README.md", "usr/share/doc/veyron-wm/README.md", "644"],
+]

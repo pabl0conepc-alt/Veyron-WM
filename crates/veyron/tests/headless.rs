@@ -24,7 +24,7 @@ use veyron_ipc::{Request, Response, StateReport};
 use wayland_client::{
     globals::{registry_queue_init, GlobalListContents},
     protocol::{
-        wl_buffer,
+        wl_buffer, wl_callback,
         wl_compositor::WlCompositor,
         wl_output, wl_registry,
         wl_seat::{self, WlSeat},
@@ -35,7 +35,7 @@ use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
 };
 use wayland_protocols::xdg::shell::client::{
-    xdg_surface, xdg_toplevel,
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel,
     xdg_wm_base::{self, XdgWmBase},
 };
 
@@ -191,6 +191,10 @@ struct ClientState {
     configure_count: usize,
     buffer_releases: usize,
     ping_count: usize,
+    /// Last `xdg_popup.configure`: x, y, width, height.
+    popup_configure: Option<[i32; 4]>,
+    /// `wl_surface.frame` callbacks that fired.
+    frames_done: usize,
 }
 
 /// A minimal but genuine Wayland client.
@@ -336,8 +340,24 @@ impl Client {
             "the compositor's configure was acknowledged"
         );
 
-        let stride = configure.width * 4;
-        let length = (stride as usize) * (configure.height as usize);
+        let buffer = self.shm_buffer(configure.width, configure.height);
+        surface.attach(Some(&buffer.buffer), 0, 0);
+        surface.damage(0, 0, configure.width, configure.height);
+        surface.commit();
+        self.roundtrip();
+
+        Toplevel {
+            surface,
+            xdg_surface,
+            toplevel,
+            _buffer: buffer,
+        }
+    }
+
+    /// A real SHM buffer of the given size.
+    fn shm_buffer(&mut self, width: i32, height: i32) -> ShmBuffer {
+        let stride = width * 4;
+        let length = (stride as usize) * (height as usize);
         let path = std::env::temp_dir().join(format!(
             "veyron-buffer-{}-{}.shm",
             std::process::id(),
@@ -361,28 +381,42 @@ impl Client {
             .create_pool(file.as_fd(), length as i32, &self.qh, ());
         let buffer = pool.create_buffer(
             0,
-            configure.width,
-            configure.height,
+            width,
+            height,
             stride,
             wl_shm::Format::Argb8888,
             &self.qh,
             (),
         );
-
-        surface.attach(Some(&buffer), 0, 0);
-        surface.damage(0, 0, configure.width, configure.height);
-        surface.commit();
-        self.roundtrip();
-
-        Toplevel {
-            surface,
-            xdg_surface,
-            toplevel,
+        ShmBuffer {
+            buffer,
             _pool: pool,
-            _buffer: buffer,
             _file: file,
-            file_path: path,
+            path,
         }
+    }
+
+    /// Round-trip until `done` holds, failing the test after the timeout.
+    fn wait_for(&mut self, what: &str, done: impl Fn(&ClientState) -> bool) {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        while !done(&self.state) {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            self.roundtrip();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+struct ShmBuffer {
+    buffer: wl_buffer::WlBuffer,
+    _pool: WlShmPool,
+    _file: File,
+    path: PathBuf,
+}
+
+impl Drop for ShmBuffer {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -390,10 +424,7 @@ struct Toplevel {
     surface: WlSurface,
     xdg_surface: xdg_surface::XdgSurface,
     toplevel: xdg_toplevel::XdgToplevel,
-    _pool: WlShmPool,
-    _buffer: wl_buffer::WlBuffer,
-    _file: File,
-    file_path: PathBuf,
+    _buffer: ShmBuffer,
 }
 
 impl Toplevel {
@@ -401,12 +432,6 @@ impl Toplevel {
         self.toplevel.destroy();
         self.xdg_surface.destroy();
         self.surface.destroy();
-    }
-}
-
-impl Drop for Toplevel {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.file_path);
     }
 }
 
@@ -562,8 +587,8 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
         } = event
         {
             // xdg-shell transports the state list as an array of u32 values.
-            let activated = states.chunks_exact(4).any(|chunk| {
-                let value = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let activated = states.as_chunks::<4>().0.iter().any(|chunk| {
+                let value = u32::from_ne_bytes(*chunk);
                 matches!(
                     xdg_toplevel::State::try_from(value),
                     Ok(xdg_toplevel::State::Activated)
@@ -576,6 +601,54 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for ClientState {
                 activated,
             });
             state.configure_count += 1;
+        }
+    }
+}
+
+impl Dispatch<xdg_positioner::XdgPositioner, ()> for ClientState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &xdg_positioner::XdgPositioner,
+        _event: xdg_positioner::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<xdg_popup::XdgPopup, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _proxy: &xdg_popup::XdgPopup,
+        event: xdg_popup::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let xdg_popup::Event::Configure {
+            x,
+            y,
+            width,
+            height,
+        } = event
+        {
+            state.popup_configure = Some([x, y, width, height]);
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for ClientState {
+    fn event(
+        state: &mut Self,
+        _proxy: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            state.frames_done += 1;
         }
     }
 }
@@ -837,5 +910,164 @@ rect = { x = 30, y = 40, w = 500, h = 350 }
 fn headless_shuts_down_cleanly_on_quit_request() {
     let mut harness = Harness::start("quit", 800, 600);
     let _client = Client::connect(&harness.wayland_socket);
+    harness.shutdown();
+}
+
+#[test]
+fn theme_actions_recolour_the_scheme_over_the_control_socket() {
+    let mut harness = Harness::start("theme-ipc", 800, 600);
+    let theme =
+        |harness: &Harness| match veyron_ipc::request(&harness.control_socket, &Request::Theme) {
+            Ok(Response::Theme(report)) => report,
+            other => panic!("theme request failed: {other:?}"),
+        };
+
+    let dark = theme(&harness);
+    assert_eq!(dark.mode, "dark");
+    assert!(dark.colors.contains_key("primary"));
+    assert!(dark.colors.contains_key("on_surface"));
+
+    for action in ["theme toggle", "theme seed forest"] {
+        match veyron_ipc::request(
+            &harness.control_socket,
+            &Request::Action {
+                action: action.to_string(),
+            },
+        ) {
+            Ok(Response::Ok) => {}
+            other => panic!("{action} failed: {other:?}"),
+        }
+    }
+    let light = theme(&harness);
+    assert_eq!(light.mode, "light");
+    assert_eq!(light.seed, "forest");
+    assert_ne!(light.colors["surface"], dark.colors["surface"]);
+
+    match veyron_ipc::request(
+        &harness.control_socket,
+        &Request::Action {
+            action: "theme seed not-a-colour".to_string(),
+        },
+    ) {
+        Ok(Response::Error { .. }) => {}
+        other => panic!("an invalid seed must be rejected: {other:?}"),
+    }
+
+    harness.shutdown();
+}
+
+#[test]
+fn popups_are_configured_and_receive_frame_callbacks() {
+    let harness = Harness::start("popup", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let parent = client.create_toplevel("menu-owner");
+
+    // The sequence every toolkit uses for a menu: positioner, popup, initial
+    // commit without a buffer, then wait for the configure.
+    let positioner = client.wm_base.create_positioner(&client.qh, ());
+    positioner.set_size(120, 80);
+    positioner.set_anchor_rect(10, 10, 1, 1);
+    let surface = client.compositor.create_surface(&client.qh, ());
+    let xdg_surface = client.wm_base.get_xdg_surface(&surface, &client.qh, ());
+    let popup = xdg_surface.get_popup(Some(&parent.xdg_surface), &positioner, &client.qh, ());
+    surface.commit();
+    client.wait_for("the popup's initial configure", |state| {
+        state.popup_configure.is_some()
+    });
+    let [_, _, width, height] = client.state.popup_configure.expect("popup configure");
+    assert_eq!((width, height), (120, 80));
+
+    // A mapped popup animates on frame callbacks like any other surface.
+    let buffer = client.shm_buffer(width, height);
+    let _frame = surface.frame(&client.qh, ());
+    surface.attach(Some(&buffer.buffer), 0, 0);
+    surface.damage(0, 0, width, height);
+    surface.commit();
+    client.wait_for("a frame callback on the popup", |state| {
+        state.frames_done > 0
+    });
+
+    popup.destroy();
+    xdg_surface.destroy();
+    surface.destroy();
+    positioner.destroy();
+}
+
+#[test]
+fn a_window_opened_behind_a_fullscreen_window_is_still_configured() {
+    let harness = Harness::start("behind-fullscreen", 1280, 800);
+    let mut first = Client::connect(&harness.wayland_socket);
+    let _first_toplevel = first.create_toplevel("fullscreen");
+    harness.action("toggle-fullscreen");
+
+    // The new window has no placement while the fullscreen window covers the
+    // workspace, but a client may not draw before its first configure.
+    let mut second = Client::connect(&harness.wayland_socket);
+    let surface = second.compositor.create_surface(&second.qh, ());
+    let xdg_surface = second.wm_base.get_xdg_surface(&surface, &second.qh, ());
+    let _toplevel = xdg_surface.get_toplevel(&second.qh, ());
+    surface.commit();
+    second.wait_for("an initial configure", |state| state.configure_count > 0);
+
+    // Leaving fullscreen gives it its tiled size.
+    harness.action("toggle-fullscreen");
+    let configure = second.wait_for_configure();
+    let state = harness.state();
+    let window = state.windows.last().expect("the second window is tiled");
+    assert_eq!(
+        [configure.width, configure.height],
+        [window.rect[2], window.rect[3]]
+    );
+}
+
+#[test]
+fn floating_geometry_changes_reach_the_client() {
+    let harness = Harness::start("floating-size", 1280, 800);
+    let mut client = Client::connect(&harness.wayland_socket);
+    let _toplevel = client.create_toplevel("floating");
+    harness.action("toggle-floating");
+    let width = client.configure().width;
+
+    // `resize` (and snap, pip, fullscreen of a floating window) change the
+    // floating rectangle; the client has to be told, or nothing happens.
+    harness.action("resize width 32");
+    let configure = client.wait_for_width_change(width);
+    let state = harness.state();
+    assert_eq!(
+        [configure.width, configure.height],
+        [state.windows[0].rect[2], state.windows[0].rect[3]]
+    );
+    assert_eq!(configure.width, width + 32);
+}
+
+#[test]
+fn editing_the_configuration_file_reloads_it_automatically() {
+    let mut harness = Harness::start_with_config("config-watch", 800, 600, "[layout]\ngap = 8\n");
+    let gap =
+        |harness: &Harness| match veyron_ipc::request(&harness.control_socket, &Request::State) {
+            Ok(Response::State(report)) => report.gap,
+            other => panic!("state request failed: {other:?}"),
+        };
+    let path = harness.dir.join("veyron.toml");
+
+    // An invalid edit is reported and ignored: the running config stays.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    fs::write(&path, "[layout]\ngap = \"wide\"\n").expect("write an invalid config");
+    std::thread::sleep(std::time::Duration::from_millis(2600));
+    assert!(matches!(
+        veyron_ipc::request(&harness.control_socket, &Request::Ping),
+        Ok(Response::Pong)
+    ));
+
+    fs::write(&path, "[layout]\ngap = 20\nsmart_gaps = false\n").expect("rewrite the config");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    while gap(&harness) != 20 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the edited gap was never applied"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
     harness.shutdown();
 }

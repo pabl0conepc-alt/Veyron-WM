@@ -22,6 +22,11 @@ use crate::{
 /// file asking for an unbounded number of windows.
 pub const MAX_SESSION_WINDOWS: usize = 4096;
 
+/// Longest app id a session record keeps, in bytes.
+const MAX_APP_ID_BYTES: usize = 256;
+/// Longest window title a session record keeps, in bytes.
+const MAX_TITLE_BYTES: usize = 1024;
+
 /// One remembered window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,10 +46,10 @@ pub struct WindowRecord {
 
 impl WindowRecord {
     pub fn validate(&self) -> Result<(), String> {
-        if self.app_id.len() > 256 {
+        if self.app_id.len() > MAX_APP_ID_BYTES {
             return Err("session app_id cannot be longer than 256 bytes".to_string());
         }
-        if self.title.len() > 1024 {
+        if self.title.len() > MAX_TITLE_BYTES {
             return Err("session title cannot be longer than 1024 bytes".to_string());
         }
         if self.workspace.trim().is_empty() {
@@ -142,14 +147,25 @@ fn push_record(session: &mut Session, wm: &Wm, id: WindowId, workspace: &str, sc
         return;
     };
     let floating = window.is_floating();
+    // App ids and titles come from clients, so they are cut to the limits
+    // `WindowRecord::validate` enforces instead of failing the whole capture.
     session.windows.push(WindowRecord {
-        app_id: window.app_id().to_string(),
-        title: window.title().to_string(),
+        app_id: truncated(window.app_id(), MAX_APP_ID_BYTES),
+        title: truncated(window.title(), MAX_TITLE_BYTES),
         workspace: workspace.to_string(),
         floating,
         scratchpad,
         rect: floating.then(|| window.floating_rect()),
     });
+}
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn truncated(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 /// Workspace the compositor currently shows, useful when recording a session
@@ -211,6 +227,27 @@ mod tests {
         assert_eq!(session.windows[0].app_id, "pavucontrol");
         assert!(session.windows[0].scratchpad);
         assert!(wm.scratchpad_windows().contains(&parked));
+    }
+
+    #[test]
+    fn capture_survives_identities_longer_than_the_session_limits() {
+        // Clients choose their own titles and app ids; one long title used to
+        // make every `veyronctl session save` fail validation.
+        let mut wm = wm();
+        open(&mut wm, &"a".repeat(300), &"é".repeat(800));
+
+        let text = Session::capture(&wm)
+            .to_toml()
+            .expect("a long client identity never breaks capture");
+        let session = Session::from_toml(&text).expect("captured text decodes");
+        let record = &session.windows[0];
+        assert_eq!(record.app_id, "a".repeat(256));
+        assert!(record.title.len() <= 1024);
+        assert!(!record.title.is_empty());
+        assert!(
+            record.title.chars().all(|c| c == 'é'),
+            "cut on a char boundary"
+        );
     }
 
     #[test]

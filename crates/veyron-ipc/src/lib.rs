@@ -30,7 +30,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Bumped whenever a message shape changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Hard limit for a single message, newline included.
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
@@ -61,6 +61,8 @@ pub enum Request {
     Quit,
     /// Liveness check.
     Ping,
+    /// Ask for the active Material You scheme.
+    Theme,
 }
 
 /// A response from the compositor.
@@ -79,6 +81,8 @@ pub enum Response {
     Session { toml: String },
     /// Reply to [`Request::Launch`]: the application that was started.
     Launched { name: String, command: String },
+    /// Reply to [`Request::Theme`].
+    Theme(ThemeReport),
     /// The request was rejected. The message is meant for humans.
     Error { message: String },
 }
@@ -124,6 +128,20 @@ pub struct WindowReport {
     pub title: String,
     /// Opacity requested by the window rules (`1.0` when none match).
     pub opacity: f32,
+}
+
+/// The active Material You scheme, as generated from `[theme]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeReport {
+    /// `dark` or `light`.
+    pub mode: String,
+    /// Seed colour or preset name.
+    pub seed: String,
+    pub variant: String,
+    /// Material role name (snake case) to `#rrggbb`.
+    pub colors: std::collections::BTreeMap<String, String>,
+    /// Where the theme files are exported, when exporting is enabled.
+    pub export_dir: Option<String>,
 }
 
 /// Every workspace laid out on the sparse grid.
@@ -354,7 +372,17 @@ fn handle_connection(
                 // In flight until the response is on the wire.
                 let _in_flight = activity.enter();
                 let response = handler(request);
-                write_message(&mut stream, &response)?;
+                match write_message(&mut stream, &response) {
+                    // Reports grow with client-chosen titles; an answer that
+                    // does not fit is replaced by an error the client can read.
+                    Err(IpcError::MessageTooLarge) => {
+                        let error = Response::Error {
+                            message: IpcError::MessageTooLarge.to_string(),
+                        };
+                        write_message(&mut stream, &error)?;
+                    }
+                    result => result?,
+                }
             }
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -565,6 +593,38 @@ mod tests {
         ));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_oversized_response_is_reported_instead_of_dropping_the_connection() {
+        // A state report grows with client-chosen window titles, so it can
+        // exceed the line limit; the client must still get an answer.
+        let (mut client, server) = UnixStream::pair().expect("socket pair");
+        let server = std::thread::spawn(move || {
+            handle_connection(
+                server,
+                &|_request| Response::Error {
+                    message: "x".repeat(MAX_LINE_BYTES),
+                },
+                &Activity::new(),
+            )
+        });
+
+        write_message(&mut client, &Request::State).expect("request is sent");
+        let mut reader = BufReader::new(client.try_clone().expect("clone the stream"));
+        let response: Option<Response> = read_message(&mut reader).expect("a response line");
+        match response {
+            Some(Response::Error { message }) => {
+                assert!(message.contains("limit"), "{message}");
+            }
+            other => panic!("expected an error response, got {other:?}"),
+        }
+        drop(client);
+        drop(reader);
+        server
+            .join()
+            .expect("the server thread did not panic")
+            .expect("the connection stays healthy");
     }
 
     #[test]

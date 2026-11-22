@@ -13,6 +13,11 @@ Usage:
   veyronctl session save <FILE>   Save the current session as TOML
   veyronctl session restore <FILE> Restore a session from TOML
   veyronctl launch <NAME>         Start an installed application
+  veyronctl watch [--waybar]      Print the state as a JSON line on every change
+                                  (--waybar: a waybar custom-module line)
+  veyronctl theme [--json]        Show the Material You colours
+  veyronctl theme <OP>            toggle, dark, light, next, seed <#hex|preset>,
+                                  variant <name|next>
   veyronctl ping                  Check the compositor is alive
   veyronctl reload                Reload the configuration
   veyronctl quit                  Ask the compositor to exit
@@ -37,6 +42,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), Box<dyn Error>> {
     let mut socket = veyron_ipc::default_socket_path();
     let mut json = false;
+    let mut waybar = false;
     let mut words: Vec<String> = Vec::new();
 
     let mut args = std::env::args().skip(1);
@@ -47,6 +53,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 socket = PathBuf::from(path);
             }
             "--json" => json = true,
+            "--waybar" => waybar = true,
             "-h" | "--help" => {
                 print!("{HELP}");
                 return Ok(());
@@ -58,6 +65,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     if words.is_empty() {
         print!("{HELP}");
         return Err("no command given".into());
+    }
+
+    if words[0] == "watch" {
+        return watch(&socket, waybar);
     }
 
     let mut save_session_to = None;
@@ -77,6 +88,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             query: words[1..].join(" "),
         },
         "launch" => return Err("usage: veyronctl launch <NAME>".into()),
+        "theme" if words.len() == 1 => Request::Theme,
         "ping" if words.len() == 1 => Request::Ping,
         "reload" if words.len() == 1 => Request::Reload,
         "quit" if words.len() == 1 => Request::Quit,
@@ -129,6 +141,23 @@ fn run() -> Result<(), Box<dyn Error>> {
             println!("launched {name} ({command})");
             Ok(())
         }
+        Response::Theme(report) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "theme {} seed {} variant {}",
+                    report.mode, report.seed, report.variant
+                );
+                for (role, hex) in &report.colors {
+                    println!("  {role:<28} {hex}");
+                }
+                if let Some(dir) = &report.export_dir {
+                    println!("exported to {dir}");
+                }
+            }
+            Ok(())
+        }
         Response::State(report) => {
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -178,4 +207,71 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         Response::Error { message } => Err(message.into()),
     }
+}
+
+/// How often `watch` samples the compositor state.
+const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// `veyronctl watch`: print the state as one JSON line whenever it changes, for
+/// bars and shell widgets. With `--waybar` each line is a waybar custom-module
+/// object. Survives compositor restarts by reconnecting.
+fn watch(socket: &std::path::Path, waybar: bool) -> Result<(), Box<dyn Error>> {
+    use std::io::Write as _;
+
+    let mut last = String::new();
+    loop {
+        let line = match veyron_ipc::request(socket, &Request::State) {
+            Ok(Response::State(report)) if waybar => waybar_line(&report),
+            Ok(Response::State(report)) => serde_json::to_string(&report)?,
+            _ if waybar => {
+                r#"{"text":"","tooltip":"Veyron is not running","class":"offline"}"#.to_string()
+            }
+            _ => String::new(),
+        };
+        if line != last {
+            if !line.is_empty() {
+                let mut stdout = std::io::stdout().lock();
+                // A closed pipe (the bar exited) ends the watcher.
+                if writeln!(stdout, "{line}")
+                    .and_then(|()| stdout.flush())
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+            last = line;
+        }
+        std::thread::sleep(WATCH_INTERVAL);
+    }
+}
+
+/// One waybar custom-module line: workspace dots and the layout as text, the
+/// focused window in the tooltip, and the layout as CSS class.
+fn waybar_line(report: &veyron_ipc::StateReport) -> String {
+    let dots: Vec<&str> = (0..report.workspace_count)
+        .map(|index| {
+            if index == report.workspace_index {
+                "●"
+            } else {
+                "○"
+            }
+        })
+        .collect();
+    let focused = report
+        .focused
+        .and_then(|id| report.windows.iter().find(|window| window.id == id));
+    let tooltip = match focused {
+        Some(window) if !window.title.is_empty() => {
+            format!("{} — {}", window.app_id, window.title)
+        }
+        Some(window) => window.app_id.clone(),
+        None => format!("workspace {}", report.workspace),
+    };
+    serde_json::json!({
+        "text": format!("{}  {}", dots.join(" "), report.layout),
+        "alt": report.workspace,
+        "tooltip": tooltip,
+        "class": report.layout,
+    })
+    .to_string()
 }

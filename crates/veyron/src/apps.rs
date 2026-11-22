@@ -113,10 +113,11 @@ pub fn launch(query: &str) -> Result<DesktopEntry, String> {
         ));
     }
     let (program, arguments) = entry.argv.split_first().ok_or("empty command line")?;
-    Command::new(program)
+    let child = Command::new(program)
         .args(arguments)
         .spawn()
         .map_err(|error| format!("could not start '{}': {error}", entry.name))?;
+    crate::state::reap(child);
     Ok(entry)
 }
 

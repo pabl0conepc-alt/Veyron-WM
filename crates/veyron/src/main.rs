@@ -10,11 +10,13 @@ use std::{
 use calloop::{
     channel::{channel, Event, Sender},
     generic::Generic,
-    EventLoop, Interest, Mode, PostAction,
+    timer::{TimeoutAction, Timer},
+    EventLoop, Interest, LoopHandle, Mode, PostAction,
 };
 use smithay::{
     backend::{renderer::gles::GlesRenderer, winit},
     reexports::wayland_server::Display,
+    reexports::winit::{dpi::LogicalSize, window::Window as WinitWindow},
     wayland::socket::ListeningSocketSource,
 };
 use veyron_core::{Config, Size as VSize};
@@ -22,6 +24,7 @@ use veyron_core::{Config, Size as VSize};
 use state::{ClientState, Veyron};
 
 mod apps;
+mod decoration;
 mod ipc;
 mod state;
 
@@ -34,11 +37,14 @@ Options:
   -c, --config <PATH>   Configuration file (default: $XDG_CONFIG_HOME/veyron/veyron.toml)
   -s, --socket <PATH>   Control socket (default: $XDG_RUNTIME_DIR/veyron.sock)
       --print-config    Print the default configuration and exit
+      --check-config    Validate the configuration file and exit
       --headless        Run without a display, GPU or DRM device (for tests/CI)
       --wayland-display <NAME>
-                        Socket name for headless mode (default: wayland-veyron)
+                        Wayland socket name (default: wayland-veyron headless,
+                        the first free wayland-N nested)
       --output-size <WxH>
-                        Headless output size in pixels (default: 1920x1080)
+                        Output size in pixels (default: 1920x1080 headless,
+                        1280x800 for the nested window)
   -h, --help            Print this help
   -V, --version         Print the version
 
@@ -56,13 +62,19 @@ const HEADLESS_WAIT: Duration = Duration::from_millis(50);
 /// How long shutdown waits for an in-flight control reply before giving up.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
+/// How often the configuration file is checked for changes. A stat call every
+/// two seconds costs nothing measurable and needs no inotify dependency.
+const CONFIG_POLL: Duration = Duration::from_secs(2);
+
 struct Args {
     config: PathBuf,
     socket: PathBuf,
     print_config: bool,
+    check_config: bool,
     headless: bool,
     wayland_display: Option<String>,
-    output_size: VSize,
+    /// `None` keeps the mode default (1920x1080 headless, 1280x800 nested).
+    output_size: Option<VSize>,
 }
 
 fn main() {
@@ -77,6 +89,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     if args.print_config {
         print!("{}", Config::default().to_toml_string()?);
         return Ok(());
+    }
+    if args.check_config {
+        return check_config(&args.config);
     }
 
     init_tracing();
@@ -102,6 +117,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 /// This is the same `calloop` loop as the nested path; `render` is simply a
 /// no-op and the display's poll fd is what wakes the loop.
 fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
+    let output_size = args.output_size.unwrap_or(VSize::new(1920, 1080));
     let mut display: Display<Veyron> = Display::new()?;
     let socket_name = args.wayland_display.as_deref().unwrap_or("wayland-veyron");
     let socket_source = ListeningSocketSource::with_name(socket_name).map_err(|error| {
@@ -114,12 +130,8 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &wayland_display);
 
     let mut event_loop: EventLoop<Veyron> = EventLoop::try_new()?;
-    let mut state = Veyron::new_headless(
-        args.config.clone(),
-        config,
-        args.output_size,
-        &display.handle(),
-    )?;
+    let mut state =
+        Veyron::new_headless(args.config.clone(), config, output_size, &display.handle())?;
 
     let mut client_display = display.handle();
     event_loop
@@ -147,13 +159,14 @@ fn run_headless(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
                 state.handle_ipc(job);
             }
         })?;
+    watch_config(&event_loop.handle())?;
     let ipc_activity = spawn_ipc_server(&args.socket, ipc_tx)?;
 
     tracing::info!(
         wayland = %wayland_display.to_string_lossy(),
         control = %args.socket.display(),
-        width = args.output_size.w,
-        height = args.output_size.h,
+        width = output_size.w,
+        height = output_size.h,
         "VEYRON WM is running headless"
     );
 
@@ -218,14 +231,23 @@ fn spawn_ipc_server(
 /// Run the compositor nested inside an existing Wayland or X11 session.
 fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
     let mut display: Display<Veyron> = Display::new()?;
-    let (backend, winit_loop) = winit::init::<GlesRenderer>().map_err(|error| {
+    let size = args.output_size.unwrap_or(VSize::new(1280, 800));
+    let attributes = WinitWindow::default_attributes()
+        .with_inner_size(LogicalSize::new(f64::from(size.w), f64::from(size.h)))
+        .with_title("VEYRON WM")
+        .with_visible(true);
+    let (backend, winit_loop) = winit::init_from_attributes::<GlesRenderer>(attributes).map_err(|error| {
         format!(
             "could not open the nested backend ({error}); Veyron needs a running Wayland or X11 session"
         )
     })?;
 
     // The compositor's own Wayland socket. Children inherit WAYLAND_DISPLAY.
-    let socket_source = ListeningSocketSource::new_auto()?;
+    let socket_source = match args.wayland_display.as_deref() {
+        Some(name) => ListeningSocketSource::with_name(name)
+            .map_err(|error| format!("could not bind the wayland socket '{name}' ({error})"))?,
+        None => ListeningSocketSource::new_auto()?,
+    };
     let wayland_display = socket_source.socket_name().to_os_string();
     std::env::set_var("WAYLAND_DISPLAY", &wayland_display);
 
@@ -264,6 +286,7 @@ fn run_nested(args: Args, config: Config) -> Result<(), Box<dyn Error>> {
                 state.handle_ipc(job);
             }
         })?;
+    watch_config(&event_loop.handle())?;
 
     let ipc_activity = spawn_ipc_server(&args.socket, ipc_tx)?;
 
@@ -293,9 +316,10 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut config = Config::default_path();
     let mut socket = veyron_ipc::default_socket_path();
     let mut print_config = false;
+    let mut check_config = false;
     let mut headless = false;
     let mut wayland_display = None;
-    let mut output_size = VSize::new(1920, 1080);
+    let mut output_size = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
@@ -309,13 +333,14 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 socket = PathBuf::from(path);
             }
             "--print-config" => print_config = true,
+            "--check-config" => check_config = true,
             "--headless" => headless = true,
             "--wayland-display" => {
                 wayland_display = Some(args.next().ok_or("--wayland-display needs a name")?);
             }
             "--output-size" => {
                 let value = args.next().ok_or("--output-size needs WxH")?;
-                output_size = parse_size(&value)?;
+                output_size = Some(parse_size(&value)?);
             }
             "-h" | "--help" => {
                 print!("{HELP}");
@@ -333,6 +358,7 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         config,
         socket,
         print_config,
+        check_config,
         headless,
         wayland_display,
         output_size,
@@ -354,4 +380,45 @@ fn parse_size(value: &str) -> Result<VSize, Box<dyn Error>> {
         return Err(format!("invalid size '{value}', dimensions must be positive").into());
     }
     Ok(VSize::new(width, height))
+}
+
+/// Reload the configuration whenever its file changes on disk, so edits apply
+/// without a `reload` binding. An invalid file is reported and ignored, and the
+/// running configuration stays in effect.
+fn watch_config(handle: &LoopHandle<'_, Veyron>) -> Result<(), Box<dyn Error>> {
+    handle
+        .insert_source(Timer::from_duration(CONFIG_POLL), |_, _, state| {
+            state.reload_config_if_changed();
+            TimeoutAction::ToDuration(CONFIG_POLL)
+        })
+        .map_err(|error| format!("could not watch the configuration file: {error}"))?;
+    Ok(())
+}
+
+/// `veyron --check-config`: validate the configuration without starting the
+/// compositor, and summarise what it sets.
+fn check_config(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+    if !path.exists() {
+        println!(
+            "{}: no configuration file; the built-in defaults apply \
+             (create one with `veyron --print-config > {}`)",
+            path.display(),
+            path.display()
+        );
+        return Ok(());
+    }
+    let config = Config::load(path)?;
+    let design = &config.theme.design;
+    println!(
+        "{}: ok — {} bindings, {} rules, {} profiles, {} workspaces, theme {} ({}, {} design)",
+        path.display(),
+        config.bindings.len(),
+        config.rules.rules().len(),
+        config.profiles.as_slice().len(),
+        config.workspaces.len(),
+        config.theme.seed,
+        config.theme.mode.as_str(),
+        design
+    );
+    Ok(())
 }

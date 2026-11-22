@@ -1,28 +1,108 @@
+<div align="center">
+
 # VEYRON WM
 
-A scrollable-tiling Wayland compositor written entirely in Rust, built on
-[Smithay](https://github.com/Smithay/smithay).
+**A light, good-looking tiling Wayland compositor written in Rust.**
 
-Veyron is a workspace of **columns on an endless horizontal strip**: every window
-opens as a full-height column, focus scrolls the strip, and stacking windows into
-a column is an explicit action. The goal is a compositor where the window
-management model is small enough to reason about, test exhaustively, and grow
-into a serious daily driver.
+Scrollable columns like niri, master-stack and dwindle like Hyprland,
+Material You colours generated from one seed, GPU rounded corners and shadows,
+and a JSON control socket for bars and scripts. It runs well on a 4 GiB netbook.
 
+[![CI](https://github.com/pabl0conepc-alt/Veyron-WM/actions/workflows/ci.yml/badge.svg)](https://github.com/pabl0conepc-alt/Veyron-WM/actions/workflows/ci.yml)
+![Rust](https://img.shields.io/badge/rust-1.97%2B-orange)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
+</div>
+
+| `material`, master-stack | `glass`, dwindle |
+|---|---|
+| ![Material design](docs/screenshots/material.png) | ![Glass design](docs/screenshots/glass.png) |
+| **`neon`, scrolling columns** | **light mode** |
+| ![Neon design](docs/screenshots/neon.png) | ![Light theme](docs/screenshots/light.png) |
+
+<sub>Real screenshots: Veyron running nested in KDE Plasma on an Intel HD
+Graphics 3000 netbook, with `foot` terminals. Every style and colour above was
+switched at runtime with `veyronctl theme …`.</sub>
+
+## Highlights
+
+- **Layouts:** endless scrolling columns, master-stack, dwindle and `auto`
+  (chosen from the window count), per workspace; floating, fullscreen,
+  scratchpad, snap zones, picture-in-picture and window groups.
+- **Looks:** five designs (`material`, `glass`, `flat`, `neon`, `minimal`) drawn
+  on the GPU with rounded corners, rounded borders and soft shadows; server-side
+  decorations, so apps do not draw their own title bars.
+- **Material You:** one seed colour or preset generates the whole scheme, which
+  colours window borders and is exported for waybar, GTK and eww. Dark/light,
+  nine variants and contrast are switchable live.
+- **Workspaces:** on-demand, named, persistent and special workspaces on a 2D
+  grid, with an overview and per-monitor workspaces in the core.
+- **Easy to configure:** one strict TOML file, reloaded automatically when you
+  save it; `veyron --check-config` explains mistakes.
+- **Scriptable:** `veyronctl` for every action, `veyronctl watch --waybar` for
+  bars, session save/restore, app launcher and profiles.
+
+## Quick start
+
+```sh
+git clone https://github.com/pabl0conepc-alt/Veyron-WM
+cd Veyron-WM
+./install.sh
 ```
-workspace strip ────────────────────────────────────────────────►
-   ┌──────────┐ ┌──────────┐ ┌──────────┐
-   │ window 1 │ │ window 2 │ │ window 3 │      ← focus scrolls here
-   └──────────┘ │──────────│ └──────────┘
-                │ window 4 │
-                └──────────┘
+
+The installer detects NixOS, Arch, Debian/Ubuntu and Fedora, installs the
+dependencies (asking before `sudo`), gets Rust 1.97+ through rustup when the
+system one is older, builds with one job on machines with less than 6 GiB of
+RAM, installs `veyron` and `veyronctl` into `~/.local/bin` and writes a
+starter configuration to `~/.config/veyron/veyron.toml`. Run it again to
+update; `./install.sh --uninstall` removes the binaries.
+
+Then, from inside your current desktop:
+
+```sh
+veyron
 ```
+
+| Do this | Press |
+|---|---|
+| Open a terminal (`$TERMINAL`, foot, kitty, …) | `super+return` |
+| Close a window | `super+q` |
+| Move focus / move the window | `super+arrows` / `super+shift+arrows` |
+| Next layout | `super+shift+l` |
+| Switch workspace / send the window there | `super+1..5` / `super+shift+1..5` |
+| Alt-tab | `alt+tab` |
+| Float a window, then drag it | `super+space`, `super+left drag` |
+| Next design / dark-light / next colour | `super+alt+t` / `super+t` / `super+shift+t` |
+| Quit | `super+shift+e` |
+
+All chords are listed under [Running](#running) and can be changed in the
+configuration.
+
+### Make it yours
+
+```toml
+# ~/.config/veyron/veyron.toml (saved changes apply immediately)
+[theme]
+seed = "ocean"        # or any #rrggbb
+mode = "dark"
+design = "glass"
+
+[layout]
+gap = 10
+mode = "master-stack"
+```
+
+For a matching bar, copy [`contrib/waybar`](contrib/waybar) to
+`~/.config/waybar/`: it shows Veyron's workspaces and layout through
+`veyronctl watch --waybar` and recolours itself whenever the theme changes.
 
 ## Status
 
-The headless protocol path and window-management core are tested, and a nested
-GLES path is implemented. Visual presentation in the target session is still
-unverified. Veyron is **not** a finished desktop yet.
+The window-management core and the headless protocol path are tested in CI,
+and the nested GLES renderer, rounded corners, shadows and server-side
+decorations have been checked on screen in a KDE Plasma session on Intel HD
+Graphics 3000. Veyron is **not** a finished desktop yet: it runs nested inside
+an existing session, and there is no DRM/KMS backend.
 
 See [the phase roadmap](ROADMAP.md) for verified behavior and remaining work.
 
@@ -105,19 +185,18 @@ Known gaps, deliberately out of this milestone (see `docs/ARCHITECTURE.md`):
 - No DRM/KMS backend or session management; Veyron currently runs nested
   inside an existing session and still binds a single output. The core already
   models several outputs, so the backend only has to report them.
-- No client-side decorations drawn by the compositor and no cursor image. Only
-  window positions animate: there are no opening/closing transitions, and client
-  sizes still jump to their target.
+- No cursor image is drawn yet. Only window positions animate: there are no
+  opening/closing transitions, and client sizes still jump to their target.
 - Popup grabs, screencopy, idle, input-method and session-lock protocols are not
-  implemented. Layer-shell surfaces render, but pointer clicks on a panel are
-  not forwarded to it yet.
-- Window rules, opacity and Veyron Recall see the identity a client announces
-  on its first commit, but the renderer still draws every window opaque and
-  unblurred.
+  implemented. Layer-shell surfaces receive pointer clicks but not keyboard
+  focus, and their exclusive zones do not yet shrink the tiling area.
+- Blur is not drawn. On Intel HD Graphics the faint edge of shadows shows a
+  slight dotted dithering pattern in the nested window; the `flat` design
+  avoids it.
 
 ## Building
 
-Requirements: Rust 1.87+, a C toolchain, `pkg-config`, and the usual EGL/Mesa
+Requirements: Rust 1.97+ (required by `material-colors`), a C toolchain, `pkg-config`, and the usual EGL/Mesa
 development packages. The nested backend needs a running Wayland or X11 session.
 
 ```sh
@@ -139,6 +218,63 @@ nix profile install .#default
 The package build is also checked by GitHub Actions. The first CI build for this
 flake is pending; nested runtime support still needs validation on the target.
 
+### Arch Linux
+
+`packaging/arch/PKGBUILD` builds a `veyron-wm-git` package from the default
+branch on GitHub. It runs the full test suite in `check()` and installs
+`veyron`, `veyronctl`, the README and a Wayland session file:
+
+```sh
+sudo pacman -S --needed base-devel git
+cd packaging/arch
+makepkg -si
+```
+
+To build with plain cargo instead, install the toolchain and the libraries the
+compositor loads at runtime (`libwayland-client`, `libxkbcommon` and `libEGL`
+are opened with `dlopen`), plus a Mesa driver for the nested renderer:
+
+```sh
+sudo pacman -S --needed base-devel rust pkgconf wayland libxkbcommon libglvnd libffi mesa
+cargo build --release --workspace --locked
+XDG_RUNTIME_DIR="$(mktemp -d)" cargo test --workspace --locked
+```
+
+Arch's `rust` package is recent enough for the 1.97 minimum. CI builds the
+PKGBUILD with `makepkg` in an `archlinux:latest` container on every push.
+
+The package installs `/usr/share/wayland-sessions/veyron.desktop`, but Veyron
+cannot be started from a display manager or a TTY yet: the only backend is the
+nested winit one, which needs a running Wayland or X11 session. Start it from
+inside your existing desktop as described under [Running](#running).
+
+### Debian and Ubuntu
+
+A `.deb` is built with [`cargo-deb`](https://github.com/kornelski/cargo-deb)
+from the metadata in `crates/veyron/Cargo.toml`. Distribution `rustc` packages
+are older than the 1.97 minimum, so install the toolchain with
+[rustup](https://rustup.rs):
+
+```sh
+sudo apt install build-essential pkg-config git curl \
+  libwayland-dev libxkbcommon-dev libegl-dev libffi-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install cargo-deb --locked
+cargo deb -p veyron --locked
+sudo apt install ./target/debian/veyron-wm_*.deb
+```
+
+The package installs `veyron`, `veyronctl`, the README and the Wayland session
+file, and depends on `libwayland-client0`, `libxkbcommon0`, `libegl1` and
+`libffi8` explicitly, because those libraries are opened with `dlopen` and
+`dpkg-shlibdeps` cannot see them. The same session-file caveat as on Arch
+applies: start Veyron from inside your existing desktop.
+
+CI (`.github/workflows/debian.yml`) runs the test suite, builds the package in
+`debian:trixie` and `ubuntu:24.04` containers, installs it with `apt` in a
+clean container of the same release and smoke-tests the headless compositor
+through `veyronctl`.
+
 ## Running
 
 Veyron runs **nested**: it opens a window in your current session and serves a
@@ -153,7 +289,7 @@ export WAYLAND_DISPLAY=wayland-1     # use the name printed by veyron
 target/release/veyronctl state
 
 # 2. launch a client (any toolkit works)
-alacritty
+foot                                  # or any Wayland app
 ```
 
 Veyron sets `WAYLAND_DISPLAY` for processes it spawns through actions, so
@@ -171,7 +307,7 @@ works.
 target/release/veyron --headless --output-size 1920x1080 \
     --wayland-display veyron-headless
 # from another terminal, with XDG_RUNTIME_DIR set the same way:
-WAYLAND_DISPLAY=veyron-headless alacritty
+WAYLAND_DISPLAY=veyron-headless foot
 target/release/veyronctl quit
 ```
 
@@ -183,7 +319,7 @@ Default keybindings (all configurable):
 
 | Chord | Action |
 | --- | --- |
-| `super+return` | spawn `alacritty` |
+| `super+return` | open a terminal (`$TERMINAL`, then foot, kitty, alacritty, …) |
 | `super+q` | close the focused window |
 | `super+left/right/up/down` | focus column / row |
 | `super+shift+left/right/up/down` | move window into a column / swap rows |
@@ -234,6 +370,25 @@ master_ratio = 0.6           # master width in master-stack
 
 [appearance]
 background = "#101014"
+
+# Material You scheme: window borders, and colour files for bars and widgets.
+[theme]
+seed = "ocean"               # #rrggbb or a preset: material, ocean, forest,
+                             # ember, amber, teal, rose, slate
+mode = "dark"                # dark | light
+variant = "tonal-spot"       # vibrant, expressive, fidelity, content, neutral,
+                             # monochrome, rainbow, fruit-salad
+contrast = 0.0               # -1.0 (reduced) .. 1.0 (high)
+design = "material"          # material, glass, flat, neon, minimal
+# Optional overrides of the design's values:
+border_width = 2             # 0 disables borders
+corner_radius = 12           # 0 keeps square corners
+shadow_size = 18             # 0 disables the drop shadow
+shadow_opacity = 0.35
+inactive_opacity = 1.0       # dim unfocused windows (0.1 .. 1.0)
+# border_active = "#ffb4abff"  # override primary / outline_variant
+use_surface_background = true
+export = true                # write ~/.local/state/veyron/theme/*
 
 [motion]                     # layout transitions; off by default
 enabled = false              # animate retiles and workspace switches
@@ -320,6 +475,70 @@ there are `snap <zone>` (halves, quadrants, thirds, `center`, `maximize`),
 `workspace-output <direction>` actions. If a `[bindings]` table is present it
 replaces the default keymap entirely; omit it to keep the defaults.
 
+Window-management extras borrowed from other compositors:
+
+| Action | Default chord | Does |
+|---|---|---|
+| `focus-cycle next\|prev` | `alt+tab`, `alt+shift+tab` | cycle through visible windows |
+| `move-to-workspace <n>` | `super+shift+1..5` | send the window to workspace n and follow it |
+| `center-floating` | `super+shift+c` | center the focused floating window |
+| `gaps <±px>` | `super+ctrl+minus/equal` | change the inner gap live (0–64 px) |
+| `opacity <±%>` | `super+alt+minus/equal` | change the focused window's opacity (min 10%) |
+| `theme toggle` | `super+t` | switch dark/light |
+| `theme next` | `super+shift+t` | next preset seed colour |
+| `theme variant next` | `super+ctrl+t` | next Material scheme variant |
+| `theme seed <#hex\|preset>` | | use a seed colour |
+| `theme design next` | `super+alt+t` | next decoration style |
+| `theme design <name>` | | `material`, `glass`, `flat`, `neon`, `minimal` |
+
+### Designs
+
+Window decorations are drawn on the GPU by two small GLSL ES 1.00 shaders:
+one clips client content to rounded corners, the other paints the rounded
+border ring and a soft drop shadow from a signed distance field. Colours always
+come from the Material palette.
+
+| Design | Corners | Border | Shadow | Notes |
+|---|---|---|---|---|
+| `material` | 12 px | 2 px `primary` | soft, offset down | Material 3 elevation |
+| `glass` | 16 px | 1 px | wide, light | unfocused windows dimmed to 88% |
+| `flat` | square | 1 px | none | cheapest; no shaders at all |
+| `neon` | 8 px | 3 px | glow in the border colour | focused window glows |
+| `minimal` | 6 px | none | faint | |
+
+Switching a design at runtime drops the per-field overrides so the style shows
+as designed. If the GPU driver rejects the shaders, Veyron logs a warning and
+falls back to square solid borders.
+
+Floating windows can also be dragged with `super` + left button. Keys are
+matched by their unshifted symbol, so `super+shift+1` means the `1` key on any
+layout.
+
+### Theme without shell scripts
+
+`[theme]` generates a Material You scheme from one seed colour with the same
+Material Color Utilities algorithm Android and Caelestia-style shells use. The
+compositor colours window borders with it (`primary` focused, `outline_variant`
+unfocused) and, in a real session, writes it to `~/.local/state/veyron/theme/`
+whenever it changes, at startup, on `reload` and on every `theme` action:
+
+| File | For |
+|---|---|
+| `colors.css` | GTK named colours (`@define-color primary #…;`): waybar, swaync, GTK apps |
+| `waybar.css` | a complete Material 3 waybar style using those colours |
+| `colors.scss` | Sass variables (`$primary: #…;`) for eww widgets |
+| `colors.json` | every role for scripts and other tools |
+
+For waybar, point `style.css` at the generated file and enable
+`"reload_style_on_change": true` so bars recolour live:
+
+```css
+@import url("file:///home/YOU/.local/state/veyron/theme/waybar.css");
+```
+
+`veyronctl theme [--json]` prints the active scheme. Only files whose contents
+changed are rewritten, atomically, so file watchers do not reload needlessly.
+
 ## Control protocol
 
 `veyronctl` speaks a versioned, newline-delimited JSON protocol over a Unix
@@ -346,6 +565,10 @@ veyronctl session save ~/.local/state/veyron/session.toml
 veyronctl session restore ~/.local/state/veyron/session.toml
 veyronctl launch firefox
 veyronctl workspace special
+veyronctl theme
+veyronctl theme seed forest
+veyronctl focus-cycle next
+veyronctl move-to-workspace 3
 veyronctl spawn "foot --class veyron"
 veyronctl reload
 veyronctl quit
