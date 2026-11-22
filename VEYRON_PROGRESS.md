@@ -268,9 +268,9 @@ rendering paths still need the nested-session check.
   all workspace tests (including the 8 headless real-client tests) pass in
   `check()`, and the installed package runs `veyron --version`/`--help`.
   Not verified: running the nested compositor on an Arch desktop.
-- namcap reports the missing license file (the repository has no LICENSE,
-  so the package ships none) and flags the dlopen'ed libraries as "may not
-  be needed", which is expected.
+- namcap reported a missing license file (fixed by adding LICENSE on
+  2026-11-22) and flags the dlopen'ed libraries as "may not be needed",
+  which is expected.
 
 ### Debian and Ubuntu packaging (branch `claude/debian-support`)
 

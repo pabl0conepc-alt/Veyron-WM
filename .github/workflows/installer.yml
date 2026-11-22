@@ -63,8 +63,10 @@ jobs:
           cargo build --release --locked --bin veyron --bin veyronctl
           mkdir dist
           strip target/release/veyron target/release/veyronctl
+          cp LICENSE target/release/LICENSE
           tar -C target/release --owner=0 --group=0 \
-            -czf "dist/veyron-wm-linux-${{ matrix.arch }}.tar.gz" veyron veyronctl
+            -czf "dist/veyron-wm-linux-${{ matrix.arch }}.tar.gz" \
+            veyron veyronctl LICENSE
 
       - uses: actions/upload-artifact@v4
         with:
