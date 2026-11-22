@@ -289,6 +289,21 @@ rendering paths still need the nested-session check.
   detection and streaming, headless tests for subscriptions and client
   fullscreen. Pointer grabs and the fade are not runtime-checked on screen.
 
+## Block 1 of the research batch (2026-11-22)
+
+Ideas taken from niri, Hyprland, sway/i3, mango, COSMIC and GNOME:
+
+- Config `include` / `include_optional` (niri 26.04), merged under the
+  including file; edits to any included file reload.
+- `pin` (`super+o`), `mark` / `focus-mark` / `unmark`, `maximize` (`super+m`,
+  and the title bar button through xdg maximize requests).
+- `[theme] dim_inactive`, `[behavior] cursor_hide_after`, `[hot_corners]`,
+  wheel chords (`super+wheel_up/down` switch workspaces).
+- The agent half: grid, center-tile, deck, monocle and floating layouts and
+  `center_focused_column` (section at the top).
+- All of it is covered by unit or headless tests; none of the visual parts
+  (dim, corners, wheel, cursor hiding, new layouts) was checked on screen.
+
 ## Feature matrix (summary)
 
 | Area | Feature | State | Where / next action |
@@ -302,6 +317,10 @@ rendering paths still need the nested-session check.
 | WM | Pointer move/resize of floating windows (`super` + left/right drag) | PARTIAL | `state.rs::begin_super_grab`, `GrabKind`; core unit-tested, no input injection in the harness |
 | WM | Client move/resize requests, client fullscreen (F11) | PARTIAL | `XdgShellHandler::move_request/resize_request/fullscreen_request`; fullscreen headless-tested |
 | WM | Focus follows mouse (opt-in) | PARTIAL | `state.rs::focus_under_pointer`; fully visible windows only |
+| WM | Pin (sticky), marks, maximize (+ client maximize requests) | PARTIAL | `wm.rs::toggle_pin/carry_sticky/toggle_maximize`, marks; unit-tested |
+| WM | Wheel bindings, hot corners, idle cursor hiding | PARTIAL | `state.rs::wheel_binding/check_hot_corner`, `hotcorner.rs`; no pointer injection in tests |
+| Glass | Dim inactive windows | PARTIAL | clip-shader `dim` uniform, black layer for square windows; not seen on screen |
+| Config | Includes (`include`, `include_optional`) with reload on any file | PARTIAL | `config.rs::load_table`; unit-tested |
 | WM | Minimize | MISSING | needs core state + taskbar/foreign-toplevel |
 | Motion | Position animations, workspace slide, open (rise + fade), per-window opt-out | PARTIAL | `motion.rs`, `state.rs::opening`; close animation missing |
 | Motion | Spring/physics, reduced motion | PARTIAL | `motion.rs`; renderer ignores profile motion |
