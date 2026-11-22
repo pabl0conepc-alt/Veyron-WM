@@ -5,6 +5,46 @@ and `KNOWN_ISSUES.md`. States follow the master prompt: IMPLEMENTED requires
 runtime validation, which no feature has yet in a visible nested session, so
 code that compiles and passes tests is at most PARTIAL or UNVERIFIED.
 
+## More layouts (branch `claude/more-layouts`)
+
+- **New `LayoutKind`s** in `tiling.rs`: `grid` (rows of `ceil(sqrt(n))`, last
+  row stretched), `center-tile` (mango `center_tile` / dwm centeredmaster:
+  master centred at `master_ratio`, stack alternating right/left; a lone
+  window is centred and the master never moves as windows come and go),
+  `deck` (dwm: master plus one visible stack window, the focused or most
+  recently focused one) and `monocle` (focused window fills the area).
+  `arrange` takes the window to keep visible; monocle/deck give the others no
+  placement, and the compositor already unmaps unplaced windows, so
+  `state.rs` is unchanged. Focus next/prev wraps in monocle and deck, and
+  `focus-cycle` now walks the full tiled order, so hidden windows are
+  reachable.
+- **`floating` workspace layout** (COSMIC style). The workspace's tiled set
+  is drawn at each window's floating geometry; nothing moves between sets,
+  so switching back to a tiling layout re-tiles exactly the same windows.
+  Entering `floating` seeds every visible tiled window's floating rect from
+  the current frame, so windows stay put. New windows open centred or at the
+  remembered per-app geometry (also after a late `set_window_identity`).
+  Move/resize/center/canvas-pan/pointer drags and geometry memory accept these
+  windows (`Wm::floats`); output resizes clamp them. `toggle-floating` moves
+  a window to the real floating layer, so it stays floating once the
+  workspace tiles again. Fullscreen behaves as in every layout. Rules,
+  presets, profiles, `layout <name>` and `layout next` all go through
+  `Wm::set_workspace_layout`.
+- **`[layout] center_focused_column`** (niri): `never` (default, previous
+  behaviour), `always`, `on-overflow` (centre only when the focused column
+  does not fit next to the previously focused one; otherwise keep both
+  visible). Also patchable from `[profiles.layout]`.
+- `layout next` order: scroll, master-stack, dwindle, auto, grid,
+  center-tile, deck, monocle, floating (the original four keep their order).
+  Names and aliases parse in `mode`, rules, presets, profiles and actions;
+  unknown names are rejected. `veyronctl state` reports the new names.
+
+Tests: fmt and clippy `-D warnings` clean; 246 tests pass (178 core unit,
+33 core integration, 12 IPC, 7 compositor unit, 16 headless); 27 new core
+unit tests (8 `tiling`, 6 `layout`, 10 `wm`, 3 `config`) plus extended
+action/tiling tests. Not checked on screen: none of the new layouts or the
+centring modes has been seen in a nested session yet.
+
 ## Layer-shell input and exclusive zones (branch `claude/layer-shell-input`)
 
 - **Exclusive zones shrink the viewport.** The core gained
@@ -254,6 +294,9 @@ rendering paths still need the nested-session check.
 | Area | Feature | State | Where / next action |
 |---|---|---|---|
 | WM | Scroll, master-stack, dwindle, auto layouts | PARTIAL | `layout.rs`, `tiling.rs`; nested visual check |
+| WM | Grid, center-tile, deck, monocle layouts | PARTIAL | `tiling.rs`, `wm.rs::shown_window`; unit-tested, nested visual check |
+| WM | Floating workspace layout (COSMIC style) | PARTIAL | `wm.rs::set_workspace_layout`, `Wm::floats`; unit-tested, pointer drag not runtime-checked |
+| WM | `center_focused_column` never/always/on-overflow (niri) | PARTIAL | `layout.rs::ensure_focus_visible`; unit-tested, nested visual check |
 | WM | Floating, fullscreen, smart gaps, rules, scratchpad | PARTIAL | `wm.rs`, `rules.rs`; nested check |
 | WM | Groups, PiP, snap zones, smart focus | PARTIAL | `groups.rs`, `snap.rs`; nested check |
 | WM | Pointer move/resize of floating windows (`super` + left/right drag) | PARTIAL | `state.rs::begin_super_grab`, `GrabKind`; core unit-tested, no input injection in the harness |

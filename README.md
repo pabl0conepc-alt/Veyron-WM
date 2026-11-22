@@ -26,9 +26,10 @@ switched at runtime with `veyronctl theme …`.</sub>
 
 ## Highlights
 
-- **Layouts:** endless scrolling columns, master-stack, dwindle and `auto`
-  (chosen from the window count), per workspace; floating, fullscreen,
-  scratchpad, snap zones, picture-in-picture and window groups.
+- **Layouts:** endless scrolling columns, master-stack, dwindle, grid,
+  center-tile, deck, monocle, floating workspaces and `auto` (chosen from the
+  window count), per workspace; floating windows, fullscreen, scratchpad, snap
+  zones, picture-in-picture and window groups.
 - **Looks:** five designs (`material`, `glass`, `flat`, `neon`, `minimal`) drawn
   on the GPU with rounded corners, rounded borders and soft shadows; server-side
   decorations, so apps do not draw their own title bars.
@@ -112,8 +113,10 @@ What works:
 - Rust workspace with three crates and no `unsafe` code.
 - Scrollable tiling engine: columns, stacking, focus, viewport scrolling,
   column resizing, floating layer, fullscreen, on-demand workspaces.
-- Additional tiling layouts: `master-stack`, `dwindle` and `auto` (dynamic
-  tiling that resolves from the window count), selectable per workspace.
+- Additional tiling layouts: `master-stack`, `dwindle`, `grid`,
+  `center-tile`, `deck`, `monocle`, `floating` and `auto` (dynamic tiling that
+  resolves from the window count), selectable per workspace; see
+  [Layouts](#layouts).
 - Smart gaps, per-application window rules (float, opacity, blur, animation,
   scratchpad, named workspace, layout), scratchpad layer and per-app floating
   geometry memory.
@@ -338,7 +341,7 @@ Default keybindings (all configurable):
 | `super+c` | center the focused column |
 | `super+f` | toggle fullscreen |
 | `super+space` | toggle floating |
-| `super+shift+l` | cycle tiling layout (scroll → master-stack → dwindle → auto) |
+| `super+shift+l` | cycle layout (scroll → master-stack → dwindle → auto → grid → center-tile → deck → monocle → floating) |
 | `super+p` | apply the next profile (cycles through `[[profiles]]`) |
 | `super+shift+s` | send the focused window to / recall it from the scratchpad |
 | `super+1` … `super+5` | switch workspace |
@@ -373,9 +376,11 @@ outer_margin = 12            # margin around the tiled area
 default_column_ratio = 0.5   # new column width, fraction of the viewport
 min_column_ratio = 0.2
 max_column_ratio = 1.0
-mode = "scroll"              # scroll | master-stack | dwindle | auto
+mode = "scroll"              # scroll | master-stack | dwindle | grid |
+                             # center-tile | deck | monocle | floating | auto
 smart_gaps = false           # 0 gap for one window, tighter when dense
-master_ratio = 0.6           # master width in master-stack
+master_ratio = 0.6           # master width in master-stack, deck, center-tile
+center_focused_column = "never"  # scroll: never | always | on-overflow
 
 [appearance]
 background = "#101014"
@@ -501,6 +506,55 @@ Window-management extras borrowed from other compositors:
 | `theme design next` | `super+alt+t` | next decoration style |
 | `theme design <name>` | | `material`, `glass`, `flat`, `neon`, `minimal` |
 
+### Layouts
+
+Every workspace has its own layout. Set the default with `[layout] mode`, pin
+one per workspace with `[[workspaces]] layout`, switch a workspace from a rule
+with `layout = "..."`, or at runtime with `layout <name>` (alias
+`set-layout <name>`) and `layout next` (alias `next-layout`, `super+shift+l`).
+
+| Layout | Inspired by | Does |
+|---|---|---|
+| `scroll` | niri | endless strip of columns; the default |
+| `master-stack` | dwm, Hyprland | master on the left (`master_ratio`), stack on the right |
+| `dwindle` | Hyprland | recursive spiral splits |
+| `grid` | dwm gaplessgrid | near-square grid; the last row is stretched to fill the width |
+| `center-tile` | mango, dwm centeredmaster | master centred at `master_ratio`, stack alternating right/left; a lone window is centred |
+| `deck` | dwm deck | master plus one visible stack window (the focused or last focused one) |
+| `monocle` | dwm, mango | the focused window fills the area; the others are hidden |
+| `floating` | COSMIC | nothing is tiled; windows keep their place and move/resize freely |
+| `auto` | | `master-stack` for up to three windows, `dwindle` from four |
+
+In `monocle` and `deck`, `focus left/right` cycles through every window
+(wrapping around) and `focus-cycle` reaches the hidden ones too.
+
+Switching a workspace to `floating` leaves each window where the tiling put it;
+new windows open centred, or where their application was last placed when
+`remember_geometry` is on. Switching back to a tiling layout tiles the same
+windows again. `toggle-floating` on a floating workspace moves the window to
+the floating layer, so it stays floating after the workspace tiles again.
+Fullscreen works the same in every layout.
+
+`center_focused_column` controls how `scroll` follows the focus, like niri:
+`never` scrolls as little as needed, `always` keeps the focused column centred,
+and `on-overflow` centres it only when it does not fit on screen next to the
+previously focused column.
+
+```toml
+[layout]
+mode = "center-tile"
+master_ratio = 0.5
+center_focused_column = "on-overflow"
+
+[[workspaces]]
+name = "float"
+layout = "floating"
+
+[[rules]]
+app_id = "gimp"
+layout = "floating"
+```
+
 ### Designs
 
 Window decorations are drawn on the GPU by two small GLSL ES 1.00 shaders:
@@ -568,6 +622,7 @@ veyronctl workspace-output right
 veyronctl resize width 32
 veyronctl move-floating right 32
 veyronctl layout master-stack
+veyronctl layout monocle
 veyronctl layout next
 veyronctl overview --json
 veyronctl profile coding
